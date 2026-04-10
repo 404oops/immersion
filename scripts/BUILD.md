@@ -145,6 +145,18 @@ cpack
 - Check compiler compatibility (C++20 required)
 - Ensure all dependencies are installed
 
+### Windows Linker Errors with Qt Symbols
+If you see many undefined Qt symbols while linking (for example `QObject::staticMetaObject` or `QString`), your compiler ABI and Qt kit do not match.
+
+Use matching pairs:
+- `llvm-mingw_64` or `mingw_64` Qt kit with MinGW/LLVM-MinGW compiler
+- `msvcXXXX_64` Qt kit with MSVC or `clang-cl`
+
+Example MinGW/LLVM-MinGW pairing:
+- `Qt6_DIR=C:\Qt\6.11.0\llvm-mingw_64\lib\cmake\Qt6`
+- `CMAKE_C_COMPILER=C:\Qt\6.11.0\llvm-mingw_64\bin\clang.exe`
+- `CMAKE_CXX_COMPILER=C:\Qt\6.11.0\llvm-mingw_64\bin\clang++.exe`
+
 ### CPack Fails
 - macOS: Requires `bzip2` (`brew install bzip2`)
 - Linux: Additional packages may be needed for DEB/RPM creation

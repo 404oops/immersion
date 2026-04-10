@@ -53,6 +53,51 @@ if(Qt6_DIR)
     list(PREPEND CMAKE_PREFIX_PATH "${Qt6_DIR}")
 endif()
 
+if(WIN32 AND Qt6_DIR)
+    set(_qt6_is_mingw FALSE)
+    set(_qt6_is_msvc FALSE)
+    if(Qt6_DIR MATCHES "[\\/](llvm-mingw_64|mingw_64)[\\/]")
+        set(_qt6_is_mingw TRUE)
+    endif()
+    if(Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
+        set(_qt6_is_msvc TRUE)
+    endif()
+
+    set(_using_msvc_abi FALSE)
+    set(_using_mingw_abi FALSE)
+    if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+        set(_using_msvc_abi TRUE)
+    endif()
+    if(CMAKE_CXX_COMPILER_TARGET MATCHES "msvc")
+        set(_using_msvc_abi TRUE)
+    endif()
+    if(CMAKE_CXX_COMPILER_TARGET MATCHES "mingw|gnu")
+        set(_using_mingw_abi TRUE)
+    endif()
+
+    if(_qt6_is_mingw AND _using_msvc_abi)
+        message(FATAL_ERROR
+            "Incompatible toolchain/Qt combination detected.\n"
+            "Qt6_DIR points to a MinGW Qt kit: ${Qt6_DIR}\n"
+            "but the compiler targets MSVC ABI.\n"
+            "Use one of these combinations:\n"
+            "  1) MinGW Qt + MinGW/LLVM-MinGW compiler (for example C:/Qt/6.11.0/llvm-mingw_64/bin/clang++.exe)\n"
+            "  2) MSVC Qt kit + MSVC/clang-cl compiler\n"
+            "Current compiler target: ${CMAKE_CXX_COMPILER_TARGET}")
+    endif()
+
+    if(_qt6_is_msvc AND _using_mingw_abi)
+        message(FATAL_ERROR
+            "Incompatible toolchain/Qt combination detected.\n"
+            "Qt6_DIR points to an MSVC Qt kit: ${Qt6_DIR}\n"
+            "but the compiler targets MinGW/GNU ABI.\n"
+            "Use one of these combinations:\n"
+            "  1) MSVC Qt kit + MSVC/clang-cl compiler\n"
+            "  2) MinGW Qt kit + MinGW/LLVM-MinGW compiler\n"
+            "Current compiler target: ${CMAKE_CXX_COMPILER_TARGET}")
+    endif()
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2)
 
 add_executable(Immersion
