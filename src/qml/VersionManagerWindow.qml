@@ -14,59 +14,58 @@ Window {
     property var designGraph: buildEdgeCaseGraph()
 
     function buildEdgeCaseGraph() {
-        const graph = []
-        let row = 0
+        const graph = [];
+        let row = 0;
 
         // 1x2x2x2x2: one root, each level branches by 2 for four levels.
-        const depthX = [80, 240, 400, 560, 720]
-        const rowStep = 70
+        const depthX = [80, 240, 400, 560, 720];
+        const rowStep = 70;
 
         graph.push({
-                       id: "1",
-                       label: "v1",
-                       fullLabel: "v1",
-                       x: depthX[0],
-                       y: 60 + row * rowStep,
-                       parentId: "",
-                       note: "root 1",
-                       timestamp: "preview",
-                       isCurrent: false
-                   })
-        ++row
+            id: "1",
+            label: "v1",
+            fullLabel: "v1",
+            x: depthX[0],
+            y: 60 + row * rowStep,
+            parentId: "",
+            note: "root 1",
+            timestamp: "preview",
+            isCurrent: false
+        });
+        ++row;
 
         function addChildren(parentId, depth, childCount) {
             if (depth >= depthX.length)
-                return
-
+                return;
             for (let childIndex = 1; childIndex <= childCount; ++childIndex) {
-                const childId = parentId + "." + childIndex
+                const childId = parentId + "." + childIndex;
                 graph.push({
-                               id: childId,
-                               label: "." + childIndex,
-                               fullLabel: "v" + childId,
-                               x: depthX[depth],
-                               y: 60 + row * rowStep,
-                               parentId: parentId,
-                               note: "node " + childId,
-                               timestamp: "preview",
-                               isCurrent: false
-                           })
-                ++row
-                addChildren(childId, depth + 1, 2)
+                    id: childId,
+                    label: "." + childIndex,
+                    fullLabel: "v" + childId,
+                    x: depthX[depth],
+                    y: 60 + row * rowStep,
+                    parentId: parentId,
+                    note: "node " + childId,
+                    timestamp: "preview",
+                    isCurrent: false
+                });
+                ++row;
+                addChildren(childId, depth + 1, 2);
             }
         }
 
-        addChildren("1", 1, 2)
+        addChildren("1", 1, 2);
 
         // Pick a deep preview node as current.
         for (let i = 0; i < graph.length; ++i) {
             if (graph[i].id === "1.2.2.2.2") {
-                graph[i].isCurrent = true
-                break
+                graph[i].isCurrent = true;
+                break;
             }
         }
 
-        return graph
+        return graph;
     }
 
     Theme {
@@ -98,90 +97,89 @@ Window {
     function nodeById(versionId) {
         for (let i = 0; i < versionGraph.length; ++i) {
             if (versionGraph[i].id === versionId)
-                return versionGraph[i]
+                return versionGraph[i];
         }
-        return null
+        return null;
     }
 
     function currentVersionNode() {
         for (let i = 0; i < versionGraph.length; ++i) {
             if (versionGraph[i].isCurrent)
-                return versionGraph[i]
+                return versionGraph[i];
         }
-        return null
+        return null;
     }
 
     function refreshVersionGraph() {
-        versionGraph = hasBackend ? root.backend.selectedProjectVersionGraph : designGraph
+        versionGraph = hasBackend ? root.backend.selectedProjectVersionGraph : designGraph;
         if (versionGraph.length === 0) {
-            selectedVersionId = ""
+            selectedVersionId = "";
         } else if (!selectedVersionId || !nodeById(selectedVersionId)) {
-            selectedVersionId = versionGraph[0].id
+            selectedVersionId = versionGraph[0].id;
         }
 
         if (versionGraph.length === 0) {
-            graphExtentWidth = graphFlick ? graphFlick.width : 0
-            graphExtentHeight = graphFlick ? graphFlick.height : 0
+            graphExtentWidth = graphFlick ? graphFlick.width : 0;
+            graphExtentHeight = graphFlick ? graphFlick.height : 0;
         } else {
-            let minX = Number(versionGraph[0].x || 0)
-            let maxX = minX
-            let minY = Number(versionGraph[0].y || 0)
-            let maxY = minY
+            let minX = Number(versionGraph[0].x || 0);
+            let maxX = minX;
+            let minY = Number(versionGraph[0].y || 0);
+            let maxY = minY;
             for (let i = 1; i < versionGraph.length; ++i) {
-                const node = versionGraph[i]
-                const x = Number(node.x || 0)
-                const y = Number(node.y || 0)
-                minX = Math.min(minX, x)
-                maxX = Math.max(maxX, x)
-                minY = Math.min(minY, y)
-                maxY = Math.max(maxY, y)
+                const node = versionGraph[i];
+                const x = Number(node.x || 0);
+                const y = Number(node.y || 0);
+                minX = Math.min(minX, x);
+                maxX = Math.max(maxX, x);
+                minY = Math.min(minY, y);
+                maxY = Math.max(maxY, y);
             }
 
-            const nodeRadius = 20
-            const labelPad = 20
-            const viewportPad = 24
-            graphExtentWidth = (maxX - minX) + (nodeRadius + viewportPad) * 2
-            graphExtentHeight = (maxY - minY) + (nodeRadius + labelPad + viewportPad) * 2
+            const nodeRadius = 20;
+            const labelPad = 20;
+            const viewportPad = 24;
+            graphExtentWidth = (maxX - minX) + (nodeRadius + viewportPad) * 2;
+            graphExtentHeight = (maxY - minY) + (nodeRadius + labelPad + viewportPad) * 2;
         }
 
-        graphCanvas.requestPaint()
+        graphCanvas.requestPaint();
     }
 
     function openForProject(index) {
         if (!hasBackend)
-            return
-        root.backend.manageProjectVersions(index)
-        refreshVersionGraph()
-        projectNoteEdit.text = root.backend.selectedProjectNote
-        versionNoteEdit.text = selectedVersionId && nodeById(selectedVersionId) ? nodeById(selectedVersionId).note : ""
-        visible = true
-        raise()
-        requestActivate()
+            return;
+        root.backend.manageProjectVersions(index);
+        refreshVersionGraph();
+        projectNoteEdit.text = root.backend.selectedProjectNote;
+        versionNoteEdit.text = selectedVersionId && nodeById(selectedVersionId) ? nodeById(selectedVersionId).note : "";
+        visible = true;
+        raise();
+        requestActivate();
     }
 
     Component.onCompleted: {
-        refreshVersionGraph()
+        refreshVersionGraph();
         if (!hasBackend)
-            projectNoteEdit.text = "Preview project note"
+            projectNoteEdit.text = "Preview project note";
     }
 
-    onClosing: function(close) {
-        close.accepted = false
-        visible = false
+    onClosing: function (close) {
+        close.accepted = false;
+        visible = false;
     }
 
     Connections {
         target: root.backend
         function onSelectedProjectVersionGraphChanged() {
             if (root.visible && root.hasBackend) {
-                root.refreshVersionGraph()
-                versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId)
-                                 ? root.nodeById(root.selectedVersionId).note : ""
+                root.refreshVersionGraph();
+                versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).note : "";
             }
         }
         function onSelectedProjectNoteChanged() {
             if (root.visible && root.hasBackend) {
-                projectNoteEdit.text = root.backend.selectedProjectNote
+                projectNoteEdit.text = root.backend.selectedProjectNote;
             }
         }
     }
@@ -199,7 +197,9 @@ Window {
                 font.bold: true
                 color: theme.textPrimary
             }
-            Item { Layout.fillWidth: true }
+            Item {
+                Layout.fillWidth: true
+            }
             Button {
                 text: "Close"
                 onClicked: root.visible = false
@@ -241,22 +241,22 @@ Window {
                             id: graphCanvas
                             anchors.fill: parent
                             onPaint: {
-                                const ctx = getContext("2d")
-                                ctx.reset()
-                                ctx.strokeStyle = theme.graphLink
-                                ctx.lineWidth = 2
+                                const ctx = getContext("2d");
+                                ctx.reset();
+                                ctx.strokeStyle = theme.graphLink;
+                                ctx.lineWidth = 2;
                                 for (let i = 0; i < root.versionGraph.length; ++i) {
-                                    const node = root.versionGraph[i]
+                                    const node = root.versionGraph[i];
                                     if (!node.parentId)
-                                        continue
-                                    const parent = root.nodeById(node.parentId)
+                                        continue;
+                                    const parent = root.nodeById(node.parentId);
                                     if (!parent)
-                                        continue
-                                    ctx.beginPath()
-                                    ctx.moveTo(parent.x, parent.y)
-                                    const midX = parent.x + (node.x - parent.x) * 0.55
-                                    ctx.bezierCurveTo(midX, parent.y, midX, node.y, node.x, node.y)
-                                    ctx.stroke()
+                                        continue;
+                                    ctx.beginPath();
+                                    ctx.moveTo(parent.x, parent.y);
+                                    const midX = parent.x + (node.x - parent.x) * 0.55;
+                                    ctx.bezierCurveTo(midX, parent.y, midX, node.y, node.x, node.y);
+                                    ctx.stroke();
                                 }
                             }
                         }
@@ -274,10 +274,8 @@ Window {
                                 Rectangle {
                                     anchors.fill: parent
                                     radius: 20
-                                    color: root.selectedVersionId === nodeItem.modelData.id
-                                         ? theme.selection
-                                         : (nodeItem.modelData.isCurrent ? theme.success : theme.accent)
-                                     border.color: nodeItem.modelData.isCurrent ? theme.successBorder : theme.nodeBorder
+                                    color: root.selectedVersionId === nodeItem.modelData.id ? theme.selection : (nodeItem.modelData.isCurrent ? theme.success : theme.accent)
+                                    border.color: nodeItem.modelData.isCurrent ? theme.successBorder : theme.nodeBorder
                                     border.width: root.selectedVersionId === nodeItem.modelData.id ? 2 : 1
                                 }
 
@@ -292,8 +290,8 @@ Window {
                                 MouseArea {
                                     anchors.fill: parent
                                     onClicked: {
-                                        root.selectedVersionId = nodeItem.modelData.id
-                                        versionNoteEdit.text = nodeItem.modelData.note || ""
+                                        root.selectedVersionId = nodeItem.modelData.id;
+                                        versionNoteEdit.text = nodeItem.modelData.note || "";
                                     }
                                 }
 
@@ -357,17 +355,13 @@ Window {
                         color: theme.successStrong
                         font.bold: true
                         wrapMode: Text.WordWrap
-                        text: root.currentVersionNode()
-                              ? ("Current in project folder: " + root.currentVersionNode().fullLabel)
-                              : "Current in project folder: no matching snapshot yet"
+                        text: root.currentVersionNode() ? ("Current in project folder: " + root.currentVersionNode().fullLabel) : "Current in project folder: no matching snapshot yet"
                     }
 
                     Label {
                         color: theme.textMeta
                         wrapMode: Text.WordWrap
-                        text: root.selectedVersionId && root.nodeById(root.selectedVersionId)
-                              ? ("Time: " + (root.nodeById(root.selectedVersionId).timestamp || "unknown") + "\nCurrent note: " + ((root.nodeById(root.selectedVersionId).note || "").length > 0 ? root.nodeById(root.selectedVersionId).note : "<none>"))
-                              : "Select a blob in the graph to inspect metadata."
+                        text: root.selectedVersionId && root.nodeById(root.selectedVersionId) ? ("Time: " + (root.nodeById(root.selectedVersionId).timestamp || "unknown") + "\nCurrent note: " + ((root.nodeById(root.selectedVersionId).note || "").length > 0 ? root.nodeById(root.selectedVersionId).note : "<none>")) : "Select a blob in the graph to inspect metadata."
                     }
 
                     TextArea {
@@ -385,7 +379,7 @@ Window {
                         enabled: root.hasBackend && root.selectedVersionId.length > 0
                         onClicked: {
                             if (root.backend.saveVersionNote(root.selectedVersionId, versionNoteEdit.text))
-                                root.refreshVersionGraph()
+                                root.refreshVersionGraph();
                         }
                     }
 
@@ -397,8 +391,8 @@ Window {
                             enabled: root.hasBackend && root.selectedVersionId.length > 0
                             onClicked: {
                                 if (root.backend.restoreVersionById(root.selectedVersionId)) {
-                                    root.refreshVersionGraph()
-                                    root.visible = false
+                                    root.refreshVersionGraph();
+                                    root.visible = false;
                                 }
                             }
                         }
@@ -409,9 +403,8 @@ Window {
                             enabled: root.hasBackend && root.selectedVersionId.length > 0
                             onClicked: {
                                 if (root.backend.deleteVersionById(root.selectedVersionId)) {
-                                    root.refreshVersionGraph()
-                                    versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId)
-                                                 ? root.nodeById(root.selectedVersionId).note : ""
+                                    root.refreshVersionGraph();
+                                    versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).note : "";
                                 }
                             }
                         }

@@ -11,17 +11,17 @@ ApplicationWindow {
     width: 1100
     height: 720
     visible: true
-    title: "musit"
+    title: "Immersion"
 
     // Show onboarding when no projects folder is selected (empty projects list)
     readonly property bool isOnboarding: !window.backend.projects || window.backend.projects.length === 0
 
     function scrollActivityToBottom() {
         if (!mainView || !mainView.activityListView)
-            return
-        Qt.callLater(function() {
-            mainView.activityListView.positionViewAtEnd()
-        })
+            return;
+        Qt.callLater(function () {
+            mainView.activityListView.positionViewAtEnd();
+        });
     }
 
     Loader {
@@ -51,7 +51,7 @@ ApplicationWindow {
                     spacing: 16
 
                     Text {
-                        text: "Welcome to Musit"
+                        text: "Welcome to Immersion"
                         font.pixelSize: 48
                         font.weight: Font.Bold
                         color: theme.textPrimary
@@ -71,6 +71,7 @@ ApplicationWindow {
                 }
 
                 Button {
+                    id: button
                     text: "Open Projects Folder"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 48
@@ -80,7 +81,11 @@ ApplicationWindow {
                     background: Rectangle {
                         color: button.hovered || button.pressed ? theme.selection : theme.accent
                         radius: 4
-                        Behavior on color { ColorAnimation { duration: 150 } }
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: 150
+                            }
+                        }
                     }
 
                     contentItem: Text {
@@ -92,7 +97,6 @@ ApplicationWindow {
                     }
 
                     onClicked: window.backend.chooseProjectFolder()
-                    id: button
                 }
             }
         }
@@ -112,23 +116,23 @@ ApplicationWindow {
         useDesignerPlaceholders: false
 
         onChooseProjectFolderRequested: window.backend.chooseProjectFolder()
-        onSortModeRequested: function(mode) {
-            window.backend.sortMode = mode
+        onSortModeRequested: function (mode) {
+            window.backend.sortMode = mode;
         }
-        onSearchTextRequested: function(text) {
-            window.backend.searchText = text
+        onSearchTextRequested: function (text) {
+            window.backend.searchText = text;
         }
-        onOpenProjectRequested: function(index) {
-            window.backend.openProject(index)
+        onOpenProjectRequested: function (index) {
+            window.backend.openProject(index);
         }
-        onRestoreProjectRequested: function(index) {
-            window.backend.restoreProject(index)
+        onRestoreProjectRequested: function (index) {
+            window.backend.restoreProject(index);
         }
-        onManageProjectRequested: function(index) {
-            versionManagerWindow.openForProject(index)
+        onManageProjectRequested: function (index) {
+            versionManagerWindow.openForProject(index);
         }
-        onLogLevelRequested: function(level) {
-            window.backend.logLevel = level
+        onLogLevelRequested: function (level) {
+            window.backend.logLevel = level;
         }
 
         Component.onCompleted: window.scrollActivityToBottom()
@@ -137,7 +141,7 @@ ApplicationWindow {
     Connections {
         target: window.backend
         function onActivityChanged() {
-            window.scrollActivityToBottom()
+            window.scrollActivityToBottom();
         }
     }
 

@@ -1,6 +1,6 @@
-# Building musit
+# Building Immersion
 
-This directory contains platform-specific build scripts for musit that handle CMake configuration, compilation, and CPack packaging.
+This directory contains platform-specific build scripts for Immersion that handle CMake configuration, compilation, and CPack packaging.
 
 ## Quick Start
 
@@ -22,11 +22,19 @@ powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 ```
 Creates: `musit-0.1.0-Windows.exe`, `.msi`
 
+By default, the script lets CMake auto-detect the best installed generator/toolset.
+
 ### Windows (Batch)
 ```cmd
 scripts\build-windows.bat
 ```
 Creates: `musit-0.1.0-Windows.exe`, `.msi`
+
+You can optionally pass generator and toolset:
+
+```cmd
+scripts\build-windows.bat "Visual Studio 18 2026" v180
+```
 
 ### Auto-Detect Build
 ```bash
@@ -75,6 +83,9 @@ All platforms clean and rebuild from scratch. Output artifacts are in the `build
 
 # Specify generator
 .\scripts\build-windows.ps1 -Generator "Ninja"
+
+# Specify generator + toolset
+.\scripts\build-windows.ps1 -Generator "Visual Studio 18 2026" -Toolset "v180"
 ```
 
 ### Custom Qt Installation

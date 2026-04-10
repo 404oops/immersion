@@ -6,8 +6,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-echo "🔨 musit Cross-Platform Build Script"
-echo "===================================="
+echo "🔨 Immersion Cross-Platform Build Script"
+echo "========================================"
 echo ""
 
 # Detect OS

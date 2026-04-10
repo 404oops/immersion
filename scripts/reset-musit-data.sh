@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reset musit user data (config, saved folders, etc.)
+# Reset Immersion user data (config, saved folders, etc.)
 # Does NOT delete project .musit folders (version history is preserved)
 
 set -e
@@ -7,10 +7,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-echo "musit User Data Reset"
-echo "====================="
+echo "Immersion User Data Reset"
+echo "========================="
 echo ""
-echo "This script removes musit configuration and app state."
+echo "This script removes Immersion configuration and app state."
 echo "Project version history (.musit folders in projects) is NOT affected."
 echo ""
 
@@ -54,4 +54,4 @@ if [ -d "$MUSIT_CACHE" ]; then
 fi
 
 echo ""
-echo "✓ Reset complete. musit will show onboarding on next launch."
+echo "✓ Reset complete. Immersion will show onboarding on next launch."

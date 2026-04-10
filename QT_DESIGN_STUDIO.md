@@ -1,11 +1,11 @@
-# musit Qt Design Studio Files
+# Immersion Qt Design Studio Files
 
 This folder is a standalone Qt Design Studio scaffold for visual UI editing.
 
 ## Files
 - `musit.qmlproject`: project descriptor to open in Qt Design Studio.
 - `content/App.qml`: entry window.
-- `content/MainView.ui.qml`: editable UI form that mirrors the current musit layout.
+- `content/MainView.ui.qml`: editable UI form that mirrors the current Immersion layout.
 
 ## Open in Qt Design Studio
 1. Open `musit.qmlproject`.

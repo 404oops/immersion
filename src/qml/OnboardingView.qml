@@ -13,7 +13,7 @@ Rectangle {
         id: theme
     }
 
-    signal chooseProjectFolderRequested()
+    signal chooseProjectFolderRequested
 
     ColumnLayout {
         anchors.centerIn: parent
@@ -26,7 +26,7 @@ Rectangle {
             spacing: 16
 
             Text {
-                text: "Welcome to Musit"
+                text: "Welcome to Immersion"
                 font.pixelSize: 48
                 font.weight: Font.Bold
                 color: theme.textPrimary
@@ -46,6 +46,7 @@ Rectangle {
         }
 
         Button {
+            id: button
             text: "Open Projects Folder"
             Layout.fillWidth: true
             Layout.preferredHeight: 48
@@ -55,7 +56,11 @@ Rectangle {
             background: Rectangle {
                 color: button.hovered || button.pressed ? theme.selection : theme.accent
                 radius: 4
-                Behavior on color { ColorAnimation { duration: 150 } }
+                Behavior on color {
+                    ColorAnimation {
+                        duration: 150
+                    }
+                }
             }
 
             contentItem: Text {
@@ -67,8 +72,6 @@ Rectangle {
             }
 
             onClicked: root.chooseProjectFolderRequested()
-
-            id: button
         }
     }
 }

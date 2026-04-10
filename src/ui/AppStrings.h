@@ -4,7 +4,7 @@
 
 namespace AppStrings {
 
-inline const QString AppName = QStringLiteral("musit");
+inline const QString AppName = QStringLiteral("Immersion");
 inline const QString StatusSelectProjectsFolder =
     QStringLiteral("Please select the folder where all of your project files sit.");
 inline const QString DialogSelectProjectsFolder =
@@ -74,7 +74,7 @@ inline const QString StatusFailedRewriteVersionLog = QStringLiteral("Failed to r
 inline const QString StatusFailedPersistDeletedVersions = QStringLiteral("Failed to persist deleted versions");
 inline const QString StatusDeletedVersionsFmt = QStringLiteral("Deleted %1 versions for %2");
 
-inline const QString TrayShowApp = QStringLiteral("Show musit");
+inline const QString TrayShowApp = QStringLiteral("Show Immersion");
 inline const QString TraySelectProject = QStringLiteral("Select Project");
 inline const QString TrayPastVersions = QStringLiteral("Past Versions");
 inline const QString TrayQuit = QStringLiteral("Quit");
@@ -150,7 +150,7 @@ inline const QString StatusCouldNotInitializeMusitStorageFmt = QStringLiteral("C
 inline const QString StatusMusitStorageNotWritableFmt = QStringLiteral(".musit storage is not writable in: %1");
 inline const QString ActivityStartupSelfCheckPassedFmt = QStringLiteral("[%1] startup self-check passed on %2");
 inline const QString ActivityStartupSelfCheckFoundIssuesFmt = QStringLiteral("[%1] startup self-check found %2 issue(s) on %3");
-inline const QString DialogStartupSelfCheckTitle = QStringLiteral("musit Startup Self-Check");
+inline const QString DialogStartupSelfCheckTitle = QStringLiteral("Immersion Startup Self-Check");
 inline const QString DialogSomeEnvironmentChecksFailedFmt = QStringLiteral("Some environment checks failed on %1.");
 inline const QString DialogIssuesAndSuggestedFixFmt = QStringLiteral("Issues:\n- %1\n\nSuggested fix:\n%2");
 inline const QString DialogChecksFmt = QStringLiteral("Checks:\n- %1");

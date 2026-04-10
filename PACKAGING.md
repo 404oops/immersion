@@ -1,4 +1,4 @@
-# Packaging
+# Immersion Packaging
 
 This project is configured with CMake + CPack for desktop artifacts.
 

@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 
-echo "🍎 Building musit for macOS..."
+echo "🍎 Building Immersion for macOS..."
 echo "Project root: $PROJECT_ROOT"
 echo "Build directory: $BUILD_DIR"
 
@@ -30,7 +30,7 @@ cmake -DCMAKE_BUILD_TYPE=MinSizeRel \
 
 # Build
 echo ""
-echo "🔨 Building musit..."
+echo "🔨 Building Immersion..."
 cmake --build . --config MinSizeRel -j "$(sysctl -n hw.logicalcpu)"
 
 # Package

@@ -1,5 +1,10 @@
 @echo off
 REM Build script for Windows with CPack packaging (Batch version)
+REM Usage:
+REM   scripts\build-windows.bat [generator] [toolset]
+REM Examples:
+REM   scripts\build-windows.bat
+REM   scripts\build-windows.bat "Visual Studio 18 2026" v180
 
 setlocal enabledelayedexpansion
 
@@ -8,9 +13,26 @@ for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
 for %%I in ("%SCRIPT_DIR%..") do set "PROJECT_ROOT=%%~fI"
 set "BUILD_DIR=%PROJECT_ROOT%\build"
 
-echo 🪟 Building musit for Windows...
+echo 🪟 Building Immersion for Windows...
 echo Project root: %PROJECT_ROOT%
 echo Build directory: %BUILD_DIR%
+echo.
+
+set "GENERATOR=%CMAKE_GENERATOR%"
+set "TOOLSET=%CMAKE_GENERATOR_TOOLSET%"
+
+if not "%~1"=="" set "GENERATOR=%~1"
+if not "%~2"=="" set "TOOLSET=%~2"
+
+if defined GENERATOR (
+    echo Generator: %GENERATOR%
+) else (
+    echo Generator: auto-detect
+)
+
+if defined TOOLSET (
+    echo Toolset: %TOOLSET%
+)
 echo.
 
 REM Check for required tools
@@ -38,9 +60,27 @@ cd /d "%BUILD_DIR%"
 REM Configure with CMake
 echo.
 echo 📋 Configuring CMake...
-cmake -G "Visual Studio 17 2022" ^
-       -DCMAKE_PREFIX_PATH="%Qt6_DIR%" ^
-       "%PROJECT_ROOT%"
+if defined GENERATOR (
+    if defined TOOLSET (
+        if defined Qt6_DIR (
+            cmake -G "%GENERATOR%" -T "%TOOLSET%" -DCMAKE_PREFIX_PATH="%Qt6_DIR%" "%PROJECT_ROOT%"
+        ) else (
+            cmake -G "%GENERATOR%" -T "%TOOLSET%" "%PROJECT_ROOT%"
+        )
+    ) else (
+        if defined Qt6_DIR (
+            cmake -G "%GENERATOR%" -DCMAKE_PREFIX_PATH="%Qt6_DIR%" "%PROJECT_ROOT%"
+        ) else (
+            cmake -G "%GENERATOR%" "%PROJECT_ROOT%"
+        )
+    )
+) else (
+    if defined Qt6_DIR (
+        cmake -DCMAKE_PREFIX_PATH="%Qt6_DIR%" "%PROJECT_ROOT%"
+    ) else (
+        cmake "%PROJECT_ROOT%"
+    )
+)
 
 if errorlevel 1 (
     echo ❌ CMake configuration failed
@@ -49,7 +89,7 @@ if errorlevel 1 (
 
 REM Build
 echo.
-echo 🔨 Building musit...
+echo 🔨 Building Immersion...
 cmake --build . --config Release
 
 if errorlevel 1 (

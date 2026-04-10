@@ -1,8 +1,8 @@
-# IMMersion - The Innovative Musit Music versioning system
+# Immersion - Music Project Versioning
 
-Welcome to the private repo of IMMersion
+Welcome to the private repo of Immersion.
 
-The app is still a Work in progress
+The app is still a work in progress.
 
 To build, visit scripts/BUILD.md
 

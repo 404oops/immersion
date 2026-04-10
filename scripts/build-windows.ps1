@@ -4,9 +4,10 @@
 param(
     [ValidateSet("Debug", "Release", "RelWithDebInfo")]
     [string]$BuildType = "Release",
-    
-    [ValidateSet("Visual Studio 17 2022", "Visual Studio 16 2019", "Ninja")]
-    [string]$Generator = "Visual Studio 17 2022"
+
+    [string]$Generator = "",
+
+    [string]$Toolset = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,11 +16,18 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $BuildDir = Join-Path $ProjectRoot "build"
 
-Write-Host "🪟 Building musit for Windows (PowerShell)" -ForegroundColor Cyan
+Write-Host "🪟 Building Immersion for Windows (PowerShell)" -ForegroundColor Cyan
 Write-Host "Project root: $ProjectRoot"
 Write-Host "Build directory: $BuildDir"
 Write-Host "Build type: $BuildType"
-Write-Host "Generator: $Generator"
+if ([string]::IsNullOrWhiteSpace($Generator)) {
+    Write-Host "Generator: auto-detect"
+} else {
+    Write-Host "Generator: $Generator"
+}
+if (-not [string]::IsNullOrWhiteSpace($Toolset)) {
+    Write-Host "Toolset: $Toolset"
+}
 Write-Host ""
 
 # Check for required tools
@@ -43,9 +51,16 @@ try {
     Write-Host ""
     Write-Host "📋 Configuring CMake..." -ForegroundColor Yellow
     $cmakeArgs = @(
-        "-G", $Generator,
         "-DCMAKE_BUILD_TYPE=$BuildType"
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($Generator)) {
+        $cmakeArgs += @("-G", $Generator)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Toolset)) {
+        $cmakeArgs += @("-T", $Toolset)
+    }
     
     if ($env:Qt6_DIR) {
         $cmakeArgs += "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR"
@@ -60,7 +75,7 @@ try {
 
     # Build
     Write-Host ""
-    Write-Host "🔨 Building musit..." -ForegroundColor Yellow
+    Write-Host "🔨 Building Immersion..." -ForegroundColor Yellow
     & cmake --build . --config $BuildType -- /M:$env:NUMBER_OF_PROCESSORS
     if ($LASTEXITCODE -ne 0) {
         throw "Build failed"

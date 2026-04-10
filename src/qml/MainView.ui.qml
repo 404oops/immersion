@@ -27,7 +27,7 @@ Rectangle {
     // Defaults to designer behavior; runtime explicitly overrides this to false.
     property bool useDesignerPlaceholders: true
 
-    signal chooseProjectFolderRequested()
+    signal chooseProjectFolderRequested
     signal sortModeRequested(string mode)
     signal searchTextRequested(string text)
     signal openProjectRequested(int index)
@@ -196,10 +196,24 @@ Rectangle {
             Layout.fillHeight: true
             orientation: Qt.Vertical
 
+            handle: Rectangle {
+                implicitWidth: parent ? parent.width : 0
+                implicitHeight: 20
+                color: "transparent"
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 6
+                    height: 6
+                    radius: 3
+                    color: theme.textSecondary
+                    opacity: SplitHandle.pressed ? 1.0 : (SplitHandle.hovered ? 0.8 : 0.5)
+                }
+            }
+
             Rectangle {
                 SplitView.fillWidth: true
                 SplitView.fillHeight: true
-                SplitView.preferredHeight: 460
+                SplitView.preferredHeight: 480
                 color: theme.panelSurface
                 radius: 8
 
@@ -286,7 +300,8 @@ Rectangle {
                                 width: ListView.view.width
                                 height: 86
                                 radius: 6
-                                color: projectDelegate.index % 2 === 0 ? theme.rowEven : theme.rowOdd
+                                color: projectDelegate.index % 2
+                                       === 0 ? theme.rowEven : theme.rowOdd
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -378,7 +393,6 @@ Rectangle {
                                         }
                                     }
                                 }
-
                             }
                         }
 
@@ -399,7 +413,7 @@ Rectangle {
             Rectangle {
                 SplitView.fillWidth: true
                 SplitView.fillHeight: true
-                SplitView.preferredHeight: 220
+                SplitView.preferredHeight: 150
                 color: theme.panelSurface
                 radius: 8
 
@@ -436,7 +450,9 @@ Rectangle {
                             Connections {
                                 target: activityLogLevelCombo
                                 function onActivated(index) {
-                                    root.logLevelRequested(activityLogLevelCombo.textAt(index))
+                                    root.logLevelRequested(
+                                                activityLogLevelCombo.textAt(
+                                                    index))
                                 }
                             }
                         }

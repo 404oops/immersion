@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 
-echo "🐧 Building musit for Linux..."
+echo "🐧 Building Immersion for Linux..."
 echo "Project root: $PROJECT_ROOT"
 echo "Build directory: $BUILD_DIR"
 
@@ -48,7 +48,7 @@ fi
 
 # Build
 echo ""
-echo "🔨 Building musit..."
+echo "🔨 Building Immersion..."
 cmake --build . --config Release -j "$(nproc)"
 
 # Package

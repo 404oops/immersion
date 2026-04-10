@@ -729,6 +729,7 @@ bool QmlBackend::saveVersionNote(const QString& versionId, const QString& note) 
     logFile.close();
 
     bool updated = false;
+    int count = 0;
     for (QByteArray& rawLine : lines) {
         const QByteArray trimmed = rawLine.trimmed();
         const QJsonDocument doc = QJsonDocument::fromJson(trimmed);
@@ -737,11 +738,14 @@ bool QmlBackend::saveVersionNote(const QString& versionId, const QString& note) 
         }
 
         QJsonObject obj = doc.object();
-        if (obj.value("path").toString() != project.primaryProjectFile) {
+        const QString relPath = obj.value("path").toString();
+        const QString stagedPath = obj.value("staged").toString();
+        if (relPath != project.primaryProjectFile || stagedPath.isEmpty()) {
             continue;
         }
 
-        const QString lineVersion = obj.value("version").toString();
+        ++count;
+        const QString lineVersion = obj.value("version").toString(QString::number(count));
         if (lineVersion != versionId) {
             continue;
         }
@@ -751,6 +755,10 @@ bool QmlBackend::saveVersionNote(const QString& versionId, const QString& note) 
             obj.remove("note");
         } else {
             obj.insert("note", trimmedNote);
+        }
+        
+        if (!obj.contains("version")) {
+            obj.insert("version", lineVersion);
         }
 
         rawLine = QJsonDocument(obj).toJson(QJsonDocument::Compact) + '\n';
@@ -794,6 +802,7 @@ bool QmlBackend::deleteVersionById(const QString& versionId) {
     QList<QByteArray> keptLines;
     QString stagedPath;
     bool removedMetadata = false;
+    int count = 0;
     while (!logFile.atEnd()) {
         const QByteArray rawLine = logFile.readLine();
         const QByteArray trimmed = rawLine.trimmed();
@@ -804,12 +813,16 @@ bool QmlBackend::deleteVersionById(const QString& versionId) {
         }
 
         const QJsonObject obj = doc.object();
-        const bool isProjectEntry = obj.value("path").toString() == project.primaryProjectFile;
-        const bool isTargetVersion = obj.value("version").toString() == versionId;
-        if (isProjectEntry && isTargetVersion) {
-            stagedPath = resolveStagedPath(project.rootPath, obj.value("staged").toString());
-            removedMetadata = true;
-            continue;
+        const QString relPath = obj.value("path").toString();
+        const QString objStagedPath = obj.value("staged").toString();
+        if (relPath == project.primaryProjectFile && !objStagedPath.isEmpty()) {
+            ++count;
+            const QString lineVersion = obj.value("version").toString(QString::number(count));
+            if (lineVersion == versionId) {
+                stagedPath = resolveStagedPath(project.rootPath, objStagedPath);
+                removedMetadata = true;
+                continue;
+            }
         }
 
         keptLines.append(rawLine);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(musit VERSION 0.1.0 LANGUAGES CXX)
+project(Immersion VERSION 0.1.0 LANGUAGES CXX)
 
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "Build type" FORCE)
@@ -15,7 +15,7 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2)
 
-add_executable(musit
+add_executable(Immersion
     src/main.cpp
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
@@ -39,7 +39,7 @@ add_executable(musit
     src/persistence/ProjectRegistry.h
 )
 
-qt_add_resources(musit musit_qml
+qt_add_resources(Immersion Immersion_qml
     PREFIX "/"
     FILES
     src/qml/App.qml
@@ -49,48 +49,48 @@ qt_add_resources(musit musit_qml
     src/qml/MainView.ui.qml
 )
 
-set_target_properties(musit PROPERTIES
+set_target_properties(Immersion PROPERTIES
     MACOSX_BUNDLE ON
-    MACOSX_BUNDLE_GUI_IDENTIFIER "com.musit.app"
-    MACOSX_BUNDLE_BUNDLE_NAME "musit"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.Immersion.app"
+    MACOSX_BUNDLE_BUNDLE_NAME "Immersion"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
 )
 
-target_link_libraries(musit
+target_link_libraries(Immersion
     Qt6::Widgets
     Qt6::Quick
     Qt6::Qml
     Qt6::QuickControls2
 )
 
-set_target_properties(musit PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
+set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
 
-target_compile_options(musit PRIVATE
+target_compile_options(Immersion PRIVATE
     $<$<AND:$<CONFIG:MinSizeRel>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-Os>
     $<$<AND:$<CONFIG:MinSizeRel>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-ffunction-sections>
     $<$<AND:$<CONFIG:MinSizeRel>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-fdata-sections>
 )
 
-target_link_options(musit PRIVATE
+target_link_options(Immersion PRIVATE
     $<$<CONFIG:MinSizeRel>:-Wl,-dead_strip>
 )
 
-target_compile_options(musit PRIVATE
+target_compile_options(Immersion PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
 )
 
 include(GNUInstallDirs)
-install(TARGETS musit
+install(TARGETS Immersion
     BUNDLE DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-set(CPACK_PACKAGE_NAME "musit")
-set(CPACK_PACKAGE_VENDOR "musit")
+set(CPACK_PACKAGE_NAME "Immersion")
+set(CPACK_PACKAGE_VENDOR "Immersion")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
-set(CPACK_PACKAGE_FILE_NAME "musit-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
+set(CPACK_PACKAGE_FILE_NAME "Immersion-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
 
 if(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
