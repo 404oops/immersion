@@ -185,6 +185,7 @@ if(QT_VERSION_MAJOR EQUAL 6)
 set(_immersion_install_bin "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@")
 set(_immersion_exe "${_immersion_install_bin}/Immersion.exe")
 if(EXISTS "${_immersion_exe}")
+    message(STATUS "Running windeployqt for: ${_immersion_exe}")
     if("${CMAKE_INSTALL_CONFIG_NAME}" STREQUAL "Debug")
         set(_immersion_cfg_flag --debug)
     else()
@@ -199,6 +200,7 @@ if(EXISTS "${_immersion_exe}")
     if(NOT _immersion_windeployqt_result EQUAL 0)
         message(FATAL_ERROR "windeployqt failed during install with exit code: ${_immersion_windeployqt_result}")
     endif()
+    message(STATUS "windeployqt completed successfully")
 endif()
 ]=])
                         string(CONFIGURE "${_immersion_windeployqt_install_code}" _immersion_windeployqt_install_code @ONLY)
@@ -246,10 +248,22 @@ include(CPack)
 # CMake-native packaging entrypoints (no external scripts required)
 if(CMAKE_CONFIGURATION_TYPES)
     add_custom_target(dist
-        COMMAND "${CMAKE_CPACK_COMMAND}" -C "$<CONFIG>"
+        COMMAND "${CMAKE_CPACK_COMMAND}" -C Release
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS Immersion
-        COMMENT "Creating distributable package with CPack"
+        COMMENT "Creating Release distributable package with CPack"
+    )
+    add_custom_target(dist-debug
+        COMMAND "${CMAKE_CPACK_COMMAND}" -C Debug
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS Immersion
+        COMMENT "Creating Debug package with CPack"
+    )
+    add_custom_target(dist-relwithdebinfo
+        COMMAND "${CMAKE_CPACK_COMMAND}" -C RelWithDebInfo
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS Immersion
+        COMMENT "Creating RelWithDebInfo package with CPack"
     )
 else()
     add_custom_target(dist
