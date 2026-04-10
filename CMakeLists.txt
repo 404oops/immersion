@@ -184,24 +184,27 @@ if(QT_VERSION_MAJOR EQUAL 6)
                         set(_immersion_windeployqt_install_code [=[
 set(_immersion_install_bin "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@")
 set(_immersion_exe "${_immersion_install_bin}/Immersion.exe")
-if(EXISTS "${_immersion_exe}")
-    message(STATUS "Running windeployqt for: ${_immersion_exe}")
-    if("${CMAKE_INSTALL_CONFIG_NAME}" STREQUAL "Debug")
-        set(_immersion_cfg_flag --debug)
-    else()
-        set(_immersion_cfg_flag --release)
-    endif()
-
-    execute_process(
-        COMMAND "@IMMERSION_WINDEPLOYQT_EXECUTABLE@" ${_immersion_cfg_flag} --dir "${_immersion_install_bin}" --qmldir "@CMAKE_SOURCE_DIR@/src/qml" --no-translations "${_immersion_exe}"
-        RESULT_VARIABLE _immersion_windeployqt_result
-    )
-
-    if(NOT _immersion_windeployqt_result EQUAL 0)
-        message(FATAL_ERROR "windeployqt failed during install with exit code: ${_immersion_windeployqt_result}")
-    endif()
-    message(STATUS "windeployqt completed successfully")
+message(STATUS "Windows deploy staging bin: ${_immersion_install_bin}")
+if(NOT EXISTS "${_immersion_exe}")
+    message(FATAL_ERROR "Expected staged executable not found for deployment: ${_immersion_exe}")
 endif()
+
+if("${CMAKE_INSTALL_CONFIG_NAME}" STREQUAL "Debug")
+    set(_immersion_cfg_flag --debug)
+else()
+    set(_immersion_cfg_flag --release)
+endif()
+
+message(STATUS "Running windeployqt for: ${_immersion_exe}")
+execute_process(
+    COMMAND "@IMMERSION_WINDEPLOYQT_EXECUTABLE@" ${_immersion_cfg_flag} --dir "${_immersion_install_bin}" --qmldir "@CMAKE_SOURCE_DIR@/src/qml" --no-translations "${_immersion_exe}"
+    RESULT_VARIABLE _immersion_windeployqt_result
+)
+
+if(NOT _immersion_windeployqt_result EQUAL 0)
+    message(FATAL_ERROR "windeployqt failed during install with exit code: ${_immersion_windeployqt_result}")
+endif()
+message(STATUS "windeployqt completed successfully")
 ]=])
                         string(CONFIGURE "${_immersion_windeployqt_install_code}" _immersion_windeployqt_install_code @ONLY)
                         install(CODE "${_immersion_windeployqt_install_code}")
@@ -267,10 +270,17 @@ if(CMAKE_CONFIGURATION_TYPES)
     )
 else()
     add_custom_target(dist
-        COMMAND "${CMAKE_CPACK_COMMAND}"
+        COMMAND "${CMAKE_CPACK_COMMAND}" -C "${CMAKE_BUILD_TYPE}"
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
         DEPENDS Immersion
         COMMENT "Creating distributable package with CPack"
+    )
+
+    add_custom_target(dist-release
+        COMMAND "${CMAKE_CPACK_COMMAND}" -C Release
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS Immersion
+        COMMENT "Creating Release package with CPack"
     )
 endif()
 
