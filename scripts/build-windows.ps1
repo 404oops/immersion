@@ -204,6 +204,42 @@ try {
         throw "Build failed"
     }
 
+    # Deploy Qt runtime for dynamic linking
+    Write-Host ""
+    Write-Host "🚚 Deploying Qt runtime (windeployqt)..." -ForegroundColor Yellow
+    $exePath = Join-Path $BuildDir "Immersion.exe"
+    if (-not (Test-Path $exePath)) {
+        throw "Built executable not found: $exePath"
+    }
+
+    $qtKitRoot = $null
+    if ($qt6PackageDir) {
+        $qtKitRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $qt6PackageDir))
+    }
+
+    $windeployqt = $null
+    if ($qtKitRoot) {
+        $candidate = Join-Path $qtKitRoot "bin\windeployqt.exe"
+        if (Test-Path $candidate) {
+            $windeployqt = $candidate
+        }
+    }
+    if (-not $windeployqt) {
+        $cmd = Get-Command windeployqt -ErrorAction SilentlyContinue
+        if ($cmd) {
+            $windeployqt = $cmd.Source
+        }
+    }
+
+    if (-not $windeployqt) {
+        throw "windeployqt not found. Install Qt tools or add windeployqt to PATH."
+    }
+
+    & $windeployqt --$($BuildType.ToLower()) --qmldir "$ProjectRoot\src\qml" "$exePath"
+    if ($LASTEXITCODE -ne 0) {
+        throw "windeployqt failed"
+    }
+
     # Package
     Write-Host ""
     Write-Host "📦 Creating Windows installer..." -ForegroundColor Yellow

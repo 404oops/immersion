@@ -9,12 +9,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(WIN32 AND NOT MSVC)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++" CACHE STRING "EXE linker flags" FORCE)
-elseif(UNIX)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++" CACHE STRING "EXE linker flags" FORCE)
-endif()
-
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
@@ -59,18 +53,9 @@ if(Qt6_DIR)
     list(PREPEND CMAKE_PREFIX_PATH "${Qt6_DIR}")
 endif()
 
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build as static library")
-set(Qt6_STATIC TRUE)
-
-# Additional Qt6 configuration for static linking
-set(Qt6_NO_UNINSTALLED_BUILD_SUPPORT ON)
+set(BUILD_SHARED_LIBS ON CACHE BOOL "Build with shared libraries by default")
 
 if(WIN32)
-    # For MinGW/LLVM-MinGW on Windows: ensure static linkage, not shared DLLs
-    # These variables affect how Qt6Config.cmake selects libraries
-    set(Qt6_SHARED_LIBS OFF)
-    set(Qt6_USE_STATIC_LIBS ON)
-    
     set(_using_msvc_abi FALSE)
     if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
         set(_using_msvc_abi TRUE)
@@ -90,51 +75,14 @@ if(WIN32)
     endif()
 endif()
 
-if(WIN32 AND Qt6_DIR)
-    set(_qt6_is_mingw FALSE)
-    set(_qt6_is_msvc FALSE)
-    if(Qt6_DIR MATCHES "[\\/](llvm-mingw_64|mingw_64)[\\/]")
-        set(_qt6_is_mingw TRUE)
-    endif()
-    if(Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
-        set(_qt6_is_msvc TRUE)
-    endif()
-
-    if(_qt6_is_msvc)
-        message(FATAL_ERROR
-            "MSVC Qt kits are not supported (MSVC ABI rejected at top-level check).
-            Use MinGW/LLVM-MinGW Qt kit with clang/clang++.
-            Qt6_DIR: ${Qt6_DIR}")
-    endif()
-endif()
-
-# Force static library prioritization for MinGW/LLVM-MinGW on Windows
-if(WIN32 AND NOT MSVC)
-    # Order: static .a first, then import libs .lib, then shared .dll
-    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".lib" ".dll")
-    message(STATUS "Configured CMAKE_FIND_LIBRARY_SUFFIXES for static linking: ${CMAKE_FIND_LIBRARY_SUFFIXES}")
+if(WIN32 AND Qt6_DIR AND Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
+    message(FATAL_ERROR
+        "MSVC Qt kits are not supported (MSVC ABI rejected at top-level check).\n"
+        "Use MinGW/LLVM-MinGW Qt kit with clang/clang++.\n"
+        "Qt6_DIR: ${Qt6_DIR}")
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2 Core Gui Network OpenGL)
-
-# Verify Qt6 is static (check for .a files in Qt6_DIR)
-if(WIN32 AND Qt6_DIR)
-    if(EXISTS "${Qt6_DIR}/../libQt6Core.a")
-        message(STATUS "✓ Qt6Core static library found (.a)")
-    elseif(EXISTS "${Qt6_DIR}/../../../lib/libQt6Core.a")
-        message(STATUS "✓ Qt6Core static library found (.a)")
-    else()
-        message(WARNING "Qt6Core static library (.a) not found - shared DLL might be used!")
-        if(EXISTS "${Qt6_DIR}/../Qt6Core.dll")
-            message(FATAL_ERROR 
-                "ERROR: Found Qt6Core.dll (shared) instead of libQt6Core.a (static)!\n"
-                "The Qt kit must have static libraries. Check your Qt installation at:\n"
-                "  ${Qt6_DIR}\n"
-                "You need llvm-mingw_64 or mingw_64 kit with static library (.a) files,\n"
-                "not a shared library (.dll) build.")
-        endif()
-    endif()
-endif()
 
 add_executable(Immersion
     src/main.cpp
@@ -188,12 +136,6 @@ target_link_libraries(Immersion
     Qt6::Network
     Qt6::OpenGL
 )
-
-# Ensure pure static linking on Windows with MinGW/Clang
-if(WIN32 AND NOT MSVC)
-    target_link_options(Immersion PRIVATE -static -static-libgcc -static-libstdc++)
-    message(STATUS "✓ Applied full static linking flags to Immersion target")
-endif()
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
 

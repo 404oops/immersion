@@ -33,6 +33,29 @@ echo ""
 echo "🔨 Building Immersion..."
 cmake --build . --config MinSizeRel -j "$(sysctl -n hw.logicalcpu)"
 
+# Deploy Qt frameworks and resources into the app bundle
+APP_BUNDLE="$BUILD_DIR/Immersion.app"
+if [ -d "$APP_BUNDLE" ]; then
+    echo ""
+    echo "🚚 Deploying Qt runtime into app bundle..."
+    if command -v macdeployqt >/dev/null 2>&1; then
+        macdeployqt "$APP_BUNDLE" -qmldir="$PROJECT_ROOT/src/qml"
+    elif [ -x "$(brew --prefix qt6)/bin/macdeployqt" ]; then
+        "$(brew --prefix qt6)/bin/macdeployqt" "$APP_BUNDLE" -qmldir="$PROJECT_ROOT/src/qml"
+    else
+        echo "❌ macdeployqt not found. Install Qt tools and ensure macdeployqt is in PATH."
+        exit 1
+    fi
+
+    echo ""
+    echo "📁 Bundle runtime locations:"
+    echo "  Frameworks: $APP_BUNDLE/Contents/Frameworks"
+    echo "  Resources:  $APP_BUNDLE/Contents/Resources"
+else
+    echo "❌ Expected app bundle not found: $APP_BUNDLE"
+    exit 1
+fi
+
 # Package
 echo ""
 echo "📦 Creating macOS DMG package..."

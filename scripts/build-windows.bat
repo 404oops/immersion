@@ -167,6 +167,31 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Deploy Qt runtime for dynamic linking
+echo.
+echo 🚚 Deploying Qt runtime (windeployqt)...
+set "WINDEPLOYQT="
+if defined QT_KIT_ROOT if exist "%QT_KIT_ROOT%\bin\windeployqt.exe" set "WINDEPLOYQT=%QT_KIT_ROOT%\bin\windeployqt.exe"
+if not defined WINDEPLOYQT (
+    for /f "usebackq delims=" %%I in (`where windeployqt 2^>nul`) do if not defined WINDEPLOYQT set "WINDEPLOYQT=%%I"
+)
+
+if not defined WINDEPLOYQT (
+    echo ❌ windeployqt not found. Install Qt tools or add windeployqt to PATH.
+    exit /b 1
+)
+
+if not exist "%BUILD_DIR%\Immersion.exe" (
+    echo ❌ Built executable not found: %BUILD_DIR%\Immersion.exe
+    exit /b 1
+)
+
+"%WINDEPLOYQT%" --release --qmldir "%PROJECT_ROOT%\src\qml" "%BUILD_DIR%\Immersion.exe"
+if errorlevel 1 (
+    echo ❌ windeployqt failed
+    exit /b 1
+)
+
 REM Package
 echo.
 echo 📦 Creating Windows installer...
