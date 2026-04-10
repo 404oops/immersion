@@ -120,6 +120,7 @@ qt_add_resources(Immersion Immersion_qml
 )
 
 set_target_properties(Immersion PROPERTIES
+    WIN32_EXECUTABLE $<BOOL:WIN32>
     MACOSX_BUNDLE ON
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.Immersion.app"
     MACOSX_BUNDLE_BUNDLE_NAME "Immersion"
@@ -161,6 +162,27 @@ install(TARGETS Immersion
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+if(QT_VERSION_MAJOR EQUAL 6)
+    if(COMMAND qt_generate_deploy_qml_app_script)
+        qt_generate_deploy_qml_app_script(
+            TARGET Immersion
+            OUTPUT_SCRIPT immersion_deploy_script
+            QML_DIR "${CMAKE_SOURCE_DIR}/src/qml"
+            NO_UNSUPPORTED_PLATFORM_ERROR
+        )
+    elseif(COMMAND qt_generate_deploy_app_script)
+        qt_generate_deploy_app_script(
+            TARGET Immersion
+            OUTPUT_SCRIPT immersion_deploy_script
+            NO_UNSUPPORTED_PLATFORM_ERROR
+        )
+    endif()
+
+    if(DEFINED immersion_deploy_script)
+        install(SCRIPT ${immersion_deploy_script})
+    endif()
+endif()
+
 set(CPACK_PACKAGE_NAME "Immersion")
 set(CPACK_PACKAGE_VENDOR "Immersion")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
@@ -169,7 +191,13 @@ set(CPACK_PACKAGE_FILE_NAME "Immersion-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
 if(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
 elseif(WIN32)
-    set(CPACK_GENERATOR "NSIS")
+    find_program(MAKENSIS_EXECUTABLE makensis)
+    if(MAKENSIS_EXECUTABLE)
+        set(CPACK_GENERATOR "NSIS;ZIP")
+    else()
+        message(STATUS "NSIS not found, packaging with ZIP only")
+        set(CPACK_GENERATOR "ZIP")
+    endif()
 endif()
 
 include(CPack)
