@@ -67,7 +67,7 @@ sudo dnf install cmake qt6-qtbase-devel qt6-qtdeclarative-devel libglvnd-devel
 
 ### Windows
 - CMake (download from cmake.org or `winget install cmake`)
-- Qt6 (download from qt.io or `vcpkg install qt6`)
+- Qt6 **static libraries** (download from qt.io with static build option, or `vcpkg install qt6:x64-windows-static`)
 - LLVM/Clang (`clang` and `clang++` available via Qt kit or PATH)
 
 ## Build Output
@@ -177,3 +177,23 @@ Edit `CMakeLists.txt` to modify:
 - Packaging generators (DragNDrop, NSIS, TGZ, DEB, RPM)
 - Installation paths
 - Compiler optimizations
+- Static linking (enabled by default, use `-DBUILD_SHARED_LIBS=ON` to disable)
+
+## Static Linking
+
+Immersion is built as a fully static executable by default. All dependencies including Qt are statically linked.
+
+### Qt Static Libraries Requirement
+Your Qt installation **must** include static libraries. When installing or building Qt:
+- **Official Qt Installer**: Select "Desktop (static)" or use offline installer with `-static` flag
+- **vcpkg**: `vcpkg install qt6:x64-windows-static` (Windows), `vcpkg install qt6[core,gui,qml]:x64-linux` (Linux)
+- **Homebrew** (macOS): `brew install qt6 --with-static` (if available)
+
+If your Qt kit contains only shared libraries (`.so`, `.dll`), static linking will fail. Install or rebuild Qt with static library support.
+
+### Disable Static Linking (optional)
+To build with shared libraries instead:
+```bash
+cmake -DBUILD_SHARED_LIBS=ON -B build
+cmake --build build
+```

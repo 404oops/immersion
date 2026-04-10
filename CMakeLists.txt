@@ -9,6 +9,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++" CACHE STRING "EXE linker flags" FORCE)
+if(WIN32)
+    if(NOT MSVC)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static" CACHE STRING "EXE linker flags" FORCE)
+    endif()
+endif()
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
@@ -52,6 +59,9 @@ endif()
 if(Qt6_DIR)
     list(PREPEND CMAKE_PREFIX_PATH "${Qt6_DIR}")
 endif()
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build as static library")
+set(Qt6_STATIC TRUE)
 
 if(WIN32)
     set(_using_msvc_abi FALSE)
@@ -109,7 +119,7 @@ if(WIN32 AND Qt6_DIR)
     endif()
 endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2 Core Gui Network OpenGL)
 
 add_executable(Immersion
     src/main.cpp
@@ -153,11 +163,36 @@ set_target_properties(Immersion PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
 )
 
+if(WIN32)
+    target_link_libraries(Immersion PRIVATE
+        -static
+        -static-libgcc
+        -static-libstdc++
+    )
+endif()
+
+if(APPLE)
+    set_target_properties(Immersion PROPERTIES
+        LINK_FLAGS "-static-libgcc"
+    )
+endif()
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(Immersion PRIVATE
+        -static-libgcc
+        -static-libstdc++
+    )
+endif()
+
 target_link_libraries(Immersion
     Qt6::Widgets
     Qt6::Quick
     Qt6::Qml
     Qt6::QuickControls2
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Network
+    Qt6::OpenGL
 )
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
