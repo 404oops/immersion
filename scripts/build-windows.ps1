@@ -177,7 +177,8 @@ try {
     $cmakeArgs = @(
         "-DCMAKE_BUILD_TYPE=$BuildType",
         "-DCMAKE_C_COMPILER=$cCompiler",
-        "-DCMAKE_CXX_COMPILER=$cxxCompiler"
+        "-DCMAKE_CXX_COMPILER=$cxxCompiler",
+        "-DBUILD_SHARED_LIBS=OFF"
     )
 
     if (-not [string]::IsNullOrWhiteSpace($Generator)) {

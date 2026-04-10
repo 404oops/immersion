@@ -4,6 +4,30 @@ This directory contains platform-specific build scripts for Immersion that handl
 
 ## Quick Start
 
+### Windows - Test Build (Recommended First Step)
+
+**PowerShell**:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/quick-build-test.ps1
+```
+
+**Batch/CMD**:
+```cmd
+scripts\quick-build-test.bat
+```
+
+These scripts:
+1. Verify Qt6 static libraries are installed
+2. Check required tools (cmake, clang++, ninja)
+3. Configure and build the project
+4. Report success or errors
+
+### Windows - Check Qt6 Static Libraries
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify-qt-static.ps1
+```
+Verify your Qt installation has static libraries before building.
+
 ### macOS
 ```bash
 bash scripts/build-macos.sh

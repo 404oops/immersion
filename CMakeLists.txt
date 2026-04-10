@@ -9,11 +9,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++" CACHE STRING "EXE linker flags" FORCE)
-if(WIN32)
-    if(NOT MSVC)
-        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static" CACHE STRING "EXE linker flags" FORCE)
-    endif()
+if(WIN32 AND NOT MSVC)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++" CACHE STRING "EXE linker flags" FORCE)
+elseif(UNIX)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++" CACHE STRING "EXE linker flags" FORCE)
 endif()
 
 set(CMAKE_AUTOMOC ON)
@@ -93,29 +92,11 @@ if(WIN32 AND Qt6_DIR)
         set(_qt6_is_msvc TRUE)
     endif()
 
-    set(_using_mingw_abi FALSE)
-    if(CMAKE_CXX_COMPILER_TARGET MATCHES "mingw|gnu")
-        set(_using_mingw_abi TRUE)
-    endif()
-
-    if(_qt6_is_mingw AND _using_msvc_abi)
+    if(_qt6_is_msvc)
         message(FATAL_ERROR
-            "Incompatible toolchain/Qt combination detected.\n"
-            "Qt6_DIR points to a MinGW Qt kit: ${Qt6_DIR}\n"
-            "but the compiler targets MSVC ABI.\n"
-            "Use one of these combinations:\n"
-            "  1) MinGW Qt + MinGW/LLVM-MinGW compiler (for example C:/Qt/6.11.0/llvm-mingw_64/bin/clang++.exe)\n"
-            "  2) MSVC Qt kit + MSVC/clang-cl compiler\n"
-            "Current compiler target: ${CMAKE_CXX_COMPILER_TARGET}")
-    endif()
-
-    if(_qt6_is_msvc AND _using_mingw_abi)
-        message(FATAL_ERROR
-            "Incompatible toolchain/Qt combination detected.\n"
-            "Qt6_DIR points to an MSVC Qt kit: ${Qt6_DIR}\n"
-            "but the compiler targets MinGW/GNU ABI.\n"
-            "Use a MinGW/LLVM-MinGW Qt kit with clang/clang++.\n"
-            "Current compiler target: ${CMAKE_CXX_COMPILER_TARGET}")
+            "MSVC Qt kits are not supported (MSVC ABI rejected at top-level check).
+            Use MinGW/LLVM-MinGW Qt kit with clang/clang++.
+            Qt6_DIR: ${Qt6_DIR}")
     endif()
 endif()
 
@@ -162,27 +143,6 @@ set_target_properties(Immersion PROPERTIES
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
 )
-
-if(WIN32)
-    target_link_libraries(Immersion PRIVATE
-        -static
-        -static-libgcc
-        -static-libstdc++
-    )
-endif()
-
-if(APPLE)
-    set_target_properties(Immersion PROPERTIES
-        LINK_FLAGS "-static-libgcc"
-    )
-endif()
-
-if(UNIX AND NOT APPLE)
-    target_link_libraries(Immersion PRIVATE
-        -static-libgcc
-        -static-libstdc++
-    )
-endif()
 
 target_link_libraries(Immersion
     Qt6::Widgets
