@@ -17,6 +17,49 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 $BuildDir = Join-Path $ProjectRoot "build"
 $autoGenerator = $false
 $autoToolset = $false
+$autoQt6Dir = $false
+
+function Resolve-Qt6PackageDir {
+    param(
+        [string]$Qt6DirEnv,
+        [string]$QtDirEnv
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Qt6DirEnv)) {
+        if (Test-Path (Join-Path $Qt6DirEnv "Qt6Config.cmake")) {
+            return $Qt6DirEnv
+        }
+        $nested = Join-Path $Qt6DirEnv "lib\cmake\Qt6"
+        if (Test-Path (Join-Path $nested "Qt6Config.cmake")) {
+            return $nested
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($QtDirEnv)) {
+        $qtDirCandidate = Join-Path $QtDirEnv "lib\cmake\Qt6"
+        if (Test-Path (Join-Path $qtDirCandidate "Qt6Config.cmake")) {
+            return $qtDirCandidate
+        }
+    }
+
+    if (Test-Path "C:\Qt") {
+        $qtVersions = Get-ChildItem -Path "C:\Qt" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "6.*" } |
+            Sort-Object Name -Descending
+
+        foreach ($versionDir in $qtVersions) {
+            $kits = @("msvc2022_64", "msvc2019_64", "msvc2022_arm64", "clang_64")
+            foreach ($kit in $kits) {
+                $candidate = Join-Path $versionDir.FullName "$kit\lib\cmake\Qt6"
+                if (Test-Path (Join-Path $candidate "Qt6Config.cmake")) {
+                    return $candidate
+                }
+            }
+        }
+    }
+
+    return $null
+}
 
 if ([string]::IsNullOrWhiteSpace($Generator)) {
     $vswherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -41,6 +84,11 @@ if ([string]::IsNullOrWhiteSpace($Toolset)) {
     }
 }
 
+$qt6PackageDir = Resolve-Qt6PackageDir -Qt6DirEnv $env:Qt6_DIR -QtDirEnv $env:QTDIR
+if ($qt6PackageDir -and [string]::IsNullOrWhiteSpace($env:Qt6_DIR)) {
+    $autoQt6Dir = $true
+}
+
 Write-Host "🪟 Building Immersion for Windows (PowerShell)" -ForegroundColor Cyan
 Write-Host "Project root: $ProjectRoot"
 Write-Host "Build directory: $BuildDir"
@@ -58,6 +106,15 @@ if (-not [string]::IsNullOrWhiteSpace($Toolset)) {
     if ($autoToolset) {
         Write-Host "Toolset selected automatically (clang-cl detected)"
     }
+}
+if (-not [string]::IsNullOrWhiteSpace($qt6PackageDir)) {
+    Write-Host "Qt6_DIR: $qt6PackageDir"
+    if ($autoQt6Dir) {
+        Write-Host "Qt6_DIR selected automatically"
+    }
+} else {
+    Write-Host "Qt6_DIR: not found automatically"
+    Write-Host "Hint: set Qt6_DIR to a folder containing Qt6Config.cmake"
 }
 Write-Host ""
 
@@ -93,8 +150,8 @@ try {
         $cmakeArgs += @("-T", $Toolset)
     }
     
-    if ($env:Qt6_DIR) {
-        $cmakeArgs += "-DCMAKE_PREFIX_PATH=$env:Qt6_DIR"
+    if ($qt6PackageDir) {
+        $cmakeArgs += "-DQt6_DIR=$qt6PackageDir"
     }
     
     $cmakeArgs += $ProjectRoot

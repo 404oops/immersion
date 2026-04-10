@@ -79,6 +79,46 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Resolve Qt6 package directory (for Qt6Config.cmake)
+set "AUTO_QT6_DIR=0"
+if defined Qt6_DIR (
+    if exist "%Qt6_DIR%\Qt6Config.cmake" (
+        set "Qt6_DIR=%Qt6_DIR%"
+    ) else (
+        if exist "%Qt6_DIR%\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=%Qt6_DIR%\lib\cmake\Qt6"
+    )
+)
+
+if not defined Qt6_DIR (
+    if defined QTDIR (
+        if exist "%QTDIR%\lib\cmake\Qt6\Qt6Config.cmake" (
+            set "Qt6_DIR=%QTDIR%\lib\cmake\Qt6"
+            set "AUTO_QT6_DIR=1"
+        )
+    )
+)
+
+if not defined Qt6_DIR (
+    for /f "delims=" %%D in ('dir /b /ad /o-n "C:\Qt\6.*" 2^>nul') do (
+        if not defined Qt6_DIR (
+            if exist "C:\Qt\%%D\msvc2022_64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\msvc2022_64\lib\cmake\Qt6"
+            if not defined Qt6_DIR if exist "C:\Qt\%%D\msvc2019_64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\msvc2019_64\lib\cmake\Qt6"
+            if not defined Qt6_DIR if exist "C:\Qt\%%D\msvc2022_arm64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\msvc2022_arm64\lib\cmake\Qt6"
+            if not defined Qt6_DIR if exist "C:\Qt\%%D\clang_64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\clang_64\lib\cmake\Qt6"
+        )
+    )
+    if defined Qt6_DIR set "AUTO_QT6_DIR=1"
+)
+
+if defined Qt6_DIR (
+    echo Qt6_DIR: %Qt6_DIR%
+    if "%AUTO_QT6_DIR%"=="1" echo Qt6_DIR selected automatically
+) else (
+    echo Qt6_DIR: not found automatically
+    echo Hint: set Qt6_DIR to a folder containing Qt6Config.cmake
+)
+echo.
+
 REM Create or clean build directory
 if exist "%BUILD_DIR%" (
     echo Cleaning existing build directory...
@@ -94,20 +134,20 @@ echo 📋 Configuring CMake...
 if defined GENERATOR (
     if defined TOOLSET (
         if defined Qt6_DIR (
-            cmake -G "%GENERATOR%" -T "%TOOLSET%" -DCMAKE_PREFIX_PATH="%Qt6_DIR%" "%PROJECT_ROOT%"
+            cmake -G "%GENERATOR%" -T "%TOOLSET%" -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
         ) else (
             cmake -G "%GENERATOR%" -T "%TOOLSET%" "%PROJECT_ROOT%"
         )
     ) else (
         if defined Qt6_DIR (
-            cmake -G "%GENERATOR%" -DCMAKE_PREFIX_PATH="%Qt6_DIR%" "%PROJECT_ROOT%"
+            cmake -G "%GENERATOR%" -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
         ) else (
             cmake -G "%GENERATOR%" "%PROJECT_ROOT%"
         )
     )
 ) else (
     if defined Qt6_DIR (
-        cmake -DCMAKE_PREFIX_PATH="%Qt6_DIR%" "%PROJECT_ROOT%"
+        cmake -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
     ) else (
         cmake "%PROJECT_ROOT%"
     )
