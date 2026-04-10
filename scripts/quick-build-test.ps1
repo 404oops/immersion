@@ -4,17 +4,8 @@
 Write-Host "🧪 Starting build test..." -ForegroundColor Cyan
 Write-Host ""
 
-# Step 1: Verify Qt static libraries
-Write-Host "Step 1️⃣ : Verifying Qt6 static libraries..." -ForegroundColor Yellow
-& powershell -ExecutionPolicy Bypass -File "scripts/verify-qt-static.ps1"
-if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "❌ Qt6 static libraries not found. Cannot proceed." -ForegroundColor Red
-    exit 1
-}
-
-Write-Host ""
-Write-Host "Step 2️⃣ : Checking required tools..." -ForegroundColor Yellow
+# Step 1: Check required tools
+Write-Host "Step 1️⃣ : Checking required tools..." -ForegroundColor Yellow
 $tools = @("cmake", "clang++", "ninja")
 foreach ($tool in $tools) {
     $found = $null -ne (Get-Command $tool -ErrorAction SilentlyContinue)
@@ -27,7 +18,7 @@ foreach ($tool in $tools) {
 }
 
 Write-Host ""
-Write-Host "Step 3️⃣ : Running CMake configure..." -ForegroundColor Yellow
+Write-Host "Step 2️⃣ : Running CMake configure..." -ForegroundColor Yellow
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $BuildDir = Join-Path $ProjectRoot "build"
@@ -45,6 +36,7 @@ try {
         -DCMAKE_C_COMPILER="C:/Qt/6.11.0/llvm-mingw_64/bin/clang.exe" `
         -DCMAKE_CXX_COMPILER="C:/Qt/6.11.0/llvm-mingw_64/bin/clang++.exe" `
         -DQt6_DIR="C:/Qt/6.11.0/llvm-mingw_64/lib/cmake/Qt6" `
+        -DBUILD_SHARED_LIBS=ON `
         -DCMAKE_BUILD_TYPE=Release `
         "$ProjectRoot"
 
@@ -55,7 +47,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Step 4️⃣ : Building..." -ForegroundColor Yellow
+    Write-Host "Step 3️⃣ : Building..." -ForegroundColor Yellow
     cmake --build . --config Release
 
     if ($LASTEXITCODE -ne 0) {
@@ -65,17 +57,33 @@ try {
     }
 
     Write-Host ""
-    Write-Host "✅ Build successful!" -ForegroundColor Green
-    Write-Host "Executable: $(Join-Path $BuildDir "Immersion.exe")" -ForegroundColor Green
-    
+    $exePath = Join-Path $BuildDir "Immersion.exe"
     Write-Host ""
-    Write-Host "Step 5️⃣ : Verifying static linking..." -ForegroundColor Yellow
-    $diagnosticScript = Join-Path $ScriptDir "diagnose-qt-static.ps1"
-    if (Test-Path $diagnosticScript) {
-        & $diagnosticScript
-    } else {
-        Write-Host "Diagnostic script not found, skipping verification" -ForegroundColor Gray
+    Write-Host "Step 4️⃣ : Deploying Qt runtime (windeployqt)..." -ForegroundColor Yellow
+    $windeployqtPath = "C:/Qt/6.11.0/llvm-mingw_64/bin/windeployqt.exe"
+    if (-not (Test-Path $windeployqtPath)) {
+        $windeployqtCmd = Get-Command windeployqt -ErrorAction SilentlyContinue
+        if ($windeployqtCmd) {
+            $windeployqtPath = $windeployqtCmd.Source
+        }
     }
+
+    if (-not (Test-Path $windeployqtPath)) {
+        Write-Host "❌ windeployqt not found" -ForegroundColor Red
+        exit 1
+    }
+
+    & $windeployqtPath --release --qmldir "$ProjectRoot/src/qml" "$exePath"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Host "❌ windeployqt failed" -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host ""
+    Write-Host "✅ Build successful!" -ForegroundColor Green
+    Write-Host "Executable: $exePath" -ForegroundColor Green
+    Write-Host "Qt runtime deployed next to executable." -ForegroundColor Green
     
     exit 0
 } finally {
