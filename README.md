@@ -1,6 +1,6 @@
 # Immersion - Music Project Versioning
 
-A Qt6-based music project management application with static linking support.
+A Qt6-based music project management application with dynamic Qt runtime deployment.
 
 ## Quick Start (Windows)
 
@@ -23,13 +23,13 @@ scripts\quick-build-test.bat
 ## Build Requirements
 
 - CMake 3.21+
-- Qt6 with **static libraries**
+- Qt6 (with deployment tools: `macdeployqt` and `windeployqt`)
 - Clang/Clang++ (LLVM)
 - Ninja build system
 
 ## Features
 
-- Fully static linking (no runtime dependencies)
+- Dynamic Qt linking with automated runtime deployment
 - Qt6 GUI with QML support
 - Cross-platform (Windows, macOS, Linux)
 - C++20 standard
@@ -37,11 +37,16 @@ scripts\quick-build-test.bat
 ## Troubleshooting
 
 ### "QtCore.dll not found" Error
-If you get this error when running the executable, it means the build used dynamic linking instead of static. See **[QTDLL_ERROR_FIX.md](QTDLL_ERROR_FIX.md)** for complete diagnostic steps and solutions.
+If you get this error when running the executable, Qt runtime files were not deployed next to the executable.
 
 Quick fix:
-1. Run: `powershell -ExecutionPolicy Bypass -File scripts/diagnose-qt-static.ps1`
-2. Verify static `.a` libraries exist in your Qt kit
-3. Clean and rebuild: Delete the `build/` folder first, then rebuild
+1. Rebuild using: `powershell -ExecutionPolicy Bypass -File scripts/quick-build-test.ps1`
+2. Ensure `windeployqt` exists in your Qt kit or PATH
+3. Confirm Qt DLLs are in the same folder as `Immersion.exe`
+
+### macOS Runtime Bundling
+The macOS build script runs `macdeployqt` and places Qt runtime files in the app bundle:
+- `Immersion.app/Contents/Frameworks`
+- `Immersion.app/Contents/Resources`
 
 Copyright, 404oops (c)

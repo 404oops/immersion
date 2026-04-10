@@ -82,6 +82,7 @@ if(WIN32 AND Qt6_DIR AND Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
         "Qt6_DIR: ${Qt6_DIR}")
 endif()
 
+find_package(Threads REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2 Core Gui Network OpenGL)
 
 add_executable(Immersion

@@ -17,16 +17,22 @@ scripts\quick-build-test.bat
 ```
 
 These scripts:
-1. Verify Qt6 static libraries are installed
-2. Check required tools (cmake, clang++, ninja)
-3. Configure and build the project
+1. Check required tools (cmake, clang++, ninja)
+2. Configure and build the project
+3. Run `windeployqt` to deploy Qt runtime DLLs/plugins
 4. Report success or errors
 
-### Windows - Check Qt6 Static Libraries
+### Windows - Runtime Deployment Check
+If a built executable fails with missing Qt DLLs:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/verify-qt-static.ps1
+powershell -ExecutionPolicy Bypass -File scripts/quick-build-test.ps1
 ```
-Verify your Qt installation has static libraries before building.
+The script includes `windeployqt` and should copy runtime dependencies next to `Immersion.exe`.
+
+### macOS Runtime Deployment
+`scripts/build-macos.sh` runs `macdeployqt` after building and bundles Qt runtime files inside:
+- `Immersion.app/Contents/Frameworks`
+- `Immersion.app/Contents/Resources`
 
 ### macOS
 ```bash
@@ -91,7 +97,7 @@ sudo dnf install cmake qt6-qtbase-devel qt6-qtdeclarative-devel libglvnd-devel
 
 ### Windows
 - CMake (download from cmake.org or `winget install cmake`)
-- Qt6 **static libraries** (download from qt.io with static build option, or `vcpkg install qt6:x64-windows-static`)
+- Qt6 with deployment tools (`windeployqt`)
 - LLVM/Clang (`clang` and `clang++` available via Qt kit or PATH)
 
 ## Build Output
@@ -168,16 +174,13 @@ cpack
 - Check compiler compatibility (C++20 required)
 - Ensure all dependencies are installed
 
-### Windows Linker Errors with Qt Symbols
-If you see many undefined Qt symbols while linking (for example `QObject::staticMetaObject` or `QString`), your compiler ABI and Qt kit do not match.
+### Windows Runtime Error: QtCore.dll Not Found
+This means runtime deployment did not complete.
 
-Use matching pairs:
-- `llvm-mingw_64` or `mingw_64` Qt kit with MinGW/LLVM-MinGW compiler
-
-Example MinGW/LLVM-MinGW pairing:
-- `Qt6_DIR=C:\Qt\6.11.0\llvm-mingw_64\lib\cmake\Qt6`
-- `CMAKE_C_COMPILER=C:\Qt\6.11.0\llvm-mingw_64\bin\clang.exe`
-- `CMAKE_CXX_COMPILER=C:\Qt\6.11.0\llvm-mingw_64\bin\clang++.exe`
+Fix:
+- Ensure `windeployqt` is available from your Qt kit (`.../bin/windeployqt.exe`)
+- Re-run `scripts/quick-build-test.ps1` or `scripts/build-windows.ps1`
+- Verify Qt DLLs and plugin folders exist beside `build/Immersion.exe`
 
 ### CPack Fails
 - macOS: Requires `bzip2` (`brew install bzip2`)
@@ -201,23 +204,4 @@ Edit `CMakeLists.txt` to modify:
 - Packaging generators (DragNDrop, NSIS, TGZ, DEB, RPM)
 - Installation paths
 - Compiler optimizations
-- Static linking (enabled by default, use `-DBUILD_SHARED_LIBS=ON` to disable)
-
-## Static Linking
-
-Immersion is built as a fully static executable by default. All dependencies including Qt are statically linked.
-
-### Qt Static Libraries Requirement
-Your Qt installation **must** include static libraries. When installing or building Qt:
-- **Official Qt Installer**: Select "Desktop (static)" or use offline installer with `-static` flag
-- **vcpkg**: `vcpkg install qt6:x64-windows-static` (Windows), `vcpkg install qt6[core,gui,qml]:x64-linux` (Linux)
-- **Homebrew** (macOS): `brew install qt6 --with-static` (if available)
-
-If your Qt kit contains only shared libraries (`.so`, `.dll`), static linking will fail. Install or rebuild Qt with static library support.
-
-### Disable Static Linking (optional)
-To build with shared libraries instead:
-```bash
-cmake -DBUILD_SHARED_LIBS=ON -B build
-cmake --build build
-```
+- Shared vs static project libraries (`-DBUILD_SHARED_LIBS=ON` by default)

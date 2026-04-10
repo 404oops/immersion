@@ -178,7 +178,7 @@ try {
         "-DCMAKE_BUILD_TYPE=$BuildType",
         "-DCMAKE_C_COMPILER=$cCompiler",
         "-DCMAKE_CXX_COMPILER=$cxxCompiler",
-        "-DBUILD_SHARED_LIBS=OFF"
+        "-DBUILD_SHARED_LIBS=ON"
     )
 
     if (-not [string]::IsNullOrWhiteSpace($Generator)) {
