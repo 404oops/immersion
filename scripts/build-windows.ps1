@@ -15,6 +15,31 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $BuildDir = Join-Path $ProjectRoot "build"
+$autoGenerator = $false
+$autoToolset = $false
+
+if ([string]::IsNullOrWhiteSpace($Generator)) {
+    $vswherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswherePath) {
+        $installationVersion = & $vswherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
+        if (-not [string]::IsNullOrWhiteSpace($installationVersion)) {
+            $majorVersion = ($installationVersion -split "\\.")[0]
+            switch ($majorVersion) {
+                "18" { $Generator = "Visual Studio 18 2026"; $autoGenerator = $true }
+                "17" { $Generator = "Visual Studio 17 2022"; $autoGenerator = $true }
+                "16" { $Generator = "Visual Studio 16 2019"; $autoGenerator = $true }
+            }
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($Toolset)) {
+    $clangExists = $null -ne (Get-Command clang-cl -ErrorAction SilentlyContinue)
+    if ($clangExists -and -not [string]::IsNullOrWhiteSpace($Generator) -and $Generator.StartsWith("Visual Studio")) {
+        $Toolset = "ClangCL"
+        $autoToolset = $true
+    }
+}
 
 Write-Host "🪟 Building Immersion for Windows (PowerShell)" -ForegroundColor Cyan
 Write-Host "Project root: $ProjectRoot"
@@ -24,9 +49,15 @@ if ([string]::IsNullOrWhiteSpace($Generator)) {
     Write-Host "Generator: auto-detect"
 } else {
     Write-Host "Generator: $Generator"
+    if ($autoGenerator) {
+        Write-Host "Generator selected automatically (latest Visual Studio detected)"
+    }
 }
 if (-not [string]::IsNullOrWhiteSpace($Toolset)) {
     Write-Host "Toolset: $Toolset"
+    if ($autoToolset) {
+        Write-Host "Toolset selected automatically (clang-cl detected)"
+    }
 }
 Write-Host ""
 

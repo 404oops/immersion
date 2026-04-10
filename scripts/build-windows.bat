@@ -10,7 +10,7 @@ setlocal enabledelayedexpansion
 
 REM Get script directory
 for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
-for %%I in ("%SCRIPT_DIR%..") do set "PROJECT_ROOT=%%~fI"
+for %%I in ("%SCRIPT_DIR%\..") do set "PROJECT_ROOT=%%~fI"
 set "BUILD_DIR=%PROJECT_ROOT%\build"
 
 echo 🪟 Building Immersion for Windows...
@@ -20,18 +20,49 @@ echo.
 
 set "GENERATOR=%CMAKE_GENERATOR%"
 set "TOOLSET=%CMAKE_GENERATOR_TOOLSET%"
+set "AUTO_TOOLSET=0"
+set "AUTO_GENERATOR=0"
 
 if not "%~1"=="" set "GENERATOR=%~1"
 if not "%~2"=="" set "TOOLSET=%~2"
 
+if not defined GENERATOR (
+    set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+    if exist "%VSWHERE%" (
+        for /f "usebackq delims=" %%V in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion`) do set "VS_VERSION=%%V"
+        if defined VS_VERSION (
+            for /f "tokens=1 delims=." %%M in ("%VS_VERSION%") do set "VS_MAJOR=%%M"
+            if "%VS_MAJOR%"=="18" set "GENERATOR=Visual Studio 18 2026"
+            if "%VS_MAJOR%"=="17" set "GENERATOR=Visual Studio 17 2022"
+            if "%VS_MAJOR%"=="16" set "GENERATOR=Visual Studio 16 2019"
+            if defined GENERATOR set "AUTO_GENERATOR=1"
+        )
+    )
+)
+
+if not defined TOOLSET (
+    where clang-cl >nul 2>nul
+    if not errorlevel 1 (
+        if defined GENERATOR (
+            echo %GENERATOR% | findstr /B /C:"Visual Studio" >nul
+            if not errorlevel 1 (
+                set "TOOLSET=ClangCL"
+                set "AUTO_TOOLSET=1"
+            )
+        )
+    )
+)
+
 if defined GENERATOR (
     echo Generator: %GENERATOR%
+    if "%AUTO_GENERATOR%"=="1" echo Generator selected automatically (latest Visual Studio detected)
 ) else (
     echo Generator: auto-detect
 )
 
 if defined TOOLSET (
     echo Toolset: %TOOLSET%
+    if "%AUTO_TOOLSET%"=="1" echo Toolset selected automatically (clang-cl detected)
 )
 echo.
 
