@@ -34,4 +34,14 @@ scripts\quick-build-test.bat
 - Cross-platform (Windows, macOS, Linux)
 - C++20 standard
 
+## Troubleshooting
+
+### "QtCore.dll not found" Error
+If you get this error when running the executable, it means the build used dynamic linking instead of static. See **[QTDLL_ERROR_FIX.md](QTDLL_ERROR_FIX.md)** for complete diagnostic steps and solutions.
+
+Quick fix:
+1. Run: `powershell -ExecutionPolicy Bypass -File scripts/diagnose-qt-static.ps1`
+2. Verify static `.a` libraries exist in your Qt kit
+3. Clean and rebuild: Delete the `build/` folder first, then rebuild
+
 Copyright, 404oops (c)

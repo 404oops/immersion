@@ -62,7 +62,15 @@ endif()
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build as static library")
 set(Qt6_STATIC TRUE)
 
+# Additional Qt6 configuration for static linking
+set(Qt6_NO_UNINSTALLED_BUILD_SUPPORT ON)
+
 if(WIN32)
+    # For MinGW/LLVM-MinGW on Windows: ensure static linkage, not shared DLLs
+    # These variables affect how Qt6Config.cmake selects libraries
+    set(Qt6_SHARED_LIBS OFF)
+    set(Qt6_USE_STATIC_LIBS ON)
+    
     set(_using_msvc_abi FALSE)
     if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
         set(_using_msvc_abi TRUE)
@@ -100,7 +108,33 @@ if(WIN32 AND Qt6_DIR)
     endif()
 endif()
 
+# Force static library prioritization for MinGW/LLVM-MinGW on Windows
+if(WIN32 AND NOT MSVC)
+    # Order: static .a first, then import libs .lib, then shared .dll
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".lib" ".dll")
+    message(STATUS "Configured CMAKE_FIND_LIBRARY_SUFFIXES for static linking: ${CMAKE_FIND_LIBRARY_SUFFIXES}")
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2 Core Gui Network OpenGL)
+
+# Verify Qt6 is static (check for .a files in Qt6_DIR)
+if(WIN32 AND Qt6_DIR)
+    if(EXISTS "${Qt6_DIR}/../libQt6Core.a")
+        message(STATUS "✓ Qt6Core static library found (.a)")
+    elseif(EXISTS "${Qt6_DIR}/../../../lib/libQt6Core.a")
+        message(STATUS "✓ Qt6Core static library found (.a)")
+    else()
+        message(WARNING "Qt6Core static library (.a) not found - shared DLL might be used!")
+        if(EXISTS "${Qt6_DIR}/../Qt6Core.dll")
+            message(FATAL_ERROR 
+                "ERROR: Found Qt6Core.dll (shared) instead of libQt6Core.a (static)!\n"
+                "The Qt kit must have static libraries. Check your Qt installation at:\n"
+                "  ${Qt6_DIR}\n"
+                "You need llvm-mingw_64 or mingw_64 kit with static library (.a) files,\n"
+                "not a shared library (.dll) build.")
+        endif()
+    endif()
+endif()
 
 add_executable(Immersion
     src/main.cpp
@@ -154,6 +188,12 @@ target_link_libraries(Immersion
     Qt6::Network
     Qt6::OpenGL
 )
+
+# Ensure pure static linking on Windows with MinGW/Clang
+if(WIN32 AND NOT MSVC)
+    target_link_options(Immersion PRIVATE -static -static-libgcc -static-libstdc++)
+    message(STATUS "✓ Applied full static linking flags to Immersion target")
+endif()
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
 

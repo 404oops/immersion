@@ -67,6 +67,16 @@ try {
     Write-Host ""
     Write-Host "✅ Build successful!" -ForegroundColor Green
     Write-Host "Executable: $(Join-Path $BuildDir "Immersion.exe")" -ForegroundColor Green
+    
+    Write-Host ""
+    Write-Host "Step 5️⃣ : Verifying static linking..." -ForegroundColor Yellow
+    $diagnosticScript = Join-Path $ScriptDir "diagnose-qt-static.ps1"
+    if (Test-Path $diagnosticScript) {
+        & $diagnosticScript
+    } else {
+        Write-Host "Diagnostic script not found, skipping verification" -ForegroundColor Gray
+    }
+    
     exit 0
 } finally {
     Pop-Location
