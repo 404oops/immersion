@@ -48,7 +48,7 @@ function Resolve-Qt6PackageDir {
             Sort-Object Name -Descending
 
         foreach ($versionDir in $qtVersions) {
-            $kits = @("msvc2022_64", "msvc2019_64", "msvc2022_arm64", "clang_64")
+            $kits = @("llvm-mingw_64", "mingw_64", "msvc2022_64", "msvc2019_64", "msvc2022_arm64", "clang_64")
             foreach ($kit in $kits) {
                 $candidate = Join-Path $versionDir.FullName "$kit\lib\cmake\Qt6"
                 if (Test-Path (Join-Path $candidate "Qt6Config.cmake")) {

@@ -101,6 +101,8 @@ if not defined Qt6_DIR (
 if not defined Qt6_DIR (
     for /f "delims=" %%D in ('dir /b /ad /o-n "C:\Qt\6.*" 2^>nul') do (
         if not defined Qt6_DIR (
+            if exist "C:\Qt\%%D\llvm-mingw_64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\llvm-mingw_64\lib\cmake\Qt6"
+            if not defined Qt6_DIR if exist "C:\Qt\%%D\mingw_64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\mingw_64\lib\cmake\Qt6"
             if exist "C:\Qt\%%D\msvc2022_64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\msvc2022_64\lib\cmake\Qt6"
             if not defined Qt6_DIR if exist "C:\Qt\%%D\msvc2019_64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\msvc2019_64\lib\cmake\Qt6"
             if not defined Qt6_DIR if exist "C:\Qt\%%D\msvc2022_arm64\lib\cmake\Qt6\Qt6Config.cmake" set "Qt6_DIR=C:\Qt\%%D\msvc2022_arm64\lib\cmake\Qt6"

@@ -13,6 +13,46 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+if(WIN32 AND NOT Qt6_DIR)
+    set(_qt6_candidates "")
+
+    if(DEFINED ENV{Qt6_DIR} AND NOT "$ENV{Qt6_DIR}" STREQUAL "")
+        list(APPEND _qt6_candidates
+            "$ENV{Qt6_DIR}"
+            "$ENV{Qt6_DIR}/lib/cmake/Qt6"
+        )
+    endif()
+
+    if(DEFINED ENV{QTDIR} AND NOT "$ENV{QTDIR}" STREQUAL "")
+        list(APPEND _qt6_candidates "$ENV{QTDIR}/lib/cmake/Qt6")
+    endif()
+
+    file(GLOB _qt_versions LIST_DIRECTORIES true "C:/Qt/6.*")
+    list(SORT _qt_versions COMPARE NATURAL ORDER DESCENDING)
+    foreach(_qt_version IN LISTS _qt_versions)
+        list(APPEND _qt6_candidates
+            "${_qt_version}/llvm-mingw_64/lib/cmake/Qt6"
+            "${_qt_version}/mingw_64/lib/cmake/Qt6"
+            "${_qt_version}/clang_64/lib/cmake/Qt6"
+            "${_qt_version}/msvc2022_64/lib/cmake/Qt6"
+            "${_qt_version}/msvc2019_64/lib/cmake/Qt6"
+            "${_qt_version}/msvc2022_arm64/lib/cmake/Qt6"
+        )
+    endforeach()
+
+    foreach(_qt6_candidate IN LISTS _qt6_candidates)
+        if(EXISTS "${_qt6_candidate}/Qt6Config.cmake")
+            set(Qt6_DIR "${_qt6_candidate}" CACHE PATH "Path to Qt6 package config" FORCE)
+            message(STATUS "Auto-detected Qt6_DIR: ${Qt6_DIR}")
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(Qt6_DIR)
+    list(PREPEND CMAKE_PREFIX_PATH "${Qt6_DIR}")
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2)
 
 add_executable(Immersion
