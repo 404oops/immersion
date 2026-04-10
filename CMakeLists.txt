@@ -201,3 +201,20 @@ elseif(WIN32)
 endif()
 
 include(CPack)
+
+# CMake-native packaging entrypoints (no external scripts required)
+add_custom_target(dist
+    COMMAND "${CMAKE_CPACK_COMMAND}" -C "$<CONFIG>"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    DEPENDS Immersion
+    COMMENT "Creating distributable package with CPack"
+)
+
+if(CMAKE_CONFIGURATION_TYPES)
+    add_custom_target(dist-release
+        COMMAND "${CMAKE_CPACK_COMMAND}" -C Release
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS Immersion
+        COMMENT "Creating Release package with CPack"
+    )
+endif()
