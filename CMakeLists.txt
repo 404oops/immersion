@@ -179,33 +179,33 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
             list(APPEND _qt_bin_hints "$ENV{QTDIR}/bin")
         endif()
 
-        find_program(IMMERSION_WINDEPLOYQT_EXECUTABLE NAMES windeployqt windeployqt.exe HINTS ${_qt_bin_hints})
+        find_program(IMMERSION_WINDEPLOYQT_EXECUTABLE NAMES windeployqt windeployqt.exe HINTS ${_qt_bin_hints} REQUIRED)
         if(IMMERSION_WINDEPLOYQT_EXECUTABLE)
             install(CODE "
-                if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Debug\")
+                set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/Immersion.exe\")
+                
+                # Check for Debug vs Release explicitly
+                set(_immersion_cfg_flag \"--release\")
+                if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" MATCHES \"Debug\")
                     set(_immersion_cfg_flag \"--debug\")
-                else()
-                    set(_immersion_cfg_flag \"--release\")
-                endif()
-
-                set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/Immersion.exe\")
-                if(NOT EXISTS \"\${_immersion_exe}\")
-                    set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/Immersion.exe\")
                 endif()
 
                 message(STATUS \"Running windeployqt on \${_immersion_exe}...\")
                 execute_process(
                     COMMAND \"${IMMERSION_WINDEPLOYQT_EXECUTABLE}\" 
-                            \"\${_immersion_cfg_flag}\"
-                            \"--qmldir=${CMAKE_SOURCE_DIR}/src/qml\" 
-                            \"--no-translations\" 
+                            \${_immersion_cfg_flag}
+                            --qmldir \"${CMAKE_SOURCE_DIR}/src/qml\" 
+                            --no-translations
+                            --compiler-runtime 
                             \"\${_immersion_exe}\"
                     RESULT_VARIABLE deploy_res
                 )
                 if(NOT deploy_res EQUAL 0)
-                    message(WARNING \"windeployqt failed with exit code \${deploy_res}\")
+                    message(FATAL_ERROR \"windeployqt failed with exit code \${deploy_res}\")
                 endif()
             ")
+        else()
+            message(FATAL_ERROR "windeployqt not found! Cannot package for Windows without Qt deployment tools.")
         endif()
     endif()
 
