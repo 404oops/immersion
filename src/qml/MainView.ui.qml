@@ -1,0 +1,468 @@
+pragma ComponentBehavior: Bound
+
+import QtQuick 2.15
+import QtQuick.Controls 2.15
+import QtQuick.Layouts 1.15
+import "."
+
+Rectangle {
+    id: root
+    objectName: "mainView"
+    width: 1100
+    height: 720
+    color: theme.appBackground
+
+    Theme {
+        id: theme
+    }
+
+    // Semantic hooks for app logic.
+    property string statusMessage: "Please select the folder where all of your project files sit."
+    property var projectsModel: []
+    property var activityModel: []
+    property alias activityListView: activityList
+    property string logLevel: "Info"
+    property string searchText: ""
+    property string sortMode: "Name"
+    // Defaults to designer behavior; runtime explicitly overrides this to false.
+    property bool useDesignerPlaceholders: true
+
+    signal chooseProjectFolderRequested()
+    signal sortModeRequested(string mode)
+    signal searchTextRequested(string text)
+    signal openProjectRequested(int index)
+    signal restoreProjectRequested(int index)
+    signal manageProjectRequested(int index)
+    signal logLevelRequested(string level)
+
+    ListModel {
+        id: placeholderProjectsModel
+        ListElement {
+            name: "Project 1"
+            type: "Bitwig"
+            file: "example-v1.bwproject"
+            path: "/Users/name/Music/Projects/A"
+        }
+        ListElement {
+            name: "Project 2"
+            type: "Ableton"
+            file: "example-v2.als"
+            path: "/Users/name/Music/Projects/B"
+        }
+        ListElement {
+            name: "Project 3"
+            type: "Logic"
+            file: "example-v3.logicx"
+            path: "/Users/name/Music/Projects/C"
+        }
+        ListElement {
+            name: "Project 4"
+            type: "Reaper"
+            file: "example-v4.rpp"
+            path: "/Users/name/Music/Projects/D"
+        }
+        ListElement {
+            name: "Project 5"
+            type: "Studio One"
+            file: "example-v5.song"
+            path: "/Users/name/Music/Projects/E"
+        }
+        ListElement {
+            name: "Project 6"
+            type: "FL Studio"
+            file: "example-v6.flp"
+            path: "/Users/name/Music/Projects/F"
+        }
+        ListElement {
+            name: "Project 7"
+            type: "Cubase"
+            file: "example-v7.cpr"
+            path: "/Users/name/Music/Projects/G"
+        }
+        ListElement {
+            name: "Project 8"
+            type: "Nuendo"
+            file: "example-v8.npr"
+            path: "/Users/name/Music/Projects/H"
+        }
+        ListElement {
+            name: "Project 9"
+            type: "Reason"
+            file: "example-v9.reason"
+            path: "/Users/name/Music/Projects/I"
+        }
+        ListElement {
+            name: "Project 10"
+            type: "Pro Tools"
+            file: "example-v10.ptx"
+            path: "/Users/name/Music/Projects/J"
+        }
+        ListElement {
+            name: "Project 11"
+            type: "Bitwig"
+            file: "example-v11.bwproject"
+            path: "/Users/name/Music/Projects/K"
+        }
+        ListElement {
+            name: "Project 12"
+            type: "Ableton"
+            file: "example-v12.als"
+            path: "/Users/name/Music/Projects/L"
+        }
+        ListElement {
+            name: "Project 13"
+            type: "Logic"
+            file: "example-v13.logicx"
+            path: "/Users/name/Music/Projects/M"
+        }
+        ListElement {
+            name: "Project 14"
+            type: "Reaper"
+            file: "example-v14.rpp"
+            path: "/Users/name/Music/Projects/N"
+        }
+        ListElement {
+            name: "Project 15"
+            type: "Studio One"
+            file: "example-v15.song"
+            path: "/Users/name/Music/Projects/O"
+        }
+        ListElement {
+            name: "Project 16"
+            type: "FL Studio"
+            file: "example-v16.flp"
+            path: "/Users/name/Music/Projects/P"
+        }
+        ListElement {
+            name: "Project 17"
+            type: "Cubase"
+            file: "example-v17.cpr"
+            path: "/Users/name/Music/Projects/Q"
+        }
+        ListElement {
+            name: "Project 18"
+            type: "Nuendo"
+            file: "example-v18.npr"
+            path: "/Users/name/Music/Projects/R"
+        }
+        ListElement {
+            name: "Project 19"
+            type: "Reason"
+            file: "example-v19.reason"
+            path: "/Users/name/Music/Projects/S"
+        }
+        ListElement {
+            name: "Project 20"
+            type: "Pro Tools"
+            file: "example-v20.ptx"
+            path: "/Users/name/Music/Projects/T"
+        }
+    }
+
+    property bool hasProjects: root.projectsModel
+                               && root.projectsModel.length !== undefined
+                               && root.projectsModel.length > 0
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 16
+        spacing: 10
+
+        RowLayout {
+            Label {
+                objectName: "statusLabel"
+                text: root.statusMessage
+                color: theme.textStatus
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+
+            Button {
+                id: chooseProjectFolderButton
+                objectName: "chooseProjectFolderButton"
+                text: "Open Projects"
+
+                Connections {
+                    target: chooseProjectFolderButton
+                    function onClicked() {
+                        root.chooseProjectFolderRequested()
+                    }
+                }
+            }
+        }
+
+        SplitView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            orientation: Qt.Vertical
+
+            Rectangle {
+                SplitView.fillWidth: true
+                SplitView.fillHeight: true
+                SplitView.preferredHeight: 460
+                color: theme.panelSurface
+                radius: 8
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        Label {
+                            objectName: "projectListHeader"
+                            text: "Discovered Projects"
+                            color: theme.textPrimary
+                        }
+
+                        Item {
+                            Layout.fillWidth: true
+                        }
+
+                        RowLayout {
+                            Layout.alignment: Qt.AlignVCenter
+
+                            Label {
+                                text: "Sort:"
+                                color: theme.textSecondary
+                            }
+
+                            ComboBox {
+                                id: sortCombo
+                                objectName: "sortModeComboBox"
+                                model: ["Name", "Last Opened"]
+                                currentIndex: root.sortMode === "Last Opened" ? 1 : 0
+                                Layout.preferredWidth: 150
+
+                                Connections {
+                                    target: sortCombo
+                                    function onActivated(index) {
+                                        root.sortModeRequested(
+                                                    sortCombo.textAt(index))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    TextField {
+                        id: projectSearchField
+                        renderType: Text.NativeRendering
+                        objectName: "projectSearchField"
+                        placeholderText: "Search projects..."
+                        Layout.fillWidth: true
+
+                        Connections {
+                            target: projectSearchField
+                            function onTextEdited() {
+                                root.searchTextRequested(
+                                            projectSearchField.text)
+                            }
+                        }
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+
+                        ListView {
+                            id: projectList
+                            objectName: "projectList"
+                            anchors.fill: parent
+                            model: root.hasProjects ? root.projectsModel : (root.useDesignerPlaceholders ? placeholderProjectsModel : [])
+                            clip: true
+                            spacing: 8
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AlwaysOn
+                            }
+
+                            delegate: Rectangle {
+                                id: projectDelegate
+                                objectName: "projectItem"
+                                required property int index
+                                required property var modelData
+                                width: ListView.view.width
+                                height: 86
+                                radius: 6
+                                color: projectDelegate.index % 2 === 0 ? theme.rowEven : theme.rowOdd
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 10
+
+                                    Rectangle {
+                                        Layout.preferredWidth: 48
+                                        Layout.preferredHeight: 48
+                                        radius: 6
+                                        color: theme.accent
+                                        Label {
+                                            anchors.centerIn: parent
+                                            text: (projectDelegate.modelData
+                                                   && projectDelegate.modelData.type) ? projectDelegate.modelData.type : "DAW"
+                                            color: "white"
+                                            font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignHCenter
+                                            wrapMode: Text.WordWrap
+                                            width: 42
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 2
+
+                                        Label {
+                                            text: projectDelegate.modelData
+                                                  && projectDelegate.modelData.name ? projectDelegate.modelData.name : ("Project " + (projectDelegate.index + 1))
+                                            color: theme.textPrimary
+                                            font.bold: true
+                                        }
+
+                                        Label {
+                                            text: "Project file: "
+                                                  + ((projectDelegate.modelData
+                                                      && projectDelegate.modelData.file) ? projectDelegate.modelData.file : "example.bwproject")
+                                            color: theme.textSecondary
+                                        }
+
+                                        Label {
+                                            text: "Path: " + ((projectDelegate.modelData
+                                                               && projectDelegate.modelData.path) ? projectDelegate.modelData.path : "/Users/name/Music/Projects")
+                                            color: theme.textMuted
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        spacing: 0
+
+                                        Button {
+                                            id: openProjectButton
+                                            objectName: "openProjectButton"
+                                            text: "Open"
+                                            Layout.preferredWidth: 90
+                                            Layout.fillHeight: true
+
+                                            Connections {
+                                                target: openProjectButton
+                                                function onClicked() {
+                                                    root.openProjectRequested(
+                                                                projectDelegate.index)
+                                                }
+                                            }
+                                        }
+
+                                        ColumnLayout {
+
+                                            spacing: 0
+
+                                            Button {
+                                                id: manageProjectButton
+                                                objectName: "manageProjectButton"
+                                                text: "Manage"
+                                                Layout.preferredWidth: 90
+                                                Layout.fillHeight: true
+
+                                                Connections {
+                                                    target: manageProjectButton
+                                                    function onClicked() {
+                                                        root.manageProjectRequested(
+                                                                    projectDelegate.index)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                            }
+                        }
+
+                        Label {
+                            objectName: "noProjectsLoadedLabel"
+                            anchors.centerIn: parent
+                            visible: !root.useDesignerPlaceholders
+                                     && !root.hasProjects
+                            text: "No projects loaded"
+                            color: theme.textStatus
+                            font.pixelSize: 20
+                            font.bold: true
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                SplitView.fillWidth: true
+                SplitView.fillHeight: true
+                SplitView.preferredHeight: 220
+                color: theme.panelSurface
+                radius: 8
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 10
+                    spacing: 8
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        Label {
+                            objectName: "activityHeader"
+                            text: "Activity"
+                            color: theme.textPrimary
+                        }
+
+                        Item {
+                            Layout.fillWidth: true
+                        }
+
+                        Label {
+                            text: "Log level:"
+                            color: theme.textSecondary
+                        }
+
+                        ComboBox {
+                            id: activityLogLevelCombo
+                            objectName: "activityLogLevelComboBox"
+                            model: ["Info", "Debug"]
+                            currentIndex: root.logLevel === "Debug" ? 1 : 0
+                            Layout.preferredWidth: 120
+
+                            Connections {
+                                target: activityLogLevelCombo
+                                function onActivated(index) {
+                                    root.logLevelRequested(activityLogLevelCombo.textAt(index))
+                                }
+                            }
+                        }
+                    }
+
+                    ListView {
+                        id: activityList
+                        objectName: "activityList"
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        model: root.activityModel
+                        clip: true
+                        ScrollBar.vertical: ScrollBar {
+                            policy: ScrollBar.AlwaysOn
+                        }
+
+                        delegate: Label {
+                            required property var modelData
+                            text: modelData
+                            color: theme.textActivity
+                            elide: Text.ElideRight
+                            width: ListView.view.width
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
