@@ -53,6 +53,9 @@ if(Qt6_DIR)
     list(PREPEND CMAKE_PREFIX_PATH "${Qt6_DIR}")
 endif()
 
+set(IMMERSION_WINDEPLOYQT_PATH "" CACHE FILEPATH "Explicit path to windeployqt executable")
+set(IMMERSION_MACDEPLOYQT_PATH "" CACHE FILEPATH "Explicit path to macdeployqt executable")
+
 set(BUILD_SHARED_LIBS ON CACHE BOOL "Build with shared libraries by default")
 
 if(WIN32)
@@ -83,7 +86,7 @@ if(WIN32 AND Qt6_DIR AND Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2 Core Gui Network OpenGL)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2 Core Gui Network OpenGL Svg)
 
 add_executable(Immersion
     src/main.cpp
@@ -137,6 +140,7 @@ target_link_libraries(Immersion
     Qt6::Gui
     Qt6::Network
     Qt6::OpenGL
+    Qt6::Svg
 )
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
@@ -159,92 +163,85 @@ target_compile_options(Immersion PRIVATE
 include(GNUInstallDirs)
 install(TARGETS Immersion
     BUNDLE DESTINATION .
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    RUNTIME DESTINATION .
 )
 
-if(QT_VERSION_MAJOR EQUAL 6)
+if(Qt6_VERSION_MAJOR EQUAL 6)
     if(WIN32)
         set(_qt_bin_hints "")
         if(Qt6_DIR)
-            list(APPEND _qt_bin_hints
-                "${Qt6_DIR}/../../../bin"
-                "${Qt6_DIR}/../../../../bin"
-            )
+            list(APPEND _qt_bin_hints "${Qt6_DIR}/../../../bin" "${Qt6_DIR}/../../../../bin")
+        endif()
+        if(EXISTS "C:/Qt/6.11.0/llvm-mingw_64/bin")
+            list(APPEND _qt_bin_hints "C:/Qt/6.11.0/llvm-mingw_64/bin")
         endif()
         if(DEFINED ENV{QTDIR} AND NOT "$ENV{QTDIR}" STREQUAL "")
             list(APPEND _qt_bin_hints "$ENV{QTDIR}/bin")
         endif()
 
-        find_program(IMMERSION_WINDEPLOYQT_EXECUTABLE
-            NAMES windeployqt windeployqt.exe
-            HINTS ${_qt_bin_hints}
-        )
-
+        find_program(IMMERSION_WINDEPLOYQT_EXECUTABLE NAMES windeployqt windeployqt.exe HINTS ${_qt_bin_hints})
         if(IMMERSION_WINDEPLOYQT_EXECUTABLE)
-                        set(_immersion_windeployqt_install_code [=[
-set(_immersion_candidate_roots "")
-if(NOT "$ENV{DESTDIR}" STREQUAL "")
-    list(APPEND _immersion_candidate_roots "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
-    list(APPEND _immersion_candidate_roots "$ENV{DESTDIR}")
-endif()
-list(APPEND _immersion_candidate_roots "${CMAKE_INSTALL_PREFIX}")
+            install(CODE "
+                if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" STREQUAL \"Debug\")
+                    set(_immersion_cfg_flag \"--debug\")
+                else()
+                    set(_immersion_cfg_flag \"--release\")
+                endif()
 
-set(_immersion_exe "")
-foreach(_immersion_root IN LISTS _immersion_candidate_roots)
-    if(EXISTS "${_immersion_root}")
-        file(GLOB_RECURSE _immersion_exe_candidates "${_immersion_root}/Immersion.exe")
-        list(LENGTH _immersion_exe_candidates _immersion_exe_count)
-        if(_immersion_exe_count GREATER 0)
-            list(GET _immersion_exe_candidates 0 _immersion_exe)
-            break()
+                set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/Immersion.exe\")
+                if(NOT EXISTS \"\${_immersion_exe}\")
+                    set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/Immersion.exe\")
+                endif()
+
+                message(STATUS \"Running windeployqt on \${_immersion_exe}...\")
+                execute_process(
+                    COMMAND \"${IMMERSION_WINDEPLOYQT_EXECUTABLE}\" 
+                            \"\${_immersion_cfg_flag}\"
+                            \"--qmldir=${CMAKE_SOURCE_DIR}/src/qml\" 
+                            \"--no-translations\" 
+                            \"\${_immersion_exe}\"
+                    RESULT_VARIABLE deploy_res
+                )
+                if(NOT deploy_res EQUAL 0)
+                    message(WARNING \"windeployqt failed with exit code \${deploy_res}\")
+                endif()
+            ")
         endif()
     endif()
-endforeach()
 
-if("${_immersion_exe}" STREQUAL "")
-    message(FATAL_ERROR "Could not find staged Immersion.exe for deployment. Checked roots: ${_immersion_candidate_roots}")
-endif()
-
-get_filename_component(_immersion_install_bin "${_immersion_exe}" DIRECTORY)
-message(STATUS "Windows deploy staging bin: ${_immersion_install_bin}")
-
-if("${CMAKE_INSTALL_CONFIG_NAME}" STREQUAL "Debug")
-    set(_immersion_cfg_flag --debug)
-else()
-    set(_immersion_cfg_flag --release)
-endif()
-
-message(STATUS "Running windeployqt for: ${_immersion_exe}")
-execute_process(
-    COMMAND "@IMMERSION_WINDEPLOYQT_EXECUTABLE@" ${_immersion_cfg_flag} --dir "${_immersion_install_bin}" --qmldir "@CMAKE_SOURCE_DIR@/src/qml" --no-translations "${_immersion_exe}"
-    RESULT_VARIABLE _immersion_windeployqt_result
-)
-
-if(NOT _immersion_windeployqt_result EQUAL 0)
-    message(FATAL_ERROR "windeployqt failed during install with exit code: ${_immersion_windeployqt_result}")
-endif()
-message(STATUS "windeployqt completed successfully")
-]=])
-                        string(CONFIGURE "${_immersion_windeployqt_install_code}" _immersion_windeployqt_install_code @ONLY)
-                        install(CODE "${_immersion_windeployqt_install_code}")
-        else()
-            message(FATAL_ERROR "windeployqt was not found at configure time; cannot produce runnable Windows package.")
+    if(APPLE)
+        set(_qt_bin_hints "")
+        if(Qt6_DIR)
+            list(APPEND _qt_bin_hints "${Qt6_DIR}/../../../bin" "${Qt6_DIR}/../../../../bin")
         endif()
-    elseif(COMMAND qt_generate_deploy_qml_app_script)
-        qt_generate_deploy_qml_app_script(
-            TARGET Immersion
-            OUTPUT_SCRIPT immersion_deploy_script
-            QML_DIR "${CMAKE_SOURCE_DIR}/src/qml"
-            NO_UNSUPPORTED_PLATFORM_ERROR
-        )
-        install(SCRIPT ${immersion_deploy_script})
-    elseif(COMMAND qt_generate_deploy_app_script)
-        qt_generate_deploy_app_script(
-            TARGET Immersion
-            OUTPUT_SCRIPT immersion_deploy_script
-            NO_UNSUPPORTED_PLATFORM_ERROR
-        )
-        install(SCRIPT ${immersion_deploy_script})
+        if(DEFINED ENV{QTDIR} AND NOT "$ENV{QTDIR}" STREQUAL "")
+            list(APPEND _qt_bin_hints "$ENV{QTDIR}/bin")
+        endif()
+        
+        find_program(IMMERSION_MACDEPLOYQT_EXECUTABLE NAMES macdeployqt HINTS ${_qt_bin_hints})
+        if(IMMERSION_MACDEPLOYQT_EXECUTABLE)
+            # Run macdeployqt directly on the installed bundle inside the staging deployment dir
+            install(CODE "
+                message(STATUS \"Running macdeployqt on \${CMAKE_INSTALL_PREFIX}/Immersion.app\")
+                execute_process(
+                    COMMAND \"${IMMERSION_MACDEPLOYQT_EXECUTABLE}\" 
+                            \"\${CMAKE_INSTALL_PREFIX}/Immersion.app\" 
+                            \"-qmldir=${CMAKE_SOURCE_DIR}/src/qml\" 
+                            \"-libpath=/opt/homebrew/opt/qtsvg/lib\" 
+                            \"-libpath=/usr/local/opt/qtsvg/lib\"
+                    RESULT_VARIABLE deploy_res
+                )
+                if(NOT deploy_res EQUAL 0)
+                    message(WARNING \"macdeployqt failed with exit code \${deploy_res}\")
+                endif()
+            ")
+        endif()
+
+        # Codesign the final installed bundle
+        install(CODE "
+            message(STATUS \"Codesigning \${CMAKE_INSTALL_PREFIX}/Immersion.app...\")
+            execute_process(COMMAND /usr/bin/codesign --force --deep --sign - \"\${CMAKE_INSTALL_PREFIX}/Immersion.app\")
+        ")
     endif()
 endif()
 
@@ -303,11 +300,3 @@ else()
     )
 endif()
 
-if(CMAKE_CONFIGURATION_TYPES)
-    add_custom_target(dist-release
-        COMMAND "${CMAKE_CPACK_COMMAND}" -C Release
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-        DEPENDS Immersion
-        COMMENT "Creating Release package with CPack"
-    )
-endif()
