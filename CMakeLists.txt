@@ -163,22 +163,63 @@ install(TARGETS Immersion
 )
 
 if(QT_VERSION_MAJOR EQUAL 6)
-    if(COMMAND qt_generate_deploy_qml_app_script)
+    if(WIN32)
+        set(_qt_bin_hints "")
+        if(Qt6_DIR)
+            list(APPEND _qt_bin_hints
+                "${Qt6_DIR}/../../../bin"
+                "${Qt6_DIR}/../../../../bin"
+            )
+        endif()
+        if(DEFINED ENV{QTDIR} AND NOT "$ENV{QTDIR}" STREQUAL "")
+            list(APPEND _qt_bin_hints "$ENV{QTDIR}/bin")
+        endif()
+
+        find_program(IMMERSION_WINDEPLOYQT_EXECUTABLE
+            NAMES windeployqt windeployqt.exe
+            HINTS ${_qt_bin_hints}
+        )
+
+        if(IMMERSION_WINDEPLOYQT_EXECUTABLE)
+                        set(_immersion_windeployqt_install_code [=[
+set(_immersion_install_bin "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@")
+set(_immersion_exe "${_immersion_install_bin}/Immersion.exe")
+if(EXISTS "${_immersion_exe}")
+    if("${CMAKE_INSTALL_CONFIG_NAME}" STREQUAL "Debug")
+        set(_immersion_cfg_flag --debug)
+    else()
+        set(_immersion_cfg_flag --release)
+    endif()
+
+    execute_process(
+        COMMAND "@IMMERSION_WINDEPLOYQT_EXECUTABLE@" ${_immersion_cfg_flag} --dir "${_immersion_install_bin}" --qmldir "@CMAKE_SOURCE_DIR@/src/qml" --no-translations "${_immersion_exe}"
+        RESULT_VARIABLE _immersion_windeployqt_result
+    )
+
+    if(NOT _immersion_windeployqt_result EQUAL 0)
+        message(FATAL_ERROR "windeployqt failed during install with exit code: ${_immersion_windeployqt_result}")
+    endif()
+endif()
+]=])
+                        string(CONFIGURE "${_immersion_windeployqt_install_code}" _immersion_windeployqt_install_code @ONLY)
+                        install(CODE "${_immersion_windeployqt_install_code}")
+        else()
+            message(WARNING "windeployqt was not found at configure time; Windows package may miss Qt runtime dependencies.")
+        endif()
+    elseif(COMMAND qt_generate_deploy_qml_app_script)
         qt_generate_deploy_qml_app_script(
             TARGET Immersion
             OUTPUT_SCRIPT immersion_deploy_script
             QML_DIR "${CMAKE_SOURCE_DIR}/src/qml"
             NO_UNSUPPORTED_PLATFORM_ERROR
         )
+        install(SCRIPT ${immersion_deploy_script})
     elseif(COMMAND qt_generate_deploy_app_script)
         qt_generate_deploy_app_script(
             TARGET Immersion
             OUTPUT_SCRIPT immersion_deploy_script
             NO_UNSUPPORTED_PLATFORM_ERROR
         )
-    endif()
-
-    if(DEFINED immersion_deploy_script)
         install(SCRIPT ${immersion_deploy_script})
     endif()
 endif()
@@ -203,12 +244,21 @@ endif()
 include(CPack)
 
 # CMake-native packaging entrypoints (no external scripts required)
-add_custom_target(dist
-    COMMAND "${CMAKE_CPACK_COMMAND}" -C "$<CONFIG>"
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    DEPENDS Immersion
-    COMMENT "Creating distributable package with CPack"
-)
+if(CMAKE_CONFIGURATION_TYPES)
+    add_custom_target(dist
+        COMMAND "${CMAKE_CPACK_COMMAND}" -C "$<CONFIG>"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS Immersion
+        COMMENT "Creating distributable package with CPack"
+    )
+else()
+    add_custom_target(dist
+        COMMAND "${CMAKE_CPACK_COMMAND}"
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        DEPENDS Immersion
+        COMMENT "Creating distributable package with CPack"
+    )
+endif()
 
 if(CMAKE_CONFIGURATION_TYPES)
     add_custom_target(dist-release
