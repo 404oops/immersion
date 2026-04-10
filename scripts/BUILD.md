@@ -23,8 +23,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
 Creates: `musit-0.1.0-Windows.exe`, `.msi`
 
 By default, the script lets CMake auto-detect the best installed generator/toolset.
-If no generator is provided, the script first tries to pick the latest installed Visual Studio generator automatically.
-When a Visual Studio generator is selected and `clang-cl` is available, the script automatically uses `ClangCL`.
+Windows scripts default to `Ninja` and use `clang`/`clang++` only.
 The script also tries to auto-detect Qt from `Qt6_DIR`, then `QTDIR`, then common installs under `C:\Qt\6.*\...`.
 
 ### Windows (Batch)
@@ -33,14 +32,14 @@ scripts\build-windows.bat
 ```
 Creates: `musit-0.1.0-Windows.exe`, `.msi`
 
-If no generator is passed and `CMAKE_GENERATOR` is empty, the script first tries to pick the latest installed Visual Studio generator automatically.
-When the selected generator is Visual Studio and `clang-cl` is available, the script automatically uses `ClangCL`.
+If no generator is passed and `CMAKE_GENERATOR` is empty, the script uses `Ninja`.
+The script uses `clang`/`clang++` only (resolved from Qt kit first, then PATH).
 The script also tries to auto-detect Qt from `Qt6_DIR`, then `QTDIR`, then common installs under `C:\Qt\6.*\...`.
 
 You can optionally pass generator and toolset:
 
 ```cmd
-scripts\build-windows.bat "Visual Studio 18 2026" v180
+scripts\build-windows.bat "Ninja"
 ```
 
 ### Auto-Detect Build
@@ -67,9 +66,9 @@ sudo dnf install cmake qt6-qtbase-devel qt6-qtdeclarative-devel libglvnd-devel
 ```
 
 ### Windows
-- Visual Studio 2022 (or 2019) with C++ workload
 - CMake (download from cmake.org or `winget install cmake`)
 - Qt6 (download from qt.io or `vcpkg install qt6`)
+- LLVM/Clang (`clang` and `clang++` available via Qt kit or PATH)
 
 ## Build Output
 
@@ -92,7 +91,7 @@ All platforms clean and rebuild from scratch. Output artifacts are in the `build
 .\scripts\build-windows.ps1 -Generator "Ninja"
 
 # Specify generator + toolset
-.\scripts\build-windows.ps1 -Generator "Visual Studio 18 2026" -Toolset "v180"
+.\scripts\build-windows.ps1 -Generator "Ninja"
 ```
 
 ### Custom Qt Installation
@@ -112,13 +111,13 @@ bash scripts/build-linux.sh
 
 **Windows (PowerShell):**
 ```powershell
-$env:Qt6_DIR = "C:\Qt\6.8.2\msvc2022_64\lib\cmake\Qt6"
+$env:Qt6_DIR = "C:\Qt\6.11.0\llvm-mingw_64\lib\cmake\Qt6"
 .\scripts\build-windows.ps1
 ```
 
 **Windows (Batch/CMD):**
 ```cmd
-set Qt6_DIR=C:\Qt\6.8.2\msvc2022_64\lib\cmake\Qt6
+set Qt6_DIR=C:\Qt\6.11.0\llvm-mingw_64\lib\cmake\Qt6
 scripts\build-windows.bat
 ```
 
@@ -150,7 +149,6 @@ If you see many undefined Qt symbols while linking (for example `QObject::static
 
 Use matching pairs:
 - `llvm-mingw_64` or `mingw_64` Qt kit with MinGW/LLVM-MinGW compiler
-- `msvcXXXX_64` Qt kit with MSVC or `clang-cl`
 
 Example MinGW/LLVM-MinGW pairing:
 - `Qt6_DIR=C:\Qt\6.11.0\llvm-mingw_64\lib\cmake\Qt6`

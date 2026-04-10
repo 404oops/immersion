@@ -5,9 +5,7 @@ param(
     [ValidateSet("Debug", "Release", "RelWithDebInfo")]
     [string]$BuildType = "Release",
 
-    [string]$Generator = "",
-
-    [string]$Toolset = ""
+    [string]$Generator = "Ninja"
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,8 +14,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
 $BuildDir = Join-Path $ProjectRoot "build"
 $autoGenerator = $false
-$autoToolset = $false
 $autoQt6Dir = $false
+$autoCompiler = $false
+
+if ([string]::IsNullOrWhiteSpace($Generator)) {
+    $Generator = "Ninja"
+    $autoGenerator = $true
+}
 
 function Resolve-Qt6PackageDir {
     param(
@@ -61,32 +64,66 @@ function Resolve-Qt6PackageDir {
     return $null
 }
 
-if ([string]::IsNullOrWhiteSpace($Generator)) {
-    $vswherePath = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswherePath) {
-        $installationVersion = & $vswherePath -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion
-        if (-not [string]::IsNullOrWhiteSpace($installationVersion)) {
-            $majorVersion = ($installationVersion -split "\\.")[0]
-            switch ($majorVersion) {
-                "18" { $Generator = "Visual Studio 18 2026"; $autoGenerator = $true }
-                "17" { $Generator = "Visual Studio 17 2022"; $autoGenerator = $true }
-                "16" { $Generator = "Visual Studio 16 2019"; $autoGenerator = $true }
-            }
+function Resolve-ClangCompilers {
+    param(
+        [string]$Qt6PackageDir
+    )
+
+    $resolvedC = $env:CMAKE_C_COMPILER
+    $resolvedCxx = $env:CMAKE_CXX_COMPILER
+    $fromQtKit = $false
+
+    if (($resolvedC -and $resolvedCxx) -and (Test-Path $resolvedC) -and (Test-Path $resolvedCxx)) {
+        return @($resolvedC, $resolvedCxx, $fromQtKit)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Qt6PackageDir)) {
+        $qtKitRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $Qt6PackageDir))
+        $qtClang = Join-Path $qtKitRoot "bin\clang.exe"
+        $qtClangxx = Join-Path $qtKitRoot "bin\clang++.exe"
+        if ((Test-Path $qtClang) -and (Test-Path $qtClangxx)) {
+            $resolvedC = $qtClang
+            $resolvedCxx = $qtClangxx
+            $fromQtKit = $true
+            return @($resolvedC, $resolvedCxx, $fromQtKit)
         }
     }
-}
 
-if ([string]::IsNullOrWhiteSpace($Toolset)) {
-    $clangExists = $null -ne (Get-Command clang-cl -ErrorAction SilentlyContinue)
-    if ($clangExists -and -not [string]::IsNullOrWhiteSpace($Generator) -and $Generator.StartsWith("Visual Studio")) {
-        $Toolset = "ClangCL"
-        $autoToolset = $true
+    if (-not $resolvedC) {
+        $clang = Get-Command clang -ErrorAction SilentlyContinue
+        if ($clang) {
+            $resolvedC = $clang.Source
+        }
     }
+
+    if (-not $resolvedCxx) {
+        $clangxx = Get-Command clang++ -ErrorAction SilentlyContinue
+        if ($clangxx) {
+            $resolvedCxx = $clangxx.Source
+        }
+    }
+
+    return @($resolvedC, $resolvedCxx, $fromQtKit)
 }
 
 $qt6PackageDir = Resolve-Qt6PackageDir -Qt6DirEnv $env:Qt6_DIR -QtDirEnv $env:QTDIR
 if ($qt6PackageDir -and [string]::IsNullOrWhiteSpace($env:Qt6_DIR)) {
     $autoQt6Dir = $true
+}
+
+$compilerResolution = Resolve-ClangCompilers -Qt6PackageDir $qt6PackageDir
+$cCompiler = $compilerResolution[0]
+$cxxCompiler = $compilerResolution[1]
+$autoCompiler = [bool]$compilerResolution[2]
+
+if ([string]::IsNullOrWhiteSpace($cCompiler)) {
+    Write-Host "❌ clang not found. Install LLVM/LLVM-MinGW or add clang to PATH" -ForegroundColor Red
+    exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($cxxCompiler)) {
+    Write-Host "❌ clang++ not found. Install LLVM/LLVM-MinGW or add clang++ to PATH" -ForegroundColor Red
+    exit 1
 }
 
 Write-Host "🪟 Building Immersion for Windows (PowerShell)" -ForegroundColor Cyan
@@ -98,13 +135,7 @@ if ([string]::IsNullOrWhiteSpace($Generator)) {
 } else {
     Write-Host "Generator: $Generator"
     if ($autoGenerator) {
-        Write-Host "Generator selected automatically (latest Visual Studio detected)"
-    }
-}
-if (-not [string]::IsNullOrWhiteSpace($Toolset)) {
-    Write-Host "Toolset: $Toolset"
-    if ($autoToolset) {
-        Write-Host "Toolset selected automatically (clang-cl detected)"
+        Write-Host "Generator selected automatically (clang workflow default)"
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($qt6PackageDir)) {
@@ -115,6 +146,11 @@ if (-not [string]::IsNullOrWhiteSpace($qt6PackageDir)) {
 } else {
     Write-Host "Qt6_DIR: not found automatically"
     Write-Host "Hint: set Qt6_DIR to a folder containing Qt6Config.cmake"
+}
+Write-Host "C compiler: $cCompiler"
+Write-Host "CXX compiler: $cxxCompiler"
+if ($autoCompiler) {
+    Write-Host "Compilers selected automatically from Qt kit"
 }
 Write-Host ""
 
@@ -139,15 +175,13 @@ try {
     Write-Host ""
     Write-Host "📋 Configuring CMake..." -ForegroundColor Yellow
     $cmakeArgs = @(
-        "-DCMAKE_BUILD_TYPE=$BuildType"
+        "-DCMAKE_BUILD_TYPE=$BuildType",
+        "-DCMAKE_C_COMPILER=$cCompiler",
+        "-DCMAKE_CXX_COMPILER=$cxxCompiler"
     )
 
     if (-not [string]::IsNullOrWhiteSpace($Generator)) {
         $cmakeArgs += @("-G", $Generator)
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($Toolset)) {
-        $cmakeArgs += @("-T", $Toolset)
     }
     
     if ($qt6PackageDir) {

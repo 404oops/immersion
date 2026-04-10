@@ -53,6 +53,26 @@ if(Qt6_DIR)
     list(PREPEND CMAKE_PREFIX_PATH "${Qt6_DIR}")
 endif()
 
+if(WIN32)
+    set(_using_msvc_abi FALSE)
+    if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+        set(_using_msvc_abi TRUE)
+    endif()
+    if(CMAKE_CXX_COMPILER_TARGET MATCHES "msvc")
+        set(_using_msvc_abi TRUE)
+    endif()
+    if(_using_msvc_abi)
+        message(FATAL_ERROR
+            "MSVC ABI is not supported in this project on Windows.\n"
+            "Use clang/clang++ with GNU/MinGW ABI (Ninja recommended).\n"
+            "Examples:\n"
+            "  CMAKE_C_COMPILER=C:/Qt/6.11.0/llvm-mingw_64/bin/clang.exe\n"
+            "  CMAKE_CXX_COMPILER=C:/Qt/6.11.0/llvm-mingw_64/bin/clang++.exe\n"
+            "Current compiler: ${CMAKE_CXX_COMPILER}\n"
+            "Current compiler target: ${CMAKE_CXX_COMPILER_TARGET}")
+    endif()
+endif()
+
 if(WIN32 AND Qt6_DIR)
     set(_qt6_is_mingw FALSE)
     set(_qt6_is_msvc FALSE)
@@ -63,14 +83,7 @@ if(WIN32 AND Qt6_DIR)
         set(_qt6_is_msvc TRUE)
     endif()
 
-    set(_using_msvc_abi FALSE)
     set(_using_mingw_abi FALSE)
-    if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
-        set(_using_msvc_abi TRUE)
-    endif()
-    if(CMAKE_CXX_COMPILER_TARGET MATCHES "msvc")
-        set(_using_msvc_abi TRUE)
-    endif()
     if(CMAKE_CXX_COMPILER_TARGET MATCHES "mingw|gnu")
         set(_using_mingw_abi TRUE)
     endif()
@@ -91,9 +104,7 @@ if(WIN32 AND Qt6_DIR)
             "Incompatible toolchain/Qt combination detected.\n"
             "Qt6_DIR points to an MSVC Qt kit: ${Qt6_DIR}\n"
             "but the compiler targets MinGW/GNU ABI.\n"
-            "Use one of these combinations:\n"
-            "  1) MSVC Qt kit + MSVC/clang-cl compiler\n"
-            "  2) MinGW Qt kit + MinGW/LLVM-MinGW compiler\n"
+            "Use a MinGW/LLVM-MinGW Qt kit with clang/clang++.\n"
             "Current compiler target: ${CMAKE_CXX_COMPILER_TARGET}")
     endif()
 endif()

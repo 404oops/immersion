@@ -1,10 +1,10 @@
 @echo off
 REM Build script for Windows with CPack packaging (Batch version)
 REM Usage:
-REM   scripts\build-windows.bat [generator] [toolset]
+REM   scripts\build-windows.bat [generator]
 REM Examples:
 REM   scripts\build-windows.bat
-REM   scripts\build-windows.bat "Visual Studio 18 2026" v180
+REM   scripts\build-windows.bat "Ninja"
 
 setlocal enabledelayedexpansion
 
@@ -19,50 +19,20 @@ echo Build directory: %BUILD_DIR%
 echo.
 
 set "GENERATOR=%CMAKE_GENERATOR%"
-set "TOOLSET=%CMAKE_GENERATOR_TOOLSET%"
-set "AUTO_TOOLSET=0"
 set "AUTO_GENERATOR=0"
 
 if not "%~1"=="" set "GENERATOR=%~1"
-if not "%~2"=="" set "TOOLSET=%~2"
 
 if not defined GENERATOR (
-    set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-    if exist "%VSWHERE%" (
-        for /f "usebackq delims=" %%V in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion`) do set "VS_VERSION=%%V"
-        if defined VS_VERSION (
-            for /f "tokens=1 delims=." %%M in ("%VS_VERSION%") do set "VS_MAJOR=%%M"
-            if "%VS_MAJOR%"=="18" set "GENERATOR=Visual Studio 18 2026"
-            if "%VS_MAJOR%"=="17" set "GENERATOR=Visual Studio 17 2022"
-            if "%VS_MAJOR%"=="16" set "GENERATOR=Visual Studio 16 2019"
-            if defined GENERATOR set "AUTO_GENERATOR=1"
-        )
-    )
-)
-
-if not defined TOOLSET (
-    where clang-cl >nul 2>nul
-    if not errorlevel 1 (
-        if defined GENERATOR (
-            echo %GENERATOR% | findstr /B /C:"Visual Studio" >nul
-            if not errorlevel 1 (
-                set "TOOLSET=ClangCL"
-                set "AUTO_TOOLSET=1"
-            )
-        )
-    )
+    set "GENERATOR=Ninja"
+    set "AUTO_GENERATOR=1"
 )
 
 if defined GENERATOR (
     echo Generator: %GENERATOR%
-    if "%AUTO_GENERATOR%"=="1" echo Generator selected automatically (latest Visual Studio detected)
+    if "%AUTO_GENERATOR%"=="1" echo Generator selected automatically (clang workflow default)
 ) else (
     echo Generator: auto-detect
-)
-
-if defined TOOLSET (
-    echo Toolset: %TOOLSET%
-    if "%AUTO_TOOLSET%"=="1" echo Toolset selected automatically (clang-cl detected)
 )
 echo.
 
@@ -70,12 +40,6 @@ REM Check for required tools
 where cmake >nul 2>nul
 if errorlevel 1 (
     echo ❌ CMake not found. Please install CMake and add it to PATH
-    exit /b 1
-)
-
-where msbuild >nul 2>nul
-if errorlevel 1 (
-    echo ❌ MSBuild not found. Please install Visual Studio Build Tools or Visual Studio
     exit /b 1
 )
 
@@ -121,6 +85,47 @@ if defined Qt6_DIR (
 )
 echo.
 
+REM Resolve clang/clang++ compilers (Qt kit first, PATH fallback)
+set "AUTO_COMPILER=0"
+set "C_COMPILER=%CMAKE_C_COMPILER%"
+set "CXX_COMPILER=%CMAKE_CXX_COMPILER%"
+
+if defined Qt6_DIR (
+    for %%I in ("%Qt6_DIR%\..\..\..") do set "QT_KIT_ROOT=%%~fI"
+)
+
+if not defined C_COMPILER (
+    if defined QT_KIT_ROOT if exist "%QT_KIT_ROOT%\bin\clang.exe" set "C_COMPILER=%QT_KIT_ROOT%\bin\clang.exe"
+)
+if not defined CXX_COMPILER (
+    if defined QT_KIT_ROOT if exist "%QT_KIT_ROOT%\bin\clang++.exe" set "CXX_COMPILER=%QT_KIT_ROOT%\bin\clang++.exe"
+)
+
+if not defined C_COMPILER (
+    for /f "usebackq delims=" %%I in (`where clang 2^>nul`) do if not defined C_COMPILER set "C_COMPILER=%%I"
+)
+if not defined CXX_COMPILER (
+    for /f "usebackq delims=" %%I in (`where clang++ 2^>nul`) do if not defined CXX_COMPILER set "CXX_COMPILER=%%I"
+)
+
+if not defined C_COMPILER (
+    echo ❌ clang not found. Install LLVM/LLVM-MinGW or add clang to PATH.
+    exit /b 1
+)
+if not defined CXX_COMPILER (
+    echo ❌ clang++ not found. Install LLVM/LLVM-MinGW or add clang++ to PATH.
+    exit /b 1
+)
+
+if defined QT_KIT_ROOT (
+    if "%C_COMPILER%"=="%QT_KIT_ROOT%\bin\clang.exe" set "AUTO_COMPILER=1"
+)
+
+echo C compiler: %C_COMPILER%
+echo CXX compiler: %CXX_COMPILER%
+if "%AUTO_COMPILER%"=="1" echo Compilers selected automatically from Qt kit
+echo.
+
 REM Create or clean build directory
 if exist "%BUILD_DIR%" (
     echo Cleaning existing build directory...
@@ -134,24 +139,16 @@ REM Configure with CMake
 echo.
 echo 📋 Configuring CMake...
 if defined GENERATOR (
-    if defined TOOLSET (
-        if defined Qt6_DIR (
-            cmake -G "%GENERATOR%" -T "%TOOLSET%" -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
-        ) else (
-            cmake -G "%GENERATOR%" -T "%TOOLSET%" "%PROJECT_ROOT%"
-        )
+    if defined Qt6_DIR (
+        cmake -G "%GENERATOR%" -DCMAKE_C_COMPILER="%C_COMPILER%" -DCMAKE_CXX_COMPILER="%CXX_COMPILER%" -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
     ) else (
-        if defined Qt6_DIR (
-            cmake -G "%GENERATOR%" -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
-        ) else (
-            cmake -G "%GENERATOR%" "%PROJECT_ROOT%"
-        )
+        cmake -G "%GENERATOR%" -DCMAKE_C_COMPILER="%C_COMPILER%" -DCMAKE_CXX_COMPILER="%CXX_COMPILER%" "%PROJECT_ROOT%"
     )
 ) else (
     if defined Qt6_DIR (
-        cmake -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
+        cmake -DCMAKE_C_COMPILER="%C_COMPILER%" -DCMAKE_CXX_COMPILER="%CXX_COMPILER%" -DQt6_DIR="%Qt6_DIR%" "%PROJECT_ROOT%"
     ) else (
-        cmake "%PROJECT_ROOT%"
+        cmake -DCMAKE_C_COMPILER="%C_COMPILER%" -DCMAKE_CXX_COMPILER="%CXX_COMPILER%" "%PROJECT_ROOT%"
     )
 )
 
