@@ -5,7 +5,6 @@
 #include "core/FileEvent.h"
 #include "ui/QmlBackend.h"
 
-
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setOrganizationName("musit");

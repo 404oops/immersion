@@ -188,27 +188,68 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
             install(CODE "
                 set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/Immersion.exe\")
                 
-                # Check for Debug vs Release explicitly
-                set(_immersion_cfg_flag \"--release\")
-                if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" MATCHES \"Debug\")
-                    set(_immersion_cfg_flag \"--debug\")
-                endif()
+                message(STATUS \"Deploying Qt libraries and plugins to \${CMAKE_INSTALL_PREFIX}...\")
+                message(STATUS \"Qt root directory: ${_qt_root_dir_raw}\")
+                
+                # Find LLVM toolchain directory for runtime dependencies
+                set(_llvm_bin_dir \"${CMAKE_CXX_COMPILER}\")
+                get_filename_component(_llvm_bin_dir \"\${_llvm_bin_dir}\" DIRECTORY)
+                
+                # Manually copy Qt libraries and plugins instead of using windeployqt
+                # This avoids the 'Unable to find the platform plugin' error
+                
+                # Core Qt libraries
+                set(_qt_libs \"Qt6Core\" \"Qt6Gui\" \"Qt6Network\" \"Qt6Qml\" \"Qt6QmlMeta\" \"Qt6QmlWorkerScript\" \"Qt6Widgets\" \"Qt6QmlModels\" \"Qt6Quick\" \"Qt6QuickControls2\" \"Qt6QuickTemplates2\" \"Qt6QuickLayouts\" \"Qt6OpenGL\" \"Qt6Svg\")
+                foreach(_lib \${_qt_libs})
+                    set(_libfile \"${_qt_root_dir_raw}/bin/\${_lib}.dll\")
+                    if(EXISTS \"\${_libfile}\")
+                        file(COPY \"\${_libfile}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" NO_SOURCE_PERMISSIONS)
+                        message(STATUS \"Deployed \${_lib}.dll\")
+                    endif()
+                endforeach()
 
-                message(STATUS \"Running windeployqt on \${_immersion_exe}...\")
-                execute_process(
-                    COMMAND \"${IMMERSION_WINDEPLOYQT_EXECUTABLE}\" 
-                            \${_immersion_cfg_flag}
-                            --qmldir \"${CMAKE_SOURCE_DIR}/src/qml\" 
-                            --no-translations
-                            --compiler-runtime 
-                            --plugindir \"${_qt_root_dir_raw}/plugins\"
-                            --libdir \"${_qt_root_dir_raw}/lib\"
-                            \"\${_immersion_exe}\"
-                    RESULT_VARIABLE deploy_res
+                # Deploy additional Qt Quick/QML runtime families used by style plugins.
+                file(GLOB _qt_extra_family_libs
+                    \"${_qt_root_dir_raw}/bin/Qt6Quick*.dll\"
+                    \"${_qt_root_dir_raw}/bin/Qt6QuickControls2*.dll\"
+                    \"${_qt_root_dir_raw}/bin/Qt6QuickTemplates2*.dll\"
+                    \"${_qt_root_dir_raw}/bin/Qt6Qml*.dll\"
                 )
-                if(NOT deploy_res EQUAL 0)
-                    message(FATAL_ERROR \"windeployqt failed with exit code \${deploy_res}\")
+                foreach(_extra_libfile \${_qt_extra_family_libs})
+                    if(EXISTS \"\${_extra_libfile}\")
+                        file(COPY \"\${_extra_libfile}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" NO_SOURCE_PERMISSIONS)
+                        get_filename_component(_extra_name \"\${_extra_libfile}\" NAME)
+                        message(STATUS \"Deployed \${_extra_name}\")
+                    endif()
+                endforeach()
+                
+                # Copy plugins directory
+                file(COPY \"${_qt_root_dir_raw}/plugins/platforms\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                file(COPY \"${_qt_root_dir_raw}/plugins/imageformats\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                file(COPY \"${_qt_root_dir_raw}/plugins/iconengines\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                file(COPY \"${_qt_root_dir_raw}/plugins/styles\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                file(COPY \"${_qt_root_dir_raw}/plugins/generic\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                file(COPY \"${_qt_root_dir_raw}/plugins/qmltooling\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                file(COPY \"${_qt_root_dir_raw}/plugins/tls\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                file(COPY \"${_qt_root_dir_raw}/plugins/networkinformation\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+                
+                # Copy QML modules (with error handling for permission issues)
+                if(EXISTS \"${_qt_root_dir_raw}/qml\")
+                    file(COPY \"${_qt_root_dir_raw}/qml\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" NO_SOURCE_PERMISSIONS)
+                    message(STATUS \"QML modules deployed\")
                 endif()
+                
+                # Copy LLVM/MinGW runtime dependencies from toolchain directory
+                set(_runtime_libs \"libc++\" \"libunwind\" \"libgcc_s_seh-1\" \"libstdc++-6\" \"libwinpthread-1\")
+                foreach(_lib \${_runtime_libs})
+                    set(_libfile \"\${_llvm_bin_dir}/\${_lib}.dll\")
+                    if(EXISTS \"\${_libfile}\")
+                        file(COPY \"\${_libfile}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
+                        message(STATUS \"Deployed \${_lib}.dll from toolchain\")
+                    endif()
+                endforeach()
+                
+                message(STATUS \"Qt deployment complete\")
             ")
         else()
             message(FATAL_ERROR "windeployqt not found! Cannot package for Windows without Qt deployment tools.")
@@ -259,8 +300,16 @@ set(CPACK_PACKAGE_FILE_NAME "Immersion-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
 if(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
 elseif(WIN32)
-    find_program(MAKENSIS_EXECUTABLE makensis)
+    find_program(MAKENSIS_EXECUTABLE
+        NAMES makensis makensis.exe
+        HINTS
+            "C:/Program Files (x86)/NSIS"
+            "C:/Program Files/NSIS"
+        PATH_SUFFIXES .
+    )
     if(MAKENSIS_EXECUTABLE)
+        set(CPACK_NSIS_EXECUTABLE "${MAKENSIS_EXECUTABLE}")
+        message(STATUS "Using NSIS at: ${MAKENSIS_EXECUTABLE}")
         set(CPACK_GENERATOR "NSIS;ZIP")
     else()
         message(STATUS "NSIS not found, packaging with ZIP only")
