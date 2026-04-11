@@ -168,24 +168,50 @@ install(TARGETS Immersion
 
 if(Qt6_VERSION_MAJOR EQUAL 6)
     if(WIN32)
-        if(COMMAND qt_generate_deploy_qml_app_script)
-            qt_generate_deploy_qml_app_script(
-                TARGET Immersion
-                OUTPUT_SCRIPT immersion_deploy_script
-                NO_UNSUPPORTED_PLATFORM_ERROR
-            )
-            if(immersion_deploy_script)
-                install(SCRIPT ${immersion_deploy_script})
-            endif()
-        elseif(COMMAND qt_generate_deploy_app_script)
-            qt_generate_deploy_app_script(
-                TARGET Immersion
-                OUTPUT_SCRIPT immersion_deploy_script
-                NO_UNSUPPORTED_PLATFORM_ERROR
-            )
-            if(immersion_deploy_script)
-                install(SCRIPT ${immersion_deploy_script})
-            endif()
+        set(_qt_bin_hints "")
+        if(Qt6_DIR)
+            list(APPEND _qt_bin_hints "${Qt6_DIR}/../../../bin" "${Qt6_DIR}/../../../../bin")
+        endif()
+        if(EXISTS "C:/Qt/6.11.0/llvm-mingw_64/bin")
+            list(APPEND _qt_bin_hints "C:/Qt/6.11.0/llvm-mingw_64/bin")
+        endif()
+        if(DEFINED ENV{QTDIR} AND NOT "$ENV{QTDIR}" STREQUAL "")
+            list(APPEND _qt_bin_hints "$ENV{QTDIR}/bin")
+        endif()
+
+        find_program(IMMERSION_WINDEPLOYQT_EXECUTABLE NAMES windeployqt windeployqt.exe HINTS ${_qt_bin_hints} REQUIRED)
+        if(IMMERSION_WINDEPLOYQT_EXECUTABLE)
+            # Find the actual qt directory to forcefully resolve plugins
+            get_filename_component(_qt_bin_dir_raw "${IMMERSION_WINDEPLOYQT_EXECUTABLE}" DIRECTORY)
+            get_filename_component(_qt_root_dir_raw "${_qt_bin_dir_raw}" DIRECTORY)
+
+            install(CODE "
+                set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/Immersion.exe\")
+                
+                # Check for Debug vs Release explicitly
+                set(_immersion_cfg_flag \"--release\")
+                if(\"\${CMAKE_INSTALL_CONFIG_NAME}\" MATCHES \"Debug\")
+                    set(_immersion_cfg_flag \"--debug\")
+                endif()
+
+                message(STATUS \"Running windeployqt on \${_immersion_exe}...\")
+                execute_process(
+                    COMMAND \"${IMMERSION_WINDEPLOYQT_EXECUTABLE}\" 
+                            \${_immersion_cfg_flag}
+                            --qmldir \"${CMAKE_SOURCE_DIR}/src/qml\" 
+                            --no-translations
+                            --compiler-runtime 
+                            --plugindir \"${_qt_root_dir_raw}/plugins\"
+                            --libdir \"${_qt_root_dir_raw}/lib\"
+                            \"\${_immersion_exe}\"
+                    RESULT_VARIABLE deploy_res
+                )
+                if(NOT deploy_res EQUAL 0)
+                    message(FATAL_ERROR \"windeployqt failed with exit code \${deploy_res}\")
+                endif()
+            ")
+        else()
+            message(FATAL_ERROR "windeployqt not found! Cannot package for Windows without Qt deployment tools.")
         endif()
     endif()
 
