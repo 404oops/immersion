@@ -89,6 +89,5 @@ ApplicationWindow {
     VersionManagerWindow {
         id: versionManagerWindow
         backend: window.backend
-        hostWindow: window
     }
 }

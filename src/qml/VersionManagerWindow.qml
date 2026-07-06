@@ -3,15 +3,31 @@ pragma ComponentBehavior: Bound
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Window 2.15
 import "."
 
-Window {
+// Modal overlay on the main window (stays above it on macOS/Windows/Linux).
+Popup {
     id: root
     property var backend: null
-    property var hostWindow: null
     readonly property bool hasBackend: backend !== null && backend !== undefined
     property var designGraph: buildEdgeCaseGraph()
+
+    parent: Overlay.overlay
+    modal: true
+    focus: true
+    padding: 0
+    closePolicy: Popup.CloseOnEscape
+
+    anchors.centerIn: parent
+    width: parent ? Math.min(1120, Math.max(900, parent.width - 48)) : 1120
+    height: parent ? Math.min(700, Math.max(560, parent.height - 48)) : 700
+
+    background: Rectangle {
+        color: theme.panelSurfaceAlt
+        radius: 10
+        border.color: theme.border
+        border.width: 1
+    }
 
     function buildEdgeCaseGraph() {
         const graph = [];
@@ -77,21 +93,10 @@ Window {
     property real graphExtentWidth: 0
     property real graphExtentHeight: 0
 
-    width: 1120
-    height: 700
-    minimumWidth: 900
-    minimumHeight: 560
-    visible: false
-    title: "Branching Version Manager"
-    color: theme.panelSurfaceAlt
-    flags: Qt.Dialog
-    modality: Qt.WindowModal
-    transientParent: hostWindow
-
     Shortcut {
         sequence: "Escape"
-        enabled: root.visible
-        onActivated: root.visible = false
+        enabled: root.opened
+        onActivated: root.close()
     }
 
     function nodeById(versionId) {
@@ -153,9 +158,7 @@ Window {
         refreshVersionGraph();
         projectNoteEdit.text = root.backend.selectedProjectNote;
         versionNoteEdit.text = selectedVersionId && nodeById(selectedVersionId) ? nodeById(selectedVersionId).note : "";
-        visible = true;
-        raise();
-        requestActivate();
+        open();
     }
 
     Component.onCompleted: {
@@ -164,21 +167,16 @@ Window {
             projectNoteEdit.text = "Preview project note";
     }
 
-    onClosing: function (close) {
-        close.accepted = false;
-        visible = false;
-    }
-
     Connections {
         target: root.backend
         function onSelectedProjectVersionGraphChanged() {
-            if (root.visible && root.hasBackend) {
+            if (root.opened && root.hasBackend) {
                 root.refreshVersionGraph();
                 versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).note : "";
             }
         }
         function onSelectedProjectNoteChanged() {
-            if (root.visible && root.hasBackend) {
+            if (root.opened && root.hasBackend) {
                 projectNoteEdit.text = root.backend.selectedProjectNote;
             }
         }
@@ -211,6 +209,7 @@ Window {
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: 12
             Label {
                 text: "Version Manager"
                 font.pixelSize: 19
@@ -222,7 +221,7 @@ Window {
             }
             Button {
                 text: "Close"
-                onClicked: root.visible = false
+                onClicked: root.close()
             }
         }
 
@@ -242,14 +241,20 @@ Window {
                 Flickable {
                     id: graphFlick
                     anchors.fill: parent
-                    anchors.margins: 8
+                    anchors.leftMargin: 8
+                    anchors.topMargin: 8
+                    anchors.rightMargin: 8 + (graphScrollBarV.visible ? graphScrollBarV.implicitWidth + 4 : 0)
+                    anchors.bottomMargin: 8 + (graphScrollBarH.visible ? graphScrollBarH.implicitWidth + 4 : 0)
                     contentWidth: Math.max(width, root.graphExtentWidth)
                     contentHeight: Math.max(height, root.graphExtentHeight)
                     clip: true
+                    boundsBehavior: Flickable.StopAtBounds
                     ScrollBar.vertical: ScrollBar {
+                        id: graphScrollBarV
                         policy: ScrollBar.AsNeeded
                     }
                     ScrollBar.horizontal: ScrollBar {
+                        id: graphScrollBarH
                         policy: ScrollBar.AsNeeded
                     }
 
@@ -332,96 +337,119 @@ Window {
             }
 
             Rectangle {
-                Layout.preferredWidth: 330
+                Layout.preferredWidth: 340
                 Layout.fillHeight: true
                 color: theme.sidePanelSurface
                 radius: 8
                 border.width: 1
                 border.color: theme.border
 
-                ColumnLayout {
+                ScrollView {
+                    id: sidePanelScroll
                     anchors.fill: parent
                     anchors.margins: 10
-                    spacing: 8
+                    clip: true
+                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                    Label {
-                        text: "Project Note"
-                        color: theme.textPrimary
-                        font.bold: true
-                    }
+                    ColumnLayout {
+                        width: sidePanelScroll.availableWidth
+                        spacing: 10
 
-                    TextArea {
-                        id: projectNoteEdit
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 110
-                        placeholderText: "Write a note for this project..."
-                        wrapMode: TextEdit.Wrap
-                    }
-
-                    Button {
-                        text: "Save Project Note"
-                        Layout.fillWidth: true
-                        enabled: root.hasBackend
-                        onClicked: root.backend.selectedProjectNote = projectNoteEdit.text
-                    }
-
-                    Label {
-                        color: theme.textPrimary
-                        font.bold: true
-                        text: root.selectedVersionId ? ("Version " + (root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).fullLabel : root.selectedVersionId)) : "No version selected"
-                    }
-
-                    Label {
-                        color: theme.successStrong
-                        font.bold: true
-                        wrapMode: Text.WordWrap
-                        text: root.currentVersionNode() ? ("Current in project folder: " + root.currentVersionNode().fullLabel) : "Current in project folder: no matching snapshot yet"
-                    }
-
-                    Label {
-                        color: theme.textMeta
-                        wrapMode: Text.WordWrap
-                        text: root.selectedVersionId && root.nodeById(root.selectedVersionId) ? ("Time: " + (root.nodeById(root.selectedVersionId).timestamp || "unknown") + "\nCurrent note: " + ((root.nodeById(root.selectedVersionId).note || "").length > 0 ? root.nodeById(root.selectedVersionId).note : "<none>")) : "Select a blob in the graph to inspect metadata."
-                    }
-
-                    TextArea {
-                        id: versionNoteEdit
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 120
-                        enabled: root.selectedVersionId.length > 0
-                        placeholderText: "Write a note for selected version..."
-                        wrapMode: TextEdit.Wrap
-                    }
-
-                    Button {
-                        text: "Save Version Note"
-                        Layout.fillWidth: true
-                        enabled: root.hasBackend && root.selectedVersionId.length > 0
-                        onClicked: {
-                            if (root.backend.saveVersionNote(root.selectedVersionId, versionNoteEdit.text))
-                                root.refreshVersionGraph();
+                        Label {
+                            text: "Project Note"
+                            color: theme.textPrimary
+                            font.bold: true
                         }
-                    }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Button {
-                            text: "Open Version"
+                        TextArea {
+                            id: projectNoteEdit
                             Layout.fillWidth: true
+                            Layout.preferredHeight: 110
+                            placeholderText: "Write a note for this project..."
+                            wrapMode: TextEdit.Wrap
+                        }
+
+                        Button {
+                            text: "Save Project Note"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 36
+                            enabled: root.hasBackend
+                            onClicked: root.backend.selectedProjectNote = projectNoteEdit.text
+                        }
+
+                        Label {
+                            color: theme.textPrimary
+                            font.bold: true
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            text: root.selectedVersionId ? ("Version " + (root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).fullLabel : root.selectedVersionId)) : "No version selected"
+                        }
+
+                        Label {
+                            color: theme.successStrong
+                            font.bold: true
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            text: root.currentVersionNode() ? ("Current in project folder: " + root.currentVersionNode().fullLabel) : "Current in project folder: no matching snapshot yet"
+                        }
+
+                        Label {
+                            color: theme.textMeta
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            text: root.selectedVersionId && root.nodeById(root.selectedVersionId) ? ("Time: " + (root.nodeById(root.selectedVersionId).timestamp || "unknown") + "\nCurrent note: " + ((root.nodeById(root.selectedVersionId).note || "").length > 0 ? root.nodeById(root.selectedVersionId).note : "<none>")) : "Select a blob in the graph to inspect metadata."
+                        }
+
+                        TextArea {
+                            id: versionNoteEdit
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 120
+                            enabled: root.selectedVersionId.length > 0
+                            placeholderText: "Write a note for selected version..."
+                            wrapMode: TextEdit.Wrap
+                        }
+
+                        Button {
+                            text: "Save Version Note"
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 36
                             enabled: root.hasBackend && root.selectedVersionId.length > 0
                             onClicked: {
-                                if (root.backend.restoreVersionById(root.selectedVersionId)) {
+                                if (root.backend.saveVersionNote(root.selectedVersionId, versionNoteEdit.text))
                                     root.refreshVersionGraph();
-                                    root.visible = false;
-                                }
                             }
                         }
 
-                        Button {
-                            text: "Delete"
+                        RowLayout {
                             Layout.fillWidth: true
-                            enabled: root.hasBackend && root.selectedVersionId.length > 0
-                            onClicked: deleteConfirmDialog.open()
+                            spacing: 8
+
+                            Button {
+                                text: "Open Version"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 36
+                                enabled: root.hasBackend && root.selectedVersionId.length > 0
+                                onClicked: {
+                                    if (root.backend.restoreVersionById(root.selectedVersionId)) {
+                                        root.refreshVersionGraph();
+                                        root.close();
+                                    }
+                                }
+                            }
+
+                            Button {
+                                text: "Delete"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 36
+                                enabled: root.hasBackend && root.selectedVersionId.length > 0
+                                onClicked: deleteConfirmDialog.open()
+                            }
+                        }
+
+                        // Breathing room above the scroll bar when the panel scrolls.
+                        Item {
+                            Layout.preferredHeight: 4
                         }
                     }
                 }

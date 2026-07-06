@@ -89,7 +89,7 @@ find_package(Threads REQUIRED)
 # Only link what the C++ code uses. QtQuick/QtNetwork are pulled in at
 # runtime by the QML engine; linking extra modules here forces them (and
 # their plugins) into every deployed package.
-find_package(Qt6 REQUIRED COMPONENTS Qml Gui)
+find_package(Qt6 REQUIRED COMPONENTS Qml Gui OpenGL)
 
 add_executable(Immersion
     src/main.cpp
@@ -140,6 +140,7 @@ set_target_properties(Immersion PROPERTIES
 target_link_libraries(Immersion
     Qt6::Qml
     Qt6::Gui
+    Qt6::OpenGL
 )
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
@@ -277,18 +278,18 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                     RESULT_VARIABLE deploy_res
                 )
                 if(NOT deploy_res EQUAL 0)
-                    message(WARNING \"macdeployqt failed with exit code \${deploy_res}\")
+                    message(FATAL_ERROR \"macdeployqt failed with exit code \${deploy_res}\")
                 endif()
 
                 # Clean up unused Qt frameworks and plugins to shrink the binary size
                 set(frameworks_dir \"\${CMAKE_INSTALL_PREFIX}/Immersion.app/Contents/Frameworks\")
                 set(plugins_dir \"\${CMAKE_INSTALL_PREFIX}/Immersion.app/Contents/PlugIns\")
 
-                # 1. Remove unused frameworks
+                # 1. Remove unused frameworks (keep QtOpenGL — libqtquick2plugin
+                # depends on it even though the app does not call OpenGL directly).
                 set(unused_frameworks
                     \"QtWidgets.framework\"
                     \"QtSql.framework\"
-                    \"QtOpenGL.framework\"
                     \"QtQuickControls2FluentWinUI3StyleImpl.framework\"
                     \"QtQuickControls2Imagine.framework\"
                     \"QtQuickControls2ImagineStyleImpl.framework\"

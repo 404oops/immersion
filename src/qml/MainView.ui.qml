@@ -167,6 +167,9 @@ Rectangle {
         spacing: 10
 
         RowLayout {
+            Layout.fillWidth: true
+            spacing: 12
+
             Label {
                 objectName: "statusLabel"
                 text: root.statusMessage
@@ -179,6 +182,7 @@ Rectangle {
                 id: chooseProjectFolderButton
                 objectName: "chooseProjectFolderButton"
                 text: "Open Projects"
+                Layout.preferredHeight: 36
 
                 Connections {
                     target: chooseProjectFolderButton
@@ -284,16 +288,19 @@ Rectangle {
                             model: root.hasProjects ? root.projectsModel : (root.useDesignerPlaceholders ? placeholderProjectsModel : [])
                             clip: true
                             spacing: 8
+                            boundsBehavior: Flickable.StopAtBounds
                             ScrollBar.vertical: ScrollBar {
-                                policy: ScrollBar.AlwaysOn
+                                id: projectListScrollBar
+                                policy: ScrollBar.AsNeeded
                             }
+                            rightPadding: projectListScrollBar.visible ? projectListScrollBar.implicitWidth + 6 : 6
 
                             delegate: Rectangle {
                                 id: projectDelegate
                                 objectName: "projectItem"
                                 required property int index
                                 required property var modelData
-                                width: ListView.view.width
+                                width: ListView.view.width - ListView.view.leftPadding - ListView.view.rightPadding
                                 height: 86
                                 radius: 6
                                 color: projectDelegate.index % 2 === 0 ? theme.rowEven : theme.rowOdd
@@ -306,6 +313,7 @@ Rectangle {
                                     Rectangle {
                                         Layout.preferredWidth: 48
                                         Layout.preferredHeight: 48
+                                        Layout.alignment: Qt.AlignVCenter
                                         radius: 6
                                         color: theme.accent
                                         Label {
@@ -321,6 +329,7 @@ Rectangle {
 
                                     ColumnLayout {
                                         Layout.fillWidth: true
+                                        Layout.alignment: Qt.AlignVCenter
                                         spacing: 2
 
                                         Label {
@@ -343,14 +352,16 @@ Rectangle {
                                     }
 
                                     RowLayout {
-                                        spacing: 0
+                                        Layout.alignment: Qt.AlignVCenter
+                                        Layout.minimumWidth: 196
+                                        spacing: 8
 
                                         Button {
                                             id: openProjectButton
                                             objectName: "openProjectButton"
                                             text: "Open"
                                             Layout.preferredWidth: 90
-                                            Layout.fillHeight: true
+                                            Layout.preferredHeight: 34
 
                                             Connections {
                                                 target: openProjectButton
@@ -360,22 +371,17 @@ Rectangle {
                                             }
                                         }
 
-                                        ColumnLayout {
+                                        Button {
+                                            id: manageProjectButton
+                                            objectName: "manageProjectButton"
+                                            text: "Manage"
+                                            Layout.preferredWidth: 90
+                                            Layout.preferredHeight: 34
 
-                                            spacing: 0
-
-                                            Button {
-                                                id: manageProjectButton
-                                                objectName: "manageProjectButton"
-                                                text: "Manage"
-                                                Layout.preferredWidth: 90
-                                                Layout.fillHeight: true
-
-                                                Connections {
-                                                    target: manageProjectButton
-                                                    function onClicked() {
-                                                        root.manageProjectRequested(projectDelegate.index);
-                                                    }
+                                            Connections {
+                                                target: manageProjectButton
+                                                function onClicked() {
+                                                    root.manageProjectRequested(projectDelegate.index);
                                                 }
                                             }
                                         }
@@ -450,16 +456,19 @@ Rectangle {
                         Layout.fillHeight: true
                         model: root.activityModel
                         clip: true
+                        boundsBehavior: Flickable.StopAtBounds
                         ScrollBar.vertical: ScrollBar {
-                            policy: ScrollBar.AlwaysOn
+                            id: activityListScrollBar
+                            policy: ScrollBar.AsNeeded
                         }
+                        rightPadding: activityListScrollBar.visible ? activityListScrollBar.implicitWidth + 6 : 6
 
                         delegate: Label {
                             required property var modelData
                             text: modelData
                             color: theme.textActivity
                             elide: Text.ElideRight
-                            width: ListView.view.width
+                            width: ListView.view.width - ListView.view.leftPadding - ListView.view.rightPadding
                         }
                     }
                 }
