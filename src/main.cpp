@@ -1,4 +1,4 @@
-#include <QApplication>
+#include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QVariant>
 
@@ -6,7 +6,7 @@
 #include "ui/QmlBackend.h"
 
 int main(int argc, char *argv[]) {
-    QApplication app(argc, argv);
+    QGuiApplication app(argc, argv);
     app.setOrganizationName("musit");
     app.setOrganizationDomain("musit.app");
     app.setApplicationName("musit");

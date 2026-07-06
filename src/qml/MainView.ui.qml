@@ -159,9 +159,7 @@ Rectangle {
         }
     }
 
-    property bool hasProjects: root.projectsModel
-                               && root.projectsModel.length !== undefined
-                               && root.projectsModel.length > 0
+    property bool hasProjects: root.projectsModel && root.projectsModel.length !== undefined && root.projectsModel.length > 0
 
     ColumnLayout {
         anchors.fill: parent
@@ -185,7 +183,7 @@ Rectangle {
                 Connections {
                     target: chooseProjectFolderButton
                     function onClicked() {
-                        root.chooseProjectFolderRequested()
+                        root.chooseProjectFolderRequested();
                     }
                 }
             }
@@ -253,8 +251,7 @@ Rectangle {
                                 Connections {
                                     target: sortCombo
                                     function onActivated(index) {
-                                        root.sortModeRequested(
-                                                    sortCombo.textAt(index))
+                                        root.sortModeRequested(sortCombo.textAt(index));
                                     }
                                 }
                             }
@@ -271,8 +268,7 @@ Rectangle {
                         Connections {
                             target: projectSearchField
                             function onTextEdited() {
-                                root.searchTextRequested(
-                                            projectSearchField.text)
+                                root.searchTextRequested(projectSearchField.text);
                             }
                         }
                     }
@@ -300,8 +296,7 @@ Rectangle {
                                 width: ListView.view.width
                                 height: 86
                                 radius: 6
-                                color: projectDelegate.index % 2
-                                       === 0 ? theme.rowEven : theme.rowOdd
+                                color: projectDelegate.index % 2 === 0 ? theme.rowEven : theme.rowOdd
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -315,8 +310,7 @@ Rectangle {
                                         color: theme.accent
                                         Label {
                                             anchors.centerIn: parent
-                                            text: (projectDelegate.modelData
-                                                   && projectDelegate.modelData.type) ? projectDelegate.modelData.type : "DAW"
+                                            text: (projectDelegate.modelData && projectDelegate.modelData.type) ? projectDelegate.modelData.type : "DAW"
                                             color: "white"
                                             font.pixelSize: 10
                                             horizontalAlignment: Text.AlignHCenter
@@ -330,22 +324,18 @@ Rectangle {
                                         spacing: 2
 
                                         Label {
-                                            text: projectDelegate.modelData
-                                                  && projectDelegate.modelData.name ? projectDelegate.modelData.name : ("Project " + (projectDelegate.index + 1))
+                                            text: projectDelegate.modelData && projectDelegate.modelData.name ? projectDelegate.modelData.name : ("Project " + (projectDelegate.index + 1))
                                             color: theme.textPrimary
                                             font.bold: true
                                         }
 
                                         Label {
-                                            text: "Project file: "
-                                                  + ((projectDelegate.modelData
-                                                      && projectDelegate.modelData.file) ? projectDelegate.modelData.file : "example.bwproject")
+                                            text: "Project file: " + ((projectDelegate.modelData && projectDelegate.modelData.file) ? projectDelegate.modelData.file : "example.bwproject")
                                             color: theme.textSecondary
                                         }
 
                                         Label {
-                                            text: "Path: " + ((projectDelegate.modelData
-                                                               && projectDelegate.modelData.path) ? projectDelegate.modelData.path : "/Users/name/Music/Projects")
+                                            text: "Path: " + ((projectDelegate.modelData && projectDelegate.modelData.path) ? projectDelegate.modelData.path : "/Users/name/Music/Projects")
                                             color: theme.textMuted
                                             elide: Text.ElideRight
                                             Layout.fillWidth: true
@@ -365,8 +355,7 @@ Rectangle {
                                             Connections {
                                                 target: openProjectButton
                                                 function onClicked() {
-                                                    root.openProjectRequested(
-                                                                projectDelegate.index)
+                                                    root.openProjectRequested(projectDelegate.index);
                                                 }
                                             }
                                         }
@@ -385,8 +374,7 @@ Rectangle {
                                                 Connections {
                                                     target: manageProjectButton
                                                     function onClicked() {
-                                                        root.manageProjectRequested(
-                                                                    projectDelegate.index)
+                                                        root.manageProjectRequested(projectDelegate.index);
                                                     }
                                                 }
                                             }
@@ -399,8 +387,7 @@ Rectangle {
                         Label {
                             objectName: "noProjectsLoadedLabel"
                             anchors.centerIn: parent
-                            visible: !root.useDesignerPlaceholders
-                                     && !root.hasProjects
+                            visible: !root.useDesignerPlaceholders && !root.hasProjects
                             text: "No projects loaded"
                             color: theme.textStatus
                             font.pixelSize: 20
@@ -450,9 +437,7 @@ Rectangle {
                             Connections {
                                 target: activityLogLevelCombo
                                 function onActivated(index) {
-                                    root.logLevelRequested(
-                                                activityLogLevelCombo.textAt(
-                                                    index))
+                                    root.logLevelRequested(activityLogLevelCombo.textAt(index));
                                 }
                             }
                         }

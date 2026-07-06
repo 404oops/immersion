@@ -2,20 +2,15 @@
 
 #include "AppStrings.h"
 
-#include <QApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
-#include <QFileDialog>
 #include <QFileInfo>
-#include <QInputDialog>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QMessageBox>
 #include <QStandardPaths>
-#include <QSystemTrayIcon>
 #include <QUrl>
 
 #include <algorithm>
@@ -81,16 +76,6 @@ QString platformName() {
     return AppStrings::PlatformWindows;
 #else
     return AppStrings::PlatformLinux;
-#endif
-}
-
-QString platformPermissionHint() {
-#if defined(Q_OS_MAC)
-    return AppStrings::PermissionHintMacOS;
-#elif defined(Q_OS_WIN)
-    return AppStrings::PermissionHintWindows;
-#else
-    return AppStrings::PermissionHintLinux;
 #endif
 }
 
@@ -225,16 +210,6 @@ QmlBackend::QmlBackend(QObject* parent)
     }
 
     runStartupSelfCheck();
-
-    if (QSystemTrayIcon::isSystemTrayAvailable()) {
-        m_trayIcon = new QSystemTrayIcon(this);
-        m_trayIcon->setToolTip(AppStrings::AppName);
-        const QIcon icon = QApplication::windowIcon();
-        if (!icon.isNull()) {
-            m_trayIcon->setIcon(icon);
-        }
-        m_trayIcon->show();
-    }
 }
 
 QmlBackend::~QmlBackend() = default;
@@ -343,33 +318,28 @@ void QmlBackend::setSelectedProjectNote(const QString& value) {
     }
 }
 
-void QmlBackend::chooseProjectFolder() {
-    const QString folder = QFileDialog::getExistingDirectory(nullptr, AppStrings::DialogSelectProjectsFolder);
-    if (folder.isEmpty()) {
-        return;
-    }
-
-    loadProjectsFromFolder(folder);
-}
-
 void QmlBackend::loadProjectsFromFolder(const QString& folderPath) {
     if (folderPath.isEmpty()) {
         return;
     }
+    QString cleanPath = folderPath;
+    if (cleanPath.startsWith(QStringLiteral("file://"))) {
+        cleanPath = QUrl(cleanPath).toLocalFile();
+    }
 
-    m_projectsFolderRoot = QDir::cleanPath(folderPath);
+    m_projectsFolderRoot = QDir::cleanPath(cleanPath);
     m_discoveredProjects = m_projectDiscovery->discoverAll(m_projectsFolderRoot);
     if (m_discoveredProjects.isEmpty()) {
         stopMonitoring();
         m_statusMessage = AppStrings::StatusNoSupportedProjectFiles;
         emit statusMessageChanged();
         appendActivity(QString(AppStrings::ActivityFirstDaySetupNoProjectsFmt)
-            .arg(nowHuman(), folderPath));
+            .arg(nowHuman(), cleanPath));
         rebuildVisibleProjects();
         return;
     }
 
-    m_projectRegistry->saveProjectsFolder(folderPath);
+    m_projectRegistry->saveProjectsFolder(cleanPath);
     m_projectNotes.clear();
     for (const DiscoveredProject& project : m_discoveredProjects) {
         m_projectRegistry->saveProject(project);
@@ -435,55 +405,6 @@ void QmlBackend::openProject(int visibleIndex) {
 
     if (m_sortMode == SortMode::LastOpened) {
         rebuildVisibleProjects();
-    }
-}
-
-void QmlBackend::restoreProject(int visibleIndex) {
-    if (visibleIndex < 0 || visibleIndex >= m_visibleProjectIndexes.size()) {
-        return;
-    }
-
-    setSelectedProjectIndex(visibleIndex);
-
-    const DiscoveredProject& project = m_discoveredProjects.at(m_visibleProjectIndexes.at(visibleIndex));
-    const QVariantList versions = getProjectVersions(visibleIndex);
-    if (versions.isEmpty()) {
-        appendActivity(QString(AppStrings::ActivityNoVersionHistoryAvailableFmt)
-            .arg(nowHuman(), project.name));
-        return;
-    }
-
-    QStringList choices;
-    QHash<QString, QString> versionIdByChoice;
-    for (int i = versions.size() - 1; i >= 0; --i) {
-        const QVariantMap version = versions.at(i).toMap();
-        const QString versionId = version.value(QStringLiteral("id")).toString();
-        QString choice = QString(AppStrings::VersionChoiceFmt)
-            .arg(versionId, version.value(QStringLiteral("timestamp")).toString());
-        if (version.value(QStringLiteral("isCurrent")).toBool()) {
-            choice += QStringLiteral("  [current in project folder]");
-        }
-        choices.append(choice);
-        versionIdByChoice.insert(choice, versionId);
-    }
-
-    bool accepted = false;
-    const QString selected = QInputDialog::getItem(
-        nullptr,
-        AppStrings::DialogRestoreProjectVersionTitle,
-        QString(AppStrings::DialogChooseVersionToRestoreFmt).arg(project.name),
-        choices,
-        0,
-        false,
-        &accepted);
-
-    if (!accepted || selected.isEmpty()) {
-        return;
-    }
-
-    const QString versionId = versionIdByChoice.value(selected);
-    if (!versionId.isEmpty()) {
-        (void)restoreVersionById(versionId);
     }
 }
 
@@ -957,16 +878,6 @@ void QmlBackend::runStartupSelfCheck() {
         .arg(issues.size())
         .arg(platformName()));
 
-    QMessageBox warning;
-    warning.setIcon(QMessageBox::Warning);
-    warning.setWindowTitle(AppStrings::DialogStartupSelfCheckTitle);
-    warning.setText(QString(AppStrings::DialogSomeEnvironmentChecksFailedFmt).arg(platformName()));
-    warning.setInformativeText(
-        QString(AppStrings::DialogIssuesAndSuggestedFixFmt)
-            .arg(issues.join(QStringLiteral("\n- ")))
-            .arg(platformPermissionHint()));
-    warning.setDetailedText(QString(AppStrings::DialogChecksFmt).arg(checks.join(QStringLiteral("\n- "))));
-    warning.exec();
 }
 
 void QmlBackend::rebuildVisibleProjects() {
@@ -1055,21 +966,6 @@ void QmlBackend::startMonitoring() {
         connect(snapshotService.get(), &SnapshotService::snapshotCreated, this,
                 [this, projectRoot = project.rootPath](const QString& message) {
                     appendActivity(QString("[%1] %2").arg(nowHuman(), message));
-
-                    // Notify on real file-save snapshots, not baseline/deletion chatter.
-                    if (m_trayIcon && message.startsWith(QStringLiteral("Snapshot "))) {
-                        QString relativePath = message.mid(QStringLiteral("Snapshot ").size());
-                        const int arrowIndex = relativePath.indexOf(QStringLiteral(" -> "));
-                        if (arrowIndex > 0) {
-                            relativePath = relativePath.left(arrowIndex);
-                        }
-
-                        m_trayIcon->showMessage(
-                            AppStrings::AppName,
-                            QString(AppStrings::TraySaveDetectedAndVersionedFmt).arg(relativePath),
-                            QSystemTrayIcon::Information,
-                            2400);
-                    }
 
                     if (projectRoot == m_projectRoot) {
                         emit selectedProjectVersionGraphChanged();

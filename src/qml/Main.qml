@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Dialogs
 import "."
 
 ApplicationWindow {
@@ -12,6 +13,15 @@ ApplicationWindow {
     height: 720
     visible: true
     title: "Immersion"
+
+    FolderDialog {
+        id: folderDialog
+        currentFolder: ""
+        title: "Select Projects Folder"
+        onAccepted: {
+            window.backend.loadProjectsFromFolder(selectedFolder)
+        }
+    }
 
     // Show onboarding when no projects folder is selected (empty projects list)
     readonly property bool isOnboarding: !window.backend.projects || window.backend.projects.length === 0
@@ -96,7 +106,7 @@ ApplicationWindow {
                         verticalAlignment: Text.AlignVCenter
                     }
 
-                    onClicked: window.backend.chooseProjectFolder()
+                    onClicked: folderDialog.open()
                 }
             }
         }
@@ -115,7 +125,7 @@ ApplicationWindow {
         sortMode: window.backend.sortMode
         useDesignerPlaceholders: false
 
-        onChooseProjectFolderRequested: window.backend.chooseProjectFolder()
+        onChooseProjectFolderRequested: folderDialog.open()
         onSortModeRequested: function (mode) {
             window.backend.sortMode = mode;
         }
@@ -124,9 +134,6 @@ ApplicationWindow {
         }
         onOpenProjectRequested: function (index) {
             window.backend.openProject(index);
-        }
-        onRestoreProjectRequested: function (index) {
-            window.backend.restoreProject(index);
         }
         onManageProjectRequested: function (index) {
             versionManagerWindow.openForProject(index);

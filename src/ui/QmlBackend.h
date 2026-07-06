@@ -17,7 +17,6 @@ class ProjectDiscovery;
 
 class IFileWatcher;
 class SnapshotService;
-class QSystemTrayIcon;
 
 class QmlBackend : public QObject {
     Q_OBJECT
@@ -53,10 +52,8 @@ public:
     QString selectedProjectNote() const;
     void setSelectedProjectNote(const QString& value);
 
-    Q_INVOKABLE void chooseProjectFolder();
     Q_INVOKABLE void loadProjectsFromFolder(const QString& folderPath);
     Q_INVOKABLE void openProject(int visibleIndex);
-    Q_INVOKABLE void restoreProject(int visibleIndex);
     Q_INVOKABLE void manageProjectVersions(int visibleIndex);
     Q_INVOKABLE QVariantList getProjectVersions(int visibleIndex) const;
     Q_INVOKABLE bool restoreVersionById(const QString& versionId);
@@ -119,5 +116,4 @@ private:
     std::unique_ptr<IFileWatcher> m_fileWatcher;
     std::vector<std::unique_ptr<SnapshotService>> m_snapshotServices;
     QHash<QString, SnapshotService*> m_snapshotServiceByRoot;
-    QSystemTrayIcon* m_trayIcon {nullptr};
 };

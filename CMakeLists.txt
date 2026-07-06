@@ -86,12 +86,10 @@ if(WIN32 AND Qt6_DIR AND Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Quick Qml QuickControls2 Core Gui Network OpenGL Svg)
+find_package(Qt6 REQUIRED COMPONENTS Qml Gui Svg)
 
 add_executable(Immersion
     src/main.cpp
-    src/ui/MainWindow.cpp
-    src/ui/MainWindow.h
     src/ui/QmlBackend.cpp
     src/ui/QmlBackend.h
     src/core/FileEvent.h
@@ -132,14 +130,8 @@ set_target_properties(Immersion PROPERTIES
 )
 
 target_link_libraries(Immersion
-    Qt6::Widgets
-    Qt6::Quick
     Qt6::Qml
-    Qt6::QuickControls2
-    Qt6::Core
     Qt6::Gui
-    Qt6::Network
-    Qt6::OpenGL
     Qt6::Svg
 )
 
@@ -199,7 +191,7 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                 # This avoids the 'Unable to find the platform plugin' error
                 
                 # Core Qt libraries
-                set(_qt_libs \"Qt6Core\" \"Qt6Gui\" \"Qt6Network\" \"Qt6Qml\" \"Qt6QmlMeta\" \"Qt6QmlWorkerScript\" \"Qt6Widgets\" \"Qt6QmlModels\" \"Qt6Quick\" \"Qt6QuickControls2\" \"Qt6QuickTemplates2\" \"Qt6QuickLayouts\" \"Qt6OpenGL\" \"Qt6Svg\")
+                set(_qt_libs \"Qt6Core\" \"Qt6Gui\" \"Qt6Qml\" \"Qt6QmlMeta\" \"Qt6QmlWorkerScript\" \"Qt6QmlModels\" \"Qt6Svg\")
                 foreach(_lib \${_qt_libs})
                     set(_libfile \"${_qt_root_dir_raw}/bin/\${_lib}.dll\")
                     if(EXISTS \"\${_libfile}\")
@@ -208,30 +200,7 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                     endif()
                 endforeach()
 
-                # Deploy additional Qt Quick/QML runtime families used by style plugins.
-                file(GLOB _qt_extra_family_libs
-                    \"${_qt_root_dir_raw}/bin/Qt6Quick*.dll\"
-                    \"${_qt_root_dir_raw}/bin/Qt6QuickControls2*.dll\"
-                    \"${_qt_root_dir_raw}/bin/Qt6QuickTemplates2*.dll\"
-                    \"${_qt_root_dir_raw}/bin/Qt6Qml*.dll\"
-                )
-                foreach(_extra_libfile \${_qt_extra_family_libs})
-                    if(EXISTS \"\${_extra_libfile}\")
-                        file(COPY \"\${_extra_libfile}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" NO_SOURCE_PERMISSIONS)
-                        get_filename_component(_extra_name \"\${_extra_libfile}\" NAME)
-                        message(STATUS \"Deployed \${_extra_name}\")
-                    endif()
-                endforeach()
-                
-                # Copy plugins directory
-                file(COPY \"${_qt_root_dir_raw}/plugins/platforms\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
-                file(COPY \"${_qt_root_dir_raw}/plugins/imageformats\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
-                file(COPY \"${_qt_root_dir_raw}/plugins/iconengines\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
-                file(COPY \"${_qt_root_dir_raw}/plugins/styles\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
-                file(COPY \"${_qt_root_dir_raw}/plugins/generic\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
-                file(COPY \"${_qt_root_dir_raw}/plugins/qmltooling\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
-                file(COPY \"${_qt_root_dir_raw}/plugins/tls\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
-                file(COPY \"${_qt_root_dir_raw}/plugins/networkinformation\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/plugins\" NO_SOURCE_PERMISSIONS)
+
                 
                 # Copy QML modules (with error handling for permission issues)
                 if(EXISTS \"${_qt_root_dir_raw}/qml\")
@@ -281,6 +250,71 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                 if(NOT deploy_res EQUAL 0)
                     message(WARNING \"macdeployqt failed with exit code \${deploy_res}\")
                 endif()
+
+                # Clean up unused Qt frameworks and plugins to shrink the binary size
+                set(frameworks_dir \"\${CMAKE_INSTALL_PREFIX}/Immersion.app/Contents/Frameworks\")
+                set(plugins_dir \"\${CMAKE_INSTALL_PREFIX}/Immersion.app/Contents/PlugIns\")
+
+                # 1. Remove unused frameworks
+                set(unused_frameworks
+                    \"QtWidgets.framework\"
+                    \"QtSql.framework\"
+                    \"QtOpenGL.framework\"
+                    \"QtQuickControls2FluentWinUI3StyleImpl.framework\"
+                    \"QtQuickControls2Imagine.framework\"
+                    \"QtQuickControls2ImagineStyleImpl.framework\"
+                    \"QtQuickControls2Universal.framework\"
+                    \"QtQuickControls2UniversalStyleImpl.framework\"
+                    \"QtQuickControls2IOSStyleImpl.framework\"
+                    \"QtQuickControls2Fusion.framework\"
+                    \"QtQuickControls2FusionStyleImpl.framework\"
+                    \"QtQuickControls2Material.framework\"
+                    \"QtQuickControls2MaterialStyleImpl.framework\"
+                    \"QtQuickEffects.framework\"
+                    \"QtQuickParticles.framework\"
+                    \"QtQuickShapes.framework\"
+                    \"QtQuickShapesDesignHelpers.framework\"
+                    \"QtQuickVectorImage.framework\"
+                    \"QtQuickVectorImageGenerator.framework\"
+                    \"QtQuickVectorImageHelpers.framework\"
+                    \"QtQuickDialogs2QuickImpl.framework\"
+                )
+                foreach(fw IN LISTS unused_frameworks)
+                    if(EXISTS \"\${frameworks_dir}/\${fw}\")
+                        file(REMOVE_RECURSE \"\${frameworks_dir}/\${fw}\")
+                        message(STATUS \"Pruned unused framework: \${fw}\")
+                    endif()
+                endforeach()
+
+                # 2. Remove unused quick plugins
+                set(unused_quick_plugins
+                    \"libqtquickcontrols2fluentwinui3styleplugin.dylib\"
+                    \"libqtquickcontrols2fluentwinui3styleimplplugin.dylib\"
+                    \"libqtquickcontrols2universalstyleplugin.dylib\"
+                    \"libqtquickcontrols2universalstyleimplplugin.dylib\"
+                    \"libqtquickcontrols2iosstyleplugin.dylib\"
+                    \"libqtquickcontrols2iosstyleimplplugin.dylib\"
+                    \"libqtquickcontrols2imaginestyleplugin.dylib\"
+                    \"libqtquickcontrols2imaginestyleimplplugin.dylib\"
+                    \"libqtquickcontrols2fusionstyleplugin.dylib\"
+                    \"libqtquickcontrols2fusionstyleimplplugin.dylib\"
+                    \"libqtquickcontrols2materialstyleplugin.dylib\"
+                    \"libqtquickcontrols2materialstyleimplplugin.dylib\"
+                    \"libeffectsplugin.dylib\"
+                    \"libparticlesplugin.dylib\"
+                    \"libqmlshapesplugin.dylib\"
+                    \"libqtquickshapesdesignhelpersplugin.dylib\"
+                    \"libqquickvectorimageplugin.dylib\"
+                    \"libqquickvectorimagehelpersplugin.dylib\"
+                    \"libqmllocalstorageplugin.dylib\"
+                    \"libqmlxmllistmodelplugin.dylib\"
+                )
+                foreach(pl IN LISTS unused_quick_plugins)
+                    if(EXISTS \"\${plugins_dir}/quick/\${pl}\")
+                        file(REMOVE \"\${plugins_dir}/quick/\${pl}\")
+                        message(STATUS \"Pruned unused quick plugin: \${pl}\")
+                    endif()
+                endforeach()
             ")
         endif()
 
