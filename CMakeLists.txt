@@ -86,7 +86,7 @@ if(WIN32 AND Qt6_DIR AND Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Qml Gui Svg)
+find_package(Qt6 REQUIRED COMPONENTS Qml Gui Svg Network)
 
 add_executable(Immersion
     src/main.cpp
@@ -133,6 +133,7 @@ target_link_libraries(Immersion
     Qt6::Qml
     Qt6::Gui
     Qt6::Svg
+    Qt6::Network
 )
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
@@ -191,7 +192,7 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                 # This avoids the 'Unable to find the platform plugin' error
                 
                 # Core Qt libraries
-                set(_qt_libs \"Qt6Core\" \"Qt6Gui\" \"Qt6Qml\" \"Qt6QmlMeta\" \"Qt6QmlWorkerScript\" \"Qt6QmlModels\" \"Qt6Svg\")
+                set(_qt_libs \"Qt6Core\" \"Qt6Gui\" \"Qt6Qml\" \"Qt6QmlMeta\" \"Qt6QmlWorkerScript\" \"Qt6QmlModels\" \"Qt6Svg\" \"Qt6Network\")
                 foreach(_lib \${_qt_libs})
                     set(_libfile \"${_qt_root_dir_raw}/bin/\${_lib}.dll\")
                     if(EXISTS \"\${_libfile}\")
