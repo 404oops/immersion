@@ -330,6 +330,11 @@ set(CPACK_PACKAGE_NAME "Immersion")
 set(CPACK_PACKAGE_VENDOR "Immersion")
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_FILE_NAME "Immersion-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Immersion")
+
+# Declare the main executable for installer shortcut generation.
+set(CPACK_PACKAGE_EXECUTABLES "Immersion" "Immersion")
+set(CPACK_CREATE_DESKTOP_LINKS "Immersion")
 
 if(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
@@ -343,6 +348,14 @@ elseif(WIN32)
     )
     if(MAKENSIS_EXECUTABLE)
         set(CPACK_NSIS_EXECUTABLE "${MAKENSIS_EXECUTABLE}")
+        set(CPACK_NSIS_DISPLAY_NAME "Immersion")
+        set(CPACK_NSIS_PACKAGE_NAME "Immersion")
+        set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+        set(CPACK_NSIS_MENU_LINKS "Immersion.exe" "Immersion")
+        set(CPACK_NSIS_CREATE_ICONS_EXTRA
+            "CreateShortCut '$DESKTOP\\Immersion.lnk' '$INSTDIR\\Immersion.exe'")
+        set(CPACK_NSIS_DELETE_ICONS_EXTRA
+            "Delete '$DESKTOP\\Immersion.lnk'")
         message(STATUS "Using NSIS at: ${MAKENSIS_EXECUTABLE}")
         set(CPACK_GENERATOR "NSIS;ZIP")
     else()
