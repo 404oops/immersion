@@ -353,9 +353,9 @@ elseif(WIN32)
         set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
         set(CPACK_NSIS_MENU_LINKS "Immersion.exe" "Immersion")
         set(CPACK_NSIS_CREATE_ICONS_EXTRA
-            "CreateShortCut '$DESKTOP\\Immersion.lnk' '$INSTDIR\\Immersion.exe'")
+            "CreateShortCut '$DESKTOP\\\\Immersion.lnk' '$INSTDIR\\\\Immersion.exe'")
         set(CPACK_NSIS_DELETE_ICONS_EXTRA
-            "Delete '$DESKTOP\\Immersion.lnk'")
+            "Delete '$DESKTOP\\\\Immersion.lnk'")
         message(STATUS "Using NSIS at: ${MAKENSIS_EXECUTABLE}")
         set(CPACK_GENERATOR "NSIS;ZIP")
     else()
