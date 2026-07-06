@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QSet>
 #include <QString>
 
 class ProjectConfig {
@@ -14,7 +13,9 @@ public:
 
     bool shouldTrack(const QString& relativePath) const;
 
+    // Directory names (single path components) that are never scanned or tracked.
+    static bool isIgnoredDirectoryName(const QString& name);
+
 private:
     QString m_rootPath;
-    QSet<QString> m_excludedExtensions;
 };

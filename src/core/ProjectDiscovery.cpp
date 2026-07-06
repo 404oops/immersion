@@ -1,99 +1,29 @@
 #include "ProjectDiscovery.h"
 
+#include "BackupTemplate.h"
+#include "ProjectConfig.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QSet>
 
 #include <algorithm>
 
 namespace {
 
 ProjectKind classifyPath(const QFileInfo& info) {
-    const QString lowerName = info.fileName().toLower();
-    if (lowerName.endsWith(".bwproject")) {
-        return ProjectKind::Bitwig;
-    }
-    if (lowerName.endsWith(".flp")) {
-        return ProjectKind::FLStudio;
-    }
-    if (lowerName.endsWith(".als")) {
-        return ProjectKind::Ableton;
-    }
-    if (lowerName.endsWith(".logicx")) {
-        return ProjectKind::Logic;
-    }
-    if (lowerName.endsWith(".cpr")) {
-        return ProjectKind::Cubase;
-    }
-    if (lowerName.endsWith(".rpp")) {
-        return ProjectKind::Reaper;
-    }
-    if (lowerName.endsWith(".ardour")) {
-        return ProjectKind::Ardour;
-    }
-    if (lowerName.endsWith(".xrns")) {
-        return ProjectKind::Renoise;
-    }
-    if (lowerName.endsWith(".ptx")) {
-        return ProjectKind::ProTools;
-    }
-    if (lowerName.endsWith(".song")) {
-        return ProjectKind::StudioOne;
-    }
-    if (lowerName.endsWith(".cwp")) {
-        return ProjectKind::Cakewalk;
-    }
-    if (lowerName.endsWith(".reason") || lowerName.endsWith(".rsn")) {
-        return ProjectKind::Reason;
-    }
-    if (lowerName.endsWith(".band")) {
-        return ProjectKind::GarageBand;
+    const ProjectKind kind = BackupTemplates::kindForFileName(info.fileName());
+    if (kind == ProjectKind::Unknown) {
+        return kind;
     }
 
-    return ProjectKind::Unknown;
-}
-
-bool shouldSkipPath(const QString& absolutePath) {
-    const QString lowerPath = QDir::fromNativeSeparators(absolutePath).toLower();
-    return lowerPath.contains("/.musit/")
-        || lowerPath.contains("/.git/")
-        || lowerPath.contains("/.idea/")
-    || lowerPath.contains("/.vscode/")
-    || lowerPath.contains("backup");
-}
-
-bool isIgnoredDirectoryName(const QString& name) {
-    const QString lowerName = name.toLower();
-
-    static const QSet<QString> ignoredDirectories {
-        ".musit",
-        ".git",
-        ".idea",
-        ".vscode",
-        ".svn",
-        ".hg",
-        ".counts",
-        "auto-backups",
-        "bounce",
-        "samples",
-        "recordings",
-        "master-recordings",
-        "multi-samples",
-        "stems",
-        "exports",
-        "renders"
-    };
-
-    if (ignoredDirectories.contains(lowerName)) {
-        return true;
+    // Bundle kinds (.logicx, .band) must be directories; a stray plain file
+    // with that suffix is not a project. Non-bundle kinds must be files.
+    if (BackupTemplates::kindIsBundle(kind) != info.isDir()) {
+        return ProjectKind::Unknown;
     }
 
-    if (lowerName.contains("backup")) {
-        return true;
-    }
-
-    return false;
+    return kind;
 }
 
 int extractVersionNumber(const QString& fileName) {
@@ -160,8 +90,12 @@ void scanDirectory(
         QDir::NoSort);
 
     for (const QFileInfo& entry : entries) {
-        if (entry.isDir()) {
-            if (isIgnoredDirectoryName(entry.fileName())) {
+        // Some project "files" are directory bundles (.logicx, .band on
+        // macOS), so classify before deciding whether to recurse.
+        const ProjectKind kind = classifyPath(entry);
+
+        if (entry.isDir() && kind == ProjectKind::Unknown) {
+            if (ProjectConfig::isIgnoredDirectoryName(entry.fileName())) {
                 continue;
             }
 
@@ -173,12 +107,6 @@ void scanDirectory(
             continue;
         }
 
-        const QString absolutePath = entry.absoluteFilePath();
-        if (shouldSkipPath(absolutePath)) {
-            continue;
-        }
-
-        const ProjectKind kind = classifyPath(entry);
         if (kind == ProjectKind::Unknown) {
             continue;
         }
@@ -211,21 +139,12 @@ ProjectKind dominantKind(const QHash<ProjectKind, int>& counts) {
 } // namespace
 
 QList<ProjectKind> ProjectDiscovery::knownKinds() {
-    return {
-        ProjectKind::Bitwig,
-        ProjectKind::FLStudio,
-        ProjectKind::Ableton,
-        ProjectKind::Logic,
-        ProjectKind::Cubase,
-        ProjectKind::Reaper,
-        ProjectKind::Ardour,
-        ProjectKind::Renoise,
-        ProjectKind::ProTools,
-        ProjectKind::StudioOne,
-        ProjectKind::Cakewalk,
-        ProjectKind::Reason,
-        ProjectKind::GarageBand
-    };
+    // Derived from the template registry so preference order lives in one place.
+    QList<ProjectKind> kinds;
+    for (const BackupTemplate& tpl : BackupTemplates::all()) {
+        kinds.append(tpl.kind);
+    }
+    return kinds;
 }
 
 QList<DiscoveredProject> ProjectDiscovery::discoverAll(const QString& selectedFolder) const {
@@ -286,18 +205,6 @@ QList<DiscoveredProject> ProjectDiscovery::discoverAll(const QString& selectedFo
     });
 
     return projects;
-}
-
-std::optional<DiscoveredProject> ProjectDiscovery::discover(const QString& selectedFolder) const {
-    const QList<DiscoveredProject> projects = discoverAll(selectedFolder);
-    if (projects.isEmpty()) {
-        return std::nullopt;
-    }
-
-    const auto best = std::max_element(projects.begin(), projects.end(), [](const DiscoveredProject& left, const DiscoveredProject& right) {
-        return left.totalProjectFiles < right.totalProjectFiles;
-    });
-    return *best;
 }
 
 QString ProjectDiscovery::kindToString(ProjectKind kind) {

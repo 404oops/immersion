@@ -4,3 +4,4 @@ build/
 *.qtds
 *.qt
 *.vscode
+.qtcreator/

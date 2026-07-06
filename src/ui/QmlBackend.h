@@ -22,6 +22,7 @@ class QmlBackend : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(QVariantList projects READ projects NOTIFY projectsChanged)
+    Q_PROPERTY(bool hasDiscoveredProjects READ hasDiscoveredProjects NOTIFY projectsChanged)
     Q_PROPERTY(QStringList activity READ activity NOTIFY activityChanged)
     Q_PROPERTY(QString logLevel READ logLevel WRITE setLogLevel NOTIFY logLevelChanged)
     Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
@@ -36,6 +37,7 @@ public:
 
     QString statusMessage() const;
     QVariantList projects() const;
+    bool hasDiscoveredProjects() const;
     QStringList activity() const;
     QString logLevel() const;
     void setLogLevel(const QString& value);
@@ -83,6 +85,7 @@ private:
     };
 
     void runStartupSelfCheck();
+    void applySelection(int visibleIndex);
 
     void appendActivityWithLevel(const QString& line, LogLevel level);
     void appendActivity(const QString& line);
@@ -116,4 +119,6 @@ private:
     std::unique_ptr<IFileWatcher> m_fileWatcher;
     std::vector<std::unique_ptr<SnapshotService>> m_snapshotServices;
     QHash<QString, SnapshotService*> m_snapshotServiceByRoot;
+    // pathKey(root) -> root as discovered (hash keys may be lowercased).
+    QHash<QString, QString> m_canonicalRootByKey;
 };

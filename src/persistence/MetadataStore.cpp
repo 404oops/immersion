@@ -1,6 +1,8 @@
 #include "MetadataStore.h"
 
-#include <algorithm>
+#include "../core/PathCleanup.h"
+#include "../core/VersionId.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -36,32 +38,6 @@ int directChildVersion(const QString& versionId, const QString& branchBaseVersio
     return ok ? child : -1;
 }
 
-QList<int> versionKey(const QString& versionId) {
-    QList<int> key;
-    const QStringList segments = versionId.split('.', Qt::SkipEmptyParts);
-    for (const QString& segment : segments) {
-        bool ok = false;
-        const int value = segment.toInt(&ok);
-        key.append(ok ? value : 0);
-    }
-    return key;
-}
-
-bool versionLessThan(const QString& left, const QString& right) {
-    const QList<int> leftKey = versionKey(left);
-    const QList<int> rightKey = versionKey(right);
-    const int maxSize = std::max(leftKey.size(), rightKey.size());
-    for (int i = 0; i < maxSize; ++i) {
-        const int lv = i < leftKey.size() ? leftKey.at(i) : -1;
-        const int rv = i < rightKey.size() ? rightKey.at(i) : -1;
-        if (lv == rv) {
-            continue;
-        }
-        return lv < rv;
-    }
-    return left < right;
-}
-
 } // namespace
 
 MetadataStore::MetadataStore(QString musitRoot)
@@ -80,7 +56,16 @@ bool MetadataStore::init() {
     return QDir().mkpath(versionsDir);
 }
 
-QString MetadataStore::nextVersionIdForPath(const QString& relativePath, const QString& branchBaseVersion) const {
+QString MetadataStore::artifactOfLogLine(const QJsonObject& obj) {
+    const QString artifact = obj.value("artifact").toString();
+    if (!artifact.isEmpty()) {
+        return artifact;
+    }
+    // Legacy lines predate grouping; every version was a single file.
+    return obj.value("path").toString();
+}
+
+QString MetadataStore::nextVersionIdForArtifact(const QString& artifact, const QString& branchBaseVersion) const {
     const QString logPath = QDir(m_musitRoot).filePath("versions/log.jsonl");
     QFile logFile(logPath);
 
@@ -101,7 +86,7 @@ QString MetadataStore::nextVersionIdForPath(const QString& relativePath, const Q
             }
 
             const QJsonObject obj = doc.object();
-            if (obj.value("path").toString() != relativePath) {
+            if (!artifactEquals(artifactOfLogLine(obj), artifact)) {
                 continue;
             }
 
@@ -137,9 +122,11 @@ QString MetadataStore::nextVersionIdForPath(const QString& relativePath, const Q
 
 bool MetadataStore::appendSnapshotEvent(
     const FileEvent& event,
+    const QString& artifact,
     const QString& objectHash,
     const QString& stagedPath,
-    const QString& branchBaseVersion) {
+    const QString& versionId,
+    const QString& parentVersion) {
     if (m_musitRoot.isEmpty()) {
         return false;
     }
@@ -171,16 +158,16 @@ bool MetadataStore::appendSnapshotEvent(
     line.insert("ts", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     line.insert("type", typeValue);
     line.insert("path", event.relativePath);
+    if (!artifact.isEmpty() && artifact != event.relativePath) {
+        line.insert("artifact", artifact);
+    }
     line.insert("object", objectHash);
     line.insert("staged", stagedPath);
 
-    if (!stagedPath.isEmpty()) {
-        const QString versionId = nextVersionIdForPath(event.relativePath, branchBaseVersion);
-        if (!versionId.isEmpty()) {
-            line.insert("version", versionId);
-        }
-        if (!branchBaseVersion.isEmpty()) {
-            line.insert("parent", branchBaseVersion);
+    if (!stagedPath.isEmpty() && !versionId.isEmpty()) {
+        line.insert("version", versionId);
+        if (!parentVersion.isEmpty()) {
+            line.insert("parent", parentVersion);
         }
     }
 
@@ -190,8 +177,51 @@ bool MetadataStore::appendSnapshotEvent(
     return written == encoded.size();
 }
 
-QString MetadataStore::latestStagedVersionForPath(const QString& relativePath) const {
-    if (m_musitRoot.isEmpty() || relativePath.isEmpty()) {
+QStringList MetadataStore::stagedPathsBeyondNewest(const QString& relativePath, int keepCount) const {
+    if (m_musitRoot.isEmpty() || relativePath.isEmpty() || keepCount < 0) {
+        return {};
+    }
+
+    const QString logPath = QDir(m_musitRoot).filePath("versions/log.jsonl");
+    QFile logFile(logPath);
+    if (!logFile.exists() || !logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+
+    // Append order == chronological order, so "newest" is the tail.
+    QStringList stagedPathsInOrder;
+    while (!logFile.atEnd()) {
+        const QByteArray rawLine = logFile.readLine().trimmed();
+        if (rawLine.isEmpty()) {
+            continue;
+        }
+
+        const QJsonDocument doc = QJsonDocument::fromJson(rawLine);
+        if (!doc.isObject()) {
+            continue;
+        }
+
+        const QJsonObject obj = doc.object();
+        if (obj.value("path").toString() != relativePath) {
+            continue;
+        }
+
+        const QString stagedPath = obj.value("staged").toString();
+        if (!stagedPath.isEmpty()) {
+            stagedPathsInOrder.append(stagedPath);
+        }
+    }
+
+    const int excess = stagedPathsInOrder.size() - keepCount;
+    if (excess <= 0) {
+        return {};
+    }
+
+    return stagedPathsInOrder.mid(0, excess);
+}
+
+QString MetadataStore::latestStagedVersionForArtifact(const QString& artifact) const {
+    if (m_musitRoot.isEmpty() || artifact.isEmpty()) {
         return {};
     }
 
@@ -215,7 +245,7 @@ QString MetadataStore::latestStagedVersionForPath(const QString& relativePath) c
         }
 
         const QJsonObject obj = doc.object();
-        if (obj.value("path").toString() != relativePath) {
+        if (!artifactEquals(artifactOfLogLine(obj), artifact)) {
             continue;
         }
 
@@ -226,7 +256,7 @@ QString MetadataStore::latestStagedVersionForPath(const QString& relativePath) c
 
         ++runningOrdinal;
         const QString candidateVersion = obj.value("version").toString(QString::number(runningOrdinal));
-        if (latestVersionId.isEmpty() || versionLessThan(latestVersionId, candidateVersion)) {
+        if (latestVersionId.isEmpty() || VersionId::lessThan(latestVersionId, candidateVersion)) {
             latestVersionId = candidateVersion;
         }
     }

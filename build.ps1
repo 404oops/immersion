@@ -10,10 +10,6 @@ $Qt6Dir = "C:\Qt\6.11.0\llvm-mingw_64\lib\cmake\Qt6"
 
 Write-Host "Building Immersion with explicit compiler paths..."
 
-# Set environment for Qt plugins
-$env:QT_PLUGIN_PATH = "C:\Qt\6.11.0\llvm-mingw_64\plugins"
-$env:QT_QPA_PLATFORM_PLUGIN_PATH = "C:\Qt\6.11.0\llvm-mingw_64\plugins\platforms"
-
 # Clean cache if exists
 if (Test-Path "$buildDir\CMakeCache.txt") {
     Remove-Item "$buildDir\CMakeCache.txt" -Force
@@ -22,16 +18,20 @@ if (Test-Path "$buildDir\CMakeFiles") {
     Remove-Item "$buildDir\CMakeFiles" -Recurse -Force
 }
 
-# Configire with explicit C and CXX compilers
-cd $buildDir
+# Configure with explicit C and CXX compilers.
+# NOTE: must be a MinGW-style generator; the project rejects the MSVC ABI,
+# so Visual Studio generators cannot be used.
+New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+Set-Location $buildDir
 
 Write-Host "Running cmake configure..."
 & $cmake `
-    -G "Visual Studio 18 2026" `
-    -A x64 `
+    -G "MinGW Makefiles" `
+    -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_C_COMPILER="$clangc" `
     -DCMAKE_CXX_COMPILER="$clangcxx" `
     -DQt6_DIR="$Qt6Dir" `
+    -DCMAKE_MAKE_PROGRAM="mingw32-make" `
     ".."
 
 if ($LASTEXITCODE -ne 0) {
@@ -49,7 +49,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Create package
-Write-Host "Creating package with windeployqt..."
+Write-Host "Creating package (runs windeployqt via the install step)..."
 & $cmake --build . --config Release --target dist-release
 
 if ($LASTEXITCODE -ne 0) {

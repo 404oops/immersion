@@ -5,8 +5,6 @@
 #include <QString>
 #include <QStringList>
 
-#include <optional>
-
 enum class ProjectKind {
     Bitwig,
     FLStudio,
@@ -37,7 +35,6 @@ struct DiscoveredProject {
 class ProjectDiscovery {
 public:
     QList<DiscoveredProject> discoverAll(const QString& selectedFolder) const;
-    std::optional<DiscoveredProject> discover(const QString& selectedFolder) const;
 
     static QList<ProjectKind> knownKinds();
     static QString kindToString(ProjectKind kind);

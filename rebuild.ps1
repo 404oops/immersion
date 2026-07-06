@@ -27,7 +27,8 @@ if (Test-Path "$buildDir\CMakeFiles") {
     Remove-Item "$buildDir\CMakeFiles" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-cd $buildDir
+New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+Set-Location $buildDir
 $configResult = & $cmake `
     -G "MinGW Makefiles" `
     -DCMAKE_BUILD_TYPE=Release `
@@ -45,18 +46,15 @@ Write-Host "✓ CMake configured" -ForegroundColor Green
 
 # Step 3: Build
 Write-Host "`n[3/4] Building Immersion executable..." -ForegroundColor Yellow
-$buildCMD = & $cmake --build . --config Release --target Immersion -- -j 4
+& $cmake --build . --config Release --target Immersion -- -j 4
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "WARNING: Build had some warnings/errors, continuing to packaging..." -ForegroundColor Yellow
+    Write-Host "ERROR: Build failed!" -ForegroundColor Red
+    exit 1
 }
 Write-Host "✓ Immersion built" -ForegroundColor Green
 
-# Step 4: Package with windeployqt environment setup
-Write-Host "`n[4/4] Packaging with windeployqt..." -ForegroundColor Yellow
-Write-Host "Setting Qt plugin path environment variables..."
-
-$env:QT_PLUGIN_PATH = "C:\Qt\6.11.0\llvm-mingw_64\plugins"
-$env:QT_QPA_PLATFORM_PLUGIN_PATH = "C:\Qt\6.11.0\llvm-mingw_64\plugins\platforms"
+# Step 4: Package (the install step runs windeployqt itself)
+Write-Host "`n[4/4] Packaging..." -ForegroundColor Yellow
 
 $packResult = & $cmake --build . --config Release --target dist-release
 if ($LASTEXITCODE -ne 0) {

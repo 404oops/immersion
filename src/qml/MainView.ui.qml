@@ -41,121 +41,121 @@ Rectangle {
             name: "Project 1"
             type: "Bitwig"
             file: "example-v1.bwproject"
-            path: "/Users/name/Music/Projects/A"
+            path: "~/Music/Projects/A"
         }
         ListElement {
             name: "Project 2"
             type: "Ableton"
             file: "example-v2.als"
-            path: "/Users/name/Music/Projects/B"
+            path: "~/Music/Projects/B"
         }
         ListElement {
             name: "Project 3"
             type: "Logic"
             file: "example-v3.logicx"
-            path: "/Users/name/Music/Projects/C"
+            path: "~/Music/Projects/C"
         }
         ListElement {
             name: "Project 4"
             type: "Reaper"
             file: "example-v4.rpp"
-            path: "/Users/name/Music/Projects/D"
+            path: "~/Music/Projects/D"
         }
         ListElement {
             name: "Project 5"
             type: "Studio One"
             file: "example-v5.song"
-            path: "/Users/name/Music/Projects/E"
+            path: "~/Music/Projects/E"
         }
         ListElement {
             name: "Project 6"
             type: "FL Studio"
             file: "example-v6.flp"
-            path: "/Users/name/Music/Projects/F"
+            path: "~/Music/Projects/F"
         }
         ListElement {
             name: "Project 7"
             type: "Cubase"
             file: "example-v7.cpr"
-            path: "/Users/name/Music/Projects/G"
+            path: "~/Music/Projects/G"
         }
         ListElement {
             name: "Project 8"
-            type: "Nuendo"
-            file: "example-v8.npr"
-            path: "/Users/name/Music/Projects/H"
+            type: "Renoise"
+            file: "example-v8.xrns"
+            path: "~/Music/Projects/H"
         }
         ListElement {
             name: "Project 9"
             type: "Reason"
             file: "example-v9.reason"
-            path: "/Users/name/Music/Projects/I"
+            path: "~/Music/Projects/I"
         }
         ListElement {
             name: "Project 10"
             type: "Pro Tools"
             file: "example-v10.ptx"
-            path: "/Users/name/Music/Projects/J"
+            path: "~/Music/Projects/J"
         }
         ListElement {
             name: "Project 11"
             type: "Bitwig"
             file: "example-v11.bwproject"
-            path: "/Users/name/Music/Projects/K"
+            path: "~/Music/Projects/K"
         }
         ListElement {
             name: "Project 12"
             type: "Ableton"
             file: "example-v12.als"
-            path: "/Users/name/Music/Projects/L"
+            path: "~/Music/Projects/L"
         }
         ListElement {
             name: "Project 13"
             type: "Logic"
             file: "example-v13.logicx"
-            path: "/Users/name/Music/Projects/M"
+            path: "~/Music/Projects/M"
         }
         ListElement {
             name: "Project 14"
             type: "Reaper"
             file: "example-v14.rpp"
-            path: "/Users/name/Music/Projects/N"
+            path: "~/Music/Projects/N"
         }
         ListElement {
             name: "Project 15"
             type: "Studio One"
             file: "example-v15.song"
-            path: "/Users/name/Music/Projects/O"
+            path: "~/Music/Projects/O"
         }
         ListElement {
             name: "Project 16"
             type: "FL Studio"
             file: "example-v16.flp"
-            path: "/Users/name/Music/Projects/P"
+            path: "~/Music/Projects/P"
         }
         ListElement {
             name: "Project 17"
             type: "Cubase"
             file: "example-v17.cpr"
-            path: "/Users/name/Music/Projects/Q"
+            path: "~/Music/Projects/Q"
         }
         ListElement {
             name: "Project 18"
-            type: "Nuendo"
-            file: "example-v18.npr"
-            path: "/Users/name/Music/Projects/R"
+            type: "Cakewalk"
+            file: "example-v18.cwp"
+            path: "~/Music/Projects/R"
         }
         ListElement {
             name: "Project 19"
             type: "Reason"
             file: "example-v19.reason"
-            path: "/Users/name/Music/Projects/S"
+            path: "~/Music/Projects/S"
         }
         ListElement {
             name: "Project 20"
             type: "Pro Tools"
             file: "example-v20.ptx"
-            path: "/Users/name/Music/Projects/T"
+            path: "~/Music/Projects/T"
         }
     }
 
@@ -335,7 +335,7 @@ Rectangle {
                                         }
 
                                         Label {
-                                            text: "Path: " + ((projectDelegate.modelData && projectDelegate.modelData.path) ? projectDelegate.modelData.path : "/Users/name/Music/Projects")
+                                            text: "Path: " + ((projectDelegate.modelData && projectDelegate.modelData.path) ? projectDelegate.modelData.path : "~/Music/Projects")
                                             color: theme.textMuted
                                             elide: Text.ElideRight
                                             Layout.fillWidth: true

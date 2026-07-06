@@ -10,14 +10,20 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QStandardPaths>
+#include <QSaveFile>
+#include <QSet>
 #include <QUrl>
 
 #include <algorithm>
 
+#include "../core/BackupTemplate.h"
 #include "../core/FileWatcherFactory.h"
 #include "../core/IFileWatcher.h"
+#include "../core/PathCleanup.h"
 #include "../core/SnapshotService.h"
+#include "../core/VersionId.h"
+#include "../persistence/MetadataStore.h"
+#include "../persistence/ObjectStore.h"
 #include "../persistence/ProjectRegistry.h"
 
 namespace {
@@ -51,7 +57,7 @@ QString humanizeTimestamp(const QString& rawTimestamp) {
 
 QDateTime effectiveLastOpenedForProject(const DiscoveredProject& project,
                                         const QHash<QString, QDateTime>& lastOpenedByRoot) {
-    const QDateTime explicitLastOpened = lastOpenedByRoot.value(project.rootPath);
+    const QDateTime explicitLastOpened = lastOpenedByRoot.value(pathKey(project.rootPath));
     if (explicitLastOpened.isValid()) {
         return explicitLastOpened;
     }
@@ -89,32 +95,6 @@ QString versionLabelFromId(const QString& versionId) {
     }
 
     return QStringLiteral("v%1").arg(versionId);
-}
-
-QList<int> versionKey(const QString& versionId) {
-    QList<int> key;
-    const QStringList segments = versionId.split('.', Qt::SkipEmptyParts);
-    for (const QString& segment : segments) {
-        bool ok = false;
-        const int value = segment.toInt(&ok);
-        key.append(ok ? value : 0);
-    }
-    return key;
-}
-
-bool versionLessThan(const QString& left, const QString& right) {
-    const QList<int> leftKey = versionKey(left);
-    const QList<int> rightKey = versionKey(right);
-    const int maxSize = std::max(leftKey.size(), rightKey.size());
-    for (int i = 0; i < maxSize; ++i) {
-        const int lv = i < leftKey.size() ? leftKey.at(i) : -1;
-        const int rv = i < rightKey.size() ? rightKey.at(i) : -1;
-        if (lv == rv) {
-            continue;
-        }
-        return lv < rv;
-    }
-    return left < right;
 }
 
 bool filesAreIdentical(const QString& leftPath, const QString& rightPath) {
@@ -172,28 +152,19 @@ QString resolveStagedPath(const QString& projectRoot, const QString& stagedPath)
     return QDir(projectRoot).filePath(stagedPath);
 }
 
-void removeEmptyParentDirs(const QString& startDirPath, const QString& stopDirPath) {
-    const QString stop = QDir(stopDirPath).absolutePath();
-    QString current = QDir(startDirPath).absolutePath();
-    while (!current.isEmpty() && current.startsWith(stop)) {
-        QDir dir(current);
-        if (!dir.exists()) {
-            break;
-        }
-
-        const QStringList entries = dir.entryList(QDir::NoDotAndDotDot | QDir::AllEntries);
-        if (!entries.isEmpty()) {
-            break;
-        }
-
-        const QString parent = QFileInfo(current).dir().absolutePath();
-        QDir().rmdir(current);
-
-        if (current == stop) {
-            break;
-        }
-        current = parent;
+bool writeLinesAtomically(const QString& filePath, const QList<QByteArray>& lines) {
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        return false;
     }
+
+    for (const QByteArray& line : lines) {
+        if (file.write(line) < 0) {
+            return false;
+        }
+    }
+
+    return file.commit();
 }
 
 } // namespace
@@ -220,6 +191,10 @@ QString QmlBackend::statusMessage() const {
 
 QVariantList QmlBackend::projects() const {
     return m_projects;
+}
+
+bool QmlBackend::hasDiscoveredProjects() const {
+    return !m_discoveredProjects.isEmpty();
 }
 
 QStringList QmlBackend::activity() const {
@@ -277,23 +252,28 @@ int QmlBackend::selectedProjectIndex() const {
 }
 
 void QmlBackend::setSelectedProjectIndex(int value) {
-    if (m_selectedProjectIndex == value) {
-        return;
-    }
+    // No early return on an unchanged index: the visible list can have been
+    // refiltered/resorted, so the same index may point at a different project.
+    applySelection(value);
+    emit selectedProjectIndexChanged();
+}
 
-    m_selectedProjectIndex = value;
-    if (value >= 0 && value < m_visibleProjectIndexes.size()) {
-        const DiscoveredProject& project = m_discoveredProjects.at(m_visibleProjectIndexes.at(value));
+void QmlBackend::applySelection(int visibleIndex) {
+    m_selectedProjectIndex = visibleIndex;
+    if (visibleIndex >= 0 && visibleIndex < m_visibleProjectIndexes.size()) {
+        const DiscoveredProject& project = m_discoveredProjects.at(m_visibleProjectIndexes.at(visibleIndex));
         m_projectRoot = project.rootPath;
         m_selectedProjectNote = m_projectNotes.value(project.rootPath);
         m_statusMessage = QString(AppStrings::StatusSelectedProjectFmt)
             .arg(project.name, ProjectDiscovery::kindToString(project.kind));
         emit statusMessageChanged();
-        emit selectedProjectNoteChanged();
-        emit selectedProjectVersionGraphChanged();
+    } else {
+        m_projectRoot.clear();
+        m_selectedProjectNote.clear();
     }
 
-    emit selectedProjectIndexChanged();
+    emit selectedProjectNoteChanged();
+    emit selectedProjectVersionGraphChanged();
 }
 
 QString QmlBackend::selectedProjectNote() const {
@@ -325,6 +305,12 @@ void QmlBackend::loadProjectsFromFolder(const QString& folderPath) {
     QString cleanPath = folderPath;
     if (cleanPath.startsWith(QStringLiteral("file://"))) {
         cleanPath = QUrl(cleanPath).toLocalFile();
+    }
+
+    // A stale filter from a previous folder must not hide the new projects.
+    if (!m_searchText.isEmpty()) {
+        m_searchText.clear();
+        emit searchTextChanged();
     }
 
     m_projectsFolderRoot = QDir::cleanPath(cleanPath);
@@ -379,27 +365,33 @@ void QmlBackend::openProject(int visibleIndex) {
         return;
     }
 
+    const bool isBundle = BackupTemplates::kindIsBundle(project.kind);
+    // Bundles (.logicx/.band) are directories; if the OS has no DAW
+    // association, open the project folder instead of the bundle's parent.
+    const QString fallbackPath = isBundle
+        ? project.rootPath
+        : QFileInfo(projectFilePath).absolutePath();
+
     bool opened = QDesktopServices::openUrl(QUrl::fromLocalFile(projectFilePath));
     if (!opened) {
-        const QString folderPath = QFileInfo(projectFilePath).absolutePath();
-        opened = QDesktopServices::openUrl(QUrl::fromLocalFile(folderPath));
+        opened = QDesktopServices::openUrl(QUrl::fromLocalFile(fallbackPath));
         if (!opened) {
             appendActivity(QString(AppStrings::ActivityOpenFailedFmt)
                 .arg(nowHuman(), projectFilePath));
             return;
         }
 
-        m_lastOpenedAtByProjectRoot.insert(project.rootPath, QDateTime::currentDateTime());
+        m_lastOpenedAtByProjectRoot.insert(pathKey(project.rootPath), QDateTime::currentDateTime());
         if (m_sortMode == SortMode::LastOpened) {
             rebuildVisibleProjects();
         }
 
         appendActivity(QString(AppStrings::ActivityFileAssociationUnavailableOpenedFolderFmt)
-            .arg(nowHuman(), folderPath));
+            .arg(nowHuman(), fallbackPath));
         return;
     }
 
-    m_lastOpenedAtByProjectRoot.insert(project.rootPath, QDateTime::currentDateTime());
+    m_lastOpenedAtByProjectRoot.insert(pathKey(project.rootPath), QDateTime::currentDateTime());
     appendActivity(QString(AppStrings::ActivityOpenedFmt)
         .arg(nowHuman(), projectFilePath));
 
@@ -430,7 +422,11 @@ QVariantList QmlBackend::getProjectVersions(int visibleIndex) const {
         return versions;
     }
 
-    int count = 0;
+    // One entry per version. Bundle saves write several log lines (one per
+    // internal file) sharing a version id; they are folded into one entry
+    // whose "files" list holds every file of that save.
+    QHash<QString, int> versionIndexById;
+    int legacyCount = 0;
     while (!logFile.atEnd()) {
         const QByteArray line = logFile.readLine().trimmed();
         if (line.isEmpty()) {
@@ -443,70 +439,103 @@ QVariantList QmlBackend::getProjectVersions(int visibleIndex) const {
         }
 
         const QJsonObject obj = doc.object();
-        const QString relPath = obj.value("path").toString();
         const QString stagedPath = obj.value("staged").toString();
-        if (relPath != project.primaryProjectFile || stagedPath.isEmpty()) {
+        if (!artifactEquals(MetadataStore::artifactOfLogLine(obj), project.primaryProjectFile)
+            || stagedPath.isEmpty()) {
             continue;
         }
 
-        ++count;
-        const QString versionId = obj.value("version").toString(QString::number(count));
+        QString versionId = obj.value("version").toString();
+        if (versionId.isEmpty()) {
+            ++legacyCount;
+            versionId = QString::number(legacyCount);
+        }
+
+        QVariantMap fileEntry;
+        fileEntry.insert(QStringLiteral("path"), obj.value("path").toString());
+        fileEntry.insert(QStringLiteral("stagedPath"), stagedPath);
+        fileEntry.insert(QStringLiteral("objectHash"), obj.value("object").toString());
+
+        const auto indexIt = versionIndexById.constFind(versionId);
+        if (indexIt != versionIndexById.constEnd()) {
+            QVariantMap version = versions.at(indexIt.value()).toMap();
+            QVariantList files = version.value(QStringLiteral("files")).toList();
+            files.append(fileEntry);
+            version.insert(QStringLiteral("files"), files);
+            if (version.value(QStringLiteral("note")).toString().isEmpty()) {
+                version.insert(QStringLiteral("note"), obj.value("note").toString());
+            }
+            versions[indexIt.value()] = version;
+            continue;
+        }
+
         QVariantMap version;
         version.insert(QStringLiteral("id"), versionId);
         version.insert(QStringLiteral("label"), versionLabelFromId(versionId));
         version.insert(QStringLiteral("fullLabel"), QStringLiteral("v%1").arg(versionId));
         version.insert(QStringLiteral("timestamp"), humanizeTimestamp(obj.value("ts").toString()));
         version.insert(QStringLiteral("note"), obj.value("note").toString());
-        version.insert(QStringLiteral("stagedPath"), stagedPath);
-        version.insert(QStringLiteral("objectHash"), obj.value("object").toString());
         version.insert(QStringLiteral("parent"), obj.value("parent").toString());
         version.insert(QStringLiteral("isCurrent"), false);
+        version.insert(QStringLiteral("files"), QVariantList {fileEntry});
+        versionIndexById.insert(versionId, versions.size());
         versions.append(version);
     }
     logFile.close();
 
-    const QString projectFilePath = QDir(project.rootPath).filePath(project.primaryProjectFile);
+    // A version is "current" when every file it captured matches what is on
+    // disk right now (by object hash, or by content against the staged copy).
     QString currentVersionId;
-    if (QFileInfo::exists(projectFilePath)) {
-        const QString projectFileHash = sha256FileHex(projectFilePath);
-        for (const QVariant& value : versions) {
-            const QVariantMap version = value.toMap();
-            const QString candidateVersionId = version.value(QStringLiteral("id")).toString();
+    QHash<QString, QString> diskHashByPath;
+    for (const QVariant& value : versions) {
+        const QVariantMap version = value.toMap();
+        const QString candidateVersionId = version.value(QStringLiteral("id")).toString();
+        const QVariantList files = version.value(QStringLiteral("files")).toList();
 
-            bool matchesCurrent = false;
-            const QString objectHash = version.value(QStringLiteral("objectHash")).toString();
-            if (!projectFileHash.isEmpty() && !objectHash.isEmpty()) {
-                matchesCurrent = objectHash.compare(projectFileHash, Qt::CaseInsensitive) == 0;
+        bool allMatch = !files.isEmpty();
+        for (const QVariant& fileValue : files) {
+            const QVariantMap fileEntry = fileValue.toMap();
+            const QString diskPath = QDir(project.rootPath).filePath(
+                fileEntry.value(QStringLiteral("path")).toString());
+            if (!QFileInfo::exists(diskPath)) {
+                allMatch = false;
+                break;
             }
 
-            if (!matchesCurrent) {
+            auto hashIt = diskHashByPath.constFind(diskPath);
+            if (hashIt == diskHashByPath.constEnd()) {
+                hashIt = diskHashByPath.insert(diskPath, sha256FileHex(diskPath));
+            }
+
+            bool matches = false;
+            const QString objectHash = fileEntry.value(QStringLiteral("objectHash")).toString();
+            if (!hashIt->isEmpty() && !objectHash.isEmpty()) {
+                matches = objectHash.compare(hashIt.value(), Qt::CaseInsensitive) == 0;
+            }
+
+            if (!matches) {
                 const QString stagedPath = resolveStagedPath(
-                    project.rootPath,
-                    version.value(QStringLiteral("stagedPath")).toString());
+                    project.rootPath, fileEntry.value(QStringLiteral("stagedPath")).toString());
                 if (!stagedPath.isEmpty() && QFileInfo::exists(stagedPath)) {
-                    matchesCurrent = filesAreIdentical(projectFilePath, stagedPath);
+                    matches = filesAreIdentical(diskPath, stagedPath);
                 }
             }
 
-            if (matchesCurrent
-                && (currentVersionId.isEmpty() || versionLessThan(currentVersionId, candidateVersionId))) {
-                currentVersionId = candidateVersionId;
+            if (!matches) {
+                allMatch = false;
+                break;
             }
+        }
+
+        if (allMatch
+            && (currentVersionId.isEmpty() || VersionId::lessThan(currentVersionId, candidateVersionId))) {
+            currentVersionId = candidateVersionId;
         }
     }
 
-    if (currentVersionId.isEmpty()) {
-        for (const QVariant& value : versions) {
-            const QString candidateVersionId = value.toMap().value(QStringLiteral("id")).toString();
-            if (candidateVersionId.isEmpty()) {
-                continue;
-            }
-            if (currentVersionId.isEmpty() || versionLessThan(currentVersionId, candidateVersionId)) {
-                currentVersionId = candidateVersionId;
-            }
-        }
-    }
-
+    // If the on-disk file matches no snapshot, no version is marked current.
+    // Claiming the latest one is current would mislead the user into
+    // believing their working state is already versioned.
     if (!currentVersionId.isEmpty()) {
         for (int i = 0; i < versions.size(); ++i) {
             QVariantMap version = versions.at(i).toMap();
@@ -532,16 +561,26 @@ QVariantList QmlBackend::selectedProjectVersionGraph() const {
     QHash<QString, QVariantMap> nodeById;
     QHash<QString, QStringList> childrenByParent;
 
+    QHash<QString, QString> parentOf;
     for (const QVariant& value : versions) {
         QVariantMap node = value.toMap();
         const QString id = node.value(QStringLiteral("id")).toString();
-        const QString parentId = node.value(QStringLiteral("parent")).toString();
         if (id.isEmpty()) {
             continue;
         }
-        node.insert(QStringLiteral("parentId"), parentId);
         nodeById.insert(id, node);
-        childrenByParent[parentId].append(id);
+        parentOf.insert(id, node.value(QStringLiteral("parent")).toString());
+    }
+
+    for (auto it = parentOf.constBegin(); it != parentOf.constEnd(); ++it) {
+        QString parentId = it.value();
+        // Treat nodes whose parent no longer exists (e.g. deleted by older
+        // app versions) as roots instead of silently dropping their subtree.
+        if (!parentId.isEmpty() && !nodeById.contains(parentId)) {
+            parentId.clear();
+        }
+        nodeById[it.key()].insert(QStringLiteral("parentId"), parentId);
+        childrenByParent[parentId].append(it.key());
     }
 
     QVariantList graph;
@@ -549,7 +588,7 @@ QVariantList QmlBackend::selectedProjectVersionGraph() const {
 
     std::function<void(const QString&, int)> appendChildren = [&](const QString& parentId, int depth) {
         QStringList children = childrenByParent.value(parentId);
-        std::sort(children.begin(), children.end(), versionLessThan);
+        std::sort(children.begin(), children.end(), VersionId::lessThan);
         for (const QString& childId : children) {
             QVariantMap node = nodeById.value(childId);
             node.insert(QStringLiteral("depth"), depth);
@@ -572,6 +611,26 @@ bool QmlBackend::restoreVersionById(const QString& versionId) {
     }
 
     const DiscoveredProject& project = m_discoveredProjects.at(m_visibleProjectIndexes.at(m_selectedProjectIndex));
+    SnapshotService* snapshotService = snapshotServiceForRoot(project.rootPath);
+    const QString artifactPath = QDir(project.rootPath).filePath(project.primaryProjectFile);
+
+    // If the on-disk state matches no snapshot (e.g. the watcher has not
+    // seen the latest save yet), snapshot it now so the restore cannot
+    // silently destroy the user's most recent work.
+    {
+        const QVariantList preRestoreVersions = getProjectVersions(m_selectedProjectIndex);
+        bool anyCurrent = false;
+        for (const QVariant& value : preRestoreVersions) {
+            if (value.toMap().value(QStringLiteral("isCurrent")).toBool()) {
+                anyCurrent = true;
+                break;
+            }
+        }
+        if (!anyCurrent && snapshotService && QFileInfo::exists(artifactPath)) {
+            snapshotService->snapshotPathNow(artifactPath, project.primaryProjectFile);
+        }
+    }
+
     const QVariantList versions = getProjectVersions(m_selectedProjectIndex);
 
     QVariantMap selectedVersion;
@@ -587,37 +646,95 @@ bool QmlBackend::restoreVersionById(const QString& versionId) {
         return false;
     }
 
-    const QString stagedPath = selectedVersion.value(QStringLiteral("stagedPath")).toString();
-    if (stagedPath.isEmpty() || !QFileInfo::exists(stagedPath)) {
-        appendActivity(QString(AppStrings::ActivityRestoreFailedSnapshotMissingFmt)
-            .arg(nowHuman(), project.name, versionId));
+    // A version may span several files (bundle internals saved together).
+    // Materialize every file into a temp next to its destination first, so
+    // nothing is touched unless the whole version is available; recent
+    // versions come from staged copies, compacted ones are decompressed
+    // from the object store.
+    const QVariantList files = selectedVersion.value(QStringLiteral("files")).toList();
+    const ObjectStore objectStore(QDir(project.rootPath).filePath(QStringLiteral(".musit")));
+
+    struct PendingRestore {
+        QString destinationPath;
+        QString tempPath;
+        QString relativePath;
+    };
+    QList<PendingRestore> pending;
+
+    const auto cleanupTemps = [&pending]() {
+        for (const PendingRestore& item : pending) {
+            QFile::remove(item.tempPath);
+        }
+    };
+
+    for (const QVariant& fileValue : files) {
+        const QVariantMap fileEntry = fileValue.toMap();
+        const QString relativePath = fileEntry.value(QStringLiteral("path")).toString();
+        const QString destinationPath = QDir(project.rootPath).filePath(relativePath);
+
+        if (!QDir().mkpath(QFileInfo(destinationPath).dir().absolutePath())) {
+            cleanupTemps();
+            appendActivity(QString(AppStrings::ActivityRestoreFailedCreateFolderFmt)
+                .arg(nowHuman(), destinationPath));
+            return false;
+        }
+
+        const QString tempPath = destinationPath + QStringLiteral(".musit-restore.tmp");
+        QFile::remove(tempPath);
+
+        const QString stagedPath = resolveStagedPath(
+            project.rootPath, fileEntry.value(QStringLiteral("stagedPath")).toString());
+        const QString objectHash = fileEntry.value(QStringLiteral("objectHash")).toString();
+
+        bool materialized = false;
+        if (!stagedPath.isEmpty() && QFileInfo::exists(stagedPath)) {
+            materialized = QFile::copy(stagedPath, tempPath);
+        }
+        if (!materialized && !objectHash.isEmpty()) {
+            materialized = objectStore.extractObject(objectHash, tempPath);
+        }
+
+        if (!materialized) {
+            QFile::remove(tempPath);
+            cleanupTemps();
+            appendActivity(QString(AppStrings::ActivityRestoreFailedSnapshotMissingFmt)
+                .arg(nowHuman(), project.name, versionId));
+            return false;
+        }
+
+        pending.append(PendingRestore {destinationPath, tempPath, relativePath});
+    }
+
+    if (pending.isEmpty()) {
         return false;
     }
 
-    const QString destinationPath = QDir(project.rootPath).filePath(project.primaryProjectFile);
-    const QFileInfo destinationInfo(destinationPath);
-    if (!QDir().mkpath(destinationInfo.dir().absolutePath())) {
-        appendActivity(QString(AppStrings::ActivityRestoreFailedCreateFolderFmt)
-            .arg(nowHuman(), destinationPath));
-        return false;
+    // All temps are ready; swap them in.
+    for (const PendingRestore& item : pending) {
+        if (QFileInfo::exists(item.destinationPath) && !QFile::remove(item.destinationPath)) {
+            cleanupTemps();
+            appendActivity(QString(AppStrings::ActivityRestoreFailedReplaceFmt)
+                .arg(nowHuman(), item.destinationPath));
+            return false;
+        }
+
+        if (!QFile::rename(item.tempPath, item.destinationPath)) {
+            // The complete data is still in the temp file; try a plain copy
+            // as a last resort before giving up.
+            if (!QFile::copy(item.tempPath, item.destinationPath)) {
+                appendActivity(QString(AppStrings::ActivityRestoreFailedCopyFmt)
+                    .arg(nowHuman(), item.tempPath, item.destinationPath));
+                return false;
+            }
+            QFile::remove(item.tempPath);
+        }
     }
 
-    if (QFileInfo::exists(destinationPath) && !QFile::remove(destinationPath)) {
-        appendActivity(QString(AppStrings::ActivityRestoreFailedReplaceFmt)
-            .arg(nowHuman(), destinationPath));
-        return false;
-    }
-
-    if (!QFile::copy(stagedPath, destinationPath)) {
-        appendActivity(QString(AppStrings::ActivityRestoreFailedCopyFmt)
-            .arg(nowHuman(), stagedPath, destinationPath));
-        return false;
-    }
-
-    SnapshotService* snapshotService = snapshotServiceForRoot(project.rootPath);
     if (snapshotService) {
-        snapshotService->suppressNextEventsForPath(project.primaryProjectFile, 1);
-        snapshotService->setBranchBaseForPath(project.primaryProjectFile, versionId);
+        for (const PendingRestore& item : pending) {
+            snapshotService->suppressNextEventsForPath(item.relativePath, 1);
+        }
+        snapshotService->setBranchBaseForArtifact(project.primaryProjectFile, versionId);
     }
 
     m_statusMessage = QString(AppStrings::StatusRestoredToVersionFmt).arg(project.name, versionId);
@@ -649,6 +766,8 @@ bool QmlBackend::saveVersionNote(const QString& versionId, const QString& note) 
     }
     logFile.close();
 
+    // The note lives on the first log line of the version (a bundle version
+    // spans several lines; getProjectVersions reads the first non-empty note).
     bool updated = false;
     int count = 0;
     for (QByteArray& rawLine : lines) {
@@ -659,9 +778,9 @@ bool QmlBackend::saveVersionNote(const QString& versionId, const QString& note) 
         }
 
         QJsonObject obj = doc.object();
-        const QString relPath = obj.value("path").toString();
         const QString stagedPath = obj.value("staged").toString();
-        if (relPath != project.primaryProjectFile || stagedPath.isEmpty()) {
+        if (!artifactEquals(MetadataStore::artifactOfLogLine(obj), project.primaryProjectFile)
+            || stagedPath.isEmpty()) {
             continue;
         }
 
@@ -691,17 +810,9 @@ bool QmlBackend::saveVersionNote(const QString& versionId, const QString& note) 
         return false;
     }
 
-    if (!logFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+    if (!writeLinesAtomically(logPath, lines)) {
         return false;
     }
-
-    for (const QByteArray& rawLine : lines) {
-        if (logFile.write(rawLine) < 0) {
-            logFile.close();
-            return false;
-        }
-    }
-    logFile.close();
 
     emit selectedProjectVersionGraphChanged();
     return true;
@@ -720,60 +831,117 @@ bool QmlBackend::deleteVersionById(const QString& versionId) {
         return false;
     }
 
-    QList<QByteArray> keptLines;
-    QString stagedPath;
-    bool removedMetadata = false;
+    // First pass: find every line of the version (a bundle version spans one
+    // line per internal file), plus its parent and object hashes.
+    QList<QJsonObject> parsedLines;
+    QList<bool> lineIsParsed;
+    QList<QByteArray> originalLines;
+
+    QStringList deletedStagedPaths;
+    QSet<QString> deletedObjectHashes;
+    QSet<int> deletedLineIndexes;
+    QString deletedParentId;
     int count = 0;
     while (!logFile.atEnd()) {
         const QByteArray rawLine = logFile.readLine();
-        const QByteArray trimmed = rawLine.trimmed();
-        const QJsonDocument doc = QJsonDocument::fromJson(trimmed);
-        if (!doc.isObject()) {
-            keptLines.append(rawLine);
+        originalLines.append(rawLine);
+        const QJsonDocument doc = QJsonDocument::fromJson(rawLine.trimmed());
+        const bool parsed = doc.isObject();
+        lineIsParsed.append(parsed);
+        parsedLines.append(parsed ? doc.object() : QJsonObject());
+
+        if (!parsed) {
             continue;
         }
 
         const QJsonObject obj = doc.object();
-        const QString relPath = obj.value("path").toString();
         const QString objStagedPath = obj.value("staged").toString();
-        if (relPath == project.primaryProjectFile && !objStagedPath.isEmpty()) {
+        if (artifactEquals(MetadataStore::artifactOfLogLine(obj), project.primaryProjectFile)
+            && !objStagedPath.isEmpty()) {
             ++count;
             const QString lineVersion = obj.value("version").toString(QString::number(count));
             if (lineVersion == versionId) {
-                stagedPath = resolveStagedPath(project.rootPath, objStagedPath);
-                removedMetadata = true;
-                continue;
+                deletedStagedPaths.append(resolveStagedPath(project.rootPath, objStagedPath));
+                if (deletedParentId.isEmpty()) {
+                    deletedParentId = obj.value("parent").toString();
+                }
+                const QString objectHash = obj.value("object").toString();
+                if (!objectHash.isEmpty()) {
+                    deletedObjectHashes.insert(objectHash.toLower());
+                }
+                deletedLineIndexes.insert(originalLines.size() - 1);
             }
         }
-
-        keptLines.append(rawLine);
     }
     logFile.close();
 
-    if (!removedMetadata) {
+    if (deletedLineIndexes.isEmpty()) {
         return false;
     }
 
-    if (!logFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        return false;
-    }
-
-    for (const QByteArray& rawLine : keptLines) {
-        if (logFile.write(rawLine) < 0) {
-            logFile.close();
-            return false;
+    // Second pass: drop the deleted lines and reparent children of the
+    // deleted version onto its own parent so their subtree stays reachable
+    // in the version graph.
+    QList<QByteArray> keptLines;
+    QSet<QString> stillReferencedHashes;
+    for (int i = 0; i < originalLines.size(); ++i) {
+        if (deletedLineIndexes.contains(i)) {
+            continue;
         }
-    }
-    logFile.close();
 
-    if (!stagedPath.isEmpty()) {
+        if (!lineIsParsed.at(i)) {
+            keptLines.append(originalLines.at(i));
+            continue;
+        }
+
+        QJsonObject obj = parsedLines.at(i);
+        bool rewritten = false;
+        if (artifactEquals(MetadataStore::artifactOfLogLine(obj), project.primaryProjectFile)
+            && obj.value("parent").toString() == versionId) {
+            if (deletedParentId.isEmpty()) {
+                obj.remove("parent");
+            } else {
+                obj.insert("parent", deletedParentId);
+            }
+            rewritten = true;
+        }
+
+        const QString objectHash = obj.value("object").toString().toLower();
+        if (deletedObjectHashes.contains(objectHash)) {
+            stillReferencedHashes.insert(objectHash);
+        }
+
+        keptLines.append(rewritten
+            ? QJsonDocument(obj).toJson(QJsonDocument::Compact) + '\n'
+            : originalLines.at(i));
+    }
+
+    if (!writeLinesAtomically(logPath, keptLines)) {
+        return false;
+    }
+
+    const QString stagedRoot = QDir(project.rootPath).filePath(AppStrings::MusitStagingRelativePath);
+    for (const QString& stagedPath : deletedStagedPaths) {
+        if (stagedPath.isEmpty()) {
+            continue;
+        }
         if (QFileInfo::exists(stagedPath)) {
             (void)QFile::remove(stagedPath);
         }
+        removeEmptyParentDirs(QFileInfo(stagedPath).dir().absolutePath(), stagedRoot);
+    }
 
-        const QString stagedRoot = QDir(project.rootPath).filePath(AppStrings::MusitStagingRelativePath);
-        const QString stagedParentDir = QFileInfo(stagedPath).dir().absolutePath();
-        removeEmptyParentDirs(stagedParentDir, stagedRoot);
+    // Remove compressed objects no other version references (objects are
+    // content-addressed and can be shared between versions).
+    const ObjectStore objectStore(QDir(project.rootPath).filePath(QStringLiteral(".musit")));
+    for (const QString& objectHash : deletedObjectHashes) {
+        if (stillReferencedHashes.contains(objectHash)) {
+            continue;
+        }
+        const QString objectPath = objectStore.objectPathForHash(objectHash);
+        if (!objectPath.isEmpty() && QFileInfo::exists(objectPath)) {
+            (void)QFile::remove(objectPath);
+        }
     }
 
     appendActivity(QString(AppStrings::ActivityDeletedStagedVariationFmt)
@@ -816,7 +984,8 @@ void QmlBackend::runStartupSelfCheck() {
     QStringList issues;
     QStringList checks;
 
-    const QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    // Probe the same directory the registry actually writes to.
+    const QString appDataDir = ProjectRegistry::appConfigDirectory();
     if (appDataDir.isEmpty()) {
         issues.append(AppStrings::DialogCouldNotResolveAppDataDir);
     } else {
@@ -846,23 +1015,19 @@ void QmlBackend::runStartupSelfCheck() {
         if (!folderInfo.exists() || !folderInfo.isDir()) {
             issues.append(QString(AppStrings::DialogSavedProjectsFolderMissingFmt).arg(savedFolder));
         } else {
-            const QString musitRoot = QDir(savedFolder).filePath(QStringLiteral(".musit"));
-            const QString stagingDir = QDir(musitRoot).filePath(QStringLiteral("staging"));
-            const QString versionsDir = QDir(musitRoot).filePath(QStringLiteral("versions"));
-
-            if (!QDir().mkpath(stagingDir) || !QDir().mkpath(versionsDir)) {
-                issues.append(QString(AppStrings::DialogCouldNotInitializeMusitStorageFmt).arg(savedFolder));
+            // Version storage lives under each project's .musit folder, not
+            // at the top level of the folder the user picked. Verify the
+            // projects folder itself is writable so per-project storage can
+            // be created on first snapshot.
+            const QString probePath = QDir(savedFolder).filePath(QStringLiteral(".musit_write_probe"));
+            QFile probe(probePath);
+            const bool opened = probe.open(QIODevice::WriteOnly | QIODevice::Truncate);
+            if (!opened) {
+                issues.append(QString(AppStrings::DialogMusitStorageNotWritableFmt).arg(savedFolder));
             } else {
-                const QString probePath = QDir(musitRoot).filePath(QStringLiteral(".write_probe"));
-                QFile probe(probePath);
-                const bool opened = probe.open(QIODevice::WriteOnly | QIODevice::Truncate);
-                if (!opened) {
-                    issues.append(QString(AppStrings::DialogMusitStorageNotWritableFmt).arg(savedFolder));
-                } else {
-                    probe.write("ok");
-                    probe.close();
-                    QFile::remove(probePath);
-                }
+                probe.write("ok");
+                probe.close();
+                QFile::remove(probePath);
             }
         }
     }
@@ -923,6 +1088,25 @@ void QmlBackend::rebuildVisibleProjects() {
 
     m_visibleProjectIndexes = visible;
 
+    // The selected index points into the visible list, so remap it whenever
+    // that list changes; otherwise operations act on the wrong project.
+    if (!m_projectRoot.isEmpty()) {
+        int newIndex = -1;
+        for (int i = 0; i < m_visibleProjectIndexes.size(); ++i) {
+            if (pathEquals(m_discoveredProjects.at(m_visibleProjectIndexes.at(i)).rootPath, m_projectRoot)) {
+                newIndex = i;
+                break;
+            }
+        }
+        if (newIndex != m_selectedProjectIndex) {
+            m_selectedProjectIndex = newIndex;
+            emit selectedProjectIndexChanged();
+        }
+    } else if (m_selectedProjectIndex != -1) {
+        m_selectedProjectIndex = -1;
+        emit selectedProjectIndexChanged();
+    }
+
     QVariantList items;
     items.reserve(m_visibleProjectIndexes.size());
     for (const int index : m_visibleProjectIndexes) {
@@ -954,6 +1138,7 @@ void QmlBackend::startMonitoring() {
     }
 
     m_snapshotServiceByRoot.clear();
+    m_canonicalRootByKey.clear();
     m_snapshotServices.clear();
     for (const DiscoveredProject& project : m_discoveredProjects) {
         auto snapshotService = std::make_unique<SnapshotService>();
@@ -967,7 +1152,7 @@ void QmlBackend::startMonitoring() {
                 [this, projectRoot = project.rootPath](const QString& message) {
                     appendActivity(QString("[%1] %2").arg(nowHuman(), message));
 
-                    if (projectRoot == m_projectRoot) {
+                    if (pathEquals(projectRoot, m_projectRoot)) {
                         emit selectedProjectVersionGraphChanged();
                     }
                 });
@@ -983,13 +1168,15 @@ void QmlBackend::startMonitoring() {
                 });
 
         SnapshotService* rawService = snapshotService.get();
-        m_snapshotServiceByRoot.insert(QDir::cleanPath(project.rootPath), rawService);
+        const QString rootKey = pathKey(project.rootPath);
+        m_snapshotServiceByRoot.insert(rootKey, rawService);
+        m_canonicalRootByKey.insert(rootKey, project.rootPath);
         m_snapshotServices.emplace_back(std::move(snapshotService));
 
         const QString primaryFile = project.primaryProjectFile;
-        if (!primaryFile.isEmpty() && !rawService->hasStagedVersionForPath(primaryFile)) {
+        if (!primaryFile.isEmpty() && !rawService->hasVersionForArtifact(primaryFile)) {
             const QString absolutePrimaryPath = QDir(project.rootPath).filePath(primaryFile);
-            const bool seeded = rawService->snapshotFileNow(absolutePrimaryPath, primaryFile);
+            const bool seeded = rawService->snapshotPathNow(absolutePrimaryPath, primaryFile);
             if (seeded) {
                 appendDebugActivity(QStringLiteral("[%1] seeded initial version v1 for %2")
                     .arg(nowHuman(), absolutePrimaryPath));
@@ -1008,42 +1195,46 @@ void QmlBackend::startMonitoring() {
         m_statusMessage = AppStrings::StatusFailedCreateWatcher;
         emit statusMessageChanged();
         m_snapshotServiceByRoot.clear();
+        m_canonicalRootByKey.clear();
         m_snapshotServices.clear();
         return;
     }
 
     connect(m_fileWatcher.get(), &IFileWatcher::fileEvent,
             this, [this](const FileEvent& event) {
-                const QString normalizedAbsolutePath = QDir::cleanPath(event.absolutePath);
+                const QString normalizedAbsolutePath = normalizeAbsolutePath(event.absolutePath);
 
-                QString matchedRoot;
+                QString matchedRootKey;
                 int matchedLength = -1;
                 for (auto it = m_snapshotServiceByRoot.constBegin(); it != m_snapshotServiceByRoot.constEnd(); ++it) {
-                    const QString rootPath = it.key();
-                    const QString rootPrefix = rootPath + QDir::separator();
-                    const bool inRoot = normalizedAbsolutePath == rootPath
-                        || normalizedAbsolutePath.startsWith(rootPrefix);
-                    if (!inRoot) {
+                    const QString rootKey = it.key();
+                    const QString canonicalRoot = m_canonicalRootByKey.value(rootKey);
+                    if (canonicalRoot.isEmpty() || !pathIsUnderRoot(normalizedAbsolutePath, canonicalRoot)) {
                         continue;
                     }
 
-                    if (rootPath.size() > matchedLength) {
-                        matchedRoot = rootPath;
-                        matchedLength = rootPath.size();
+                    if (canonicalRoot.size() > matchedLength) {
+                        matchedRootKey = rootKey;
+                        matchedLength = canonicalRoot.size();
                     }
                 }
 
-                if (matchedRoot.isEmpty()) {
+                if (matchedRootKey.isEmpty()) {
                     return;
                 }
 
-                auto it = m_snapshotServiceByRoot.find(matchedRoot);
+                auto it = m_snapshotServiceByRoot.find(matchedRootKey);
                 if (it == m_snapshotServiceByRoot.end() || !it.value()) {
                     return;
                 }
 
+                const QString canonicalRoot = m_canonicalRootByKey.value(matchedRootKey);
+                if (canonicalRoot.isEmpty()) {
+                    return;
+                }
+
                 FileEvent translatedEvent = event;
-                translatedEvent.relativePath = QDir(matchedRoot).relativeFilePath(normalizedAbsolutePath);
+                translatedEvent.relativePath = QDir(canonicalRoot).relativeFilePath(normalizedAbsolutePath);
                 it.value()->onFileEvent(translatedEvent);
             });
 
@@ -1052,6 +1243,7 @@ void QmlBackend::startMonitoring() {
         emit statusMessageChanged();
         m_fileWatcher.reset();
         m_snapshotServiceByRoot.clear();
+        m_canonicalRootByKey.clear();
         m_snapshotServices.clear();
         return;
     }
@@ -1070,14 +1262,14 @@ void QmlBackend::stopMonitoring() {
     }
 
     m_snapshotServiceByRoot.clear();
+    m_canonicalRootByKey.clear();
     m_snapshotServices.clear();
     appendActivity(QStringLiteral("[%1] monitoring stopped")
         .arg(QDateTime::currentDateTime().toString(Qt::ISODate)));
 }
 
 SnapshotService* QmlBackend::snapshotServiceForRoot(const QString& projectRoot) {
-    const QString normalizedRoot = QDir::cleanPath(projectRoot);
-    auto it = m_snapshotServiceByRoot.find(normalizedRoot);
+    auto it = m_snapshotServiceByRoot.find(pathKey(projectRoot));
     if (it == m_snapshotServiceByRoot.end()) {
         return nullptr;
     }

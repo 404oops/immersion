@@ -1,16 +1,34 @@
 #include "ProjectConfig.h"
 
+#include "BackupTemplate.h"
+
 #include <QDir>
+#include <QSet>
 #include <QStringList>
 
 namespace {
 
 bool containsIgnoredDirectory(const QString& normalizedLowerPath) {
-    static const QStringList ignoredDirectories {
+    const QStringList parts = normalizedLowerPath.split('/', Qt::SkipEmptyParts);
+    // Only look at directory components; the last part is the file name.
+    for (int i = 0; i < parts.size() - 1; ++i) {
+        if (ProjectConfig::isIgnoredDirectoryName(parts.at(i))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool ProjectConfig::isIgnoredDirectoryName(const QString& name) {
+    static const QSet<QString> ignoredDirectories {
         ".musit",
         ".git",
         ".idea",
         ".vscode",
+        ".svn",
+        ".hg",
         ".counts",
         "auto-backups",
         "bounce",
@@ -23,24 +41,19 @@ bool containsIgnoredDirectory(const QString& normalizedLowerPath) {
         "renders"
     };
 
-    const QStringList parts = normalizedLowerPath.split('/', Qt::SkipEmptyParts);
-    for (const QString& part : parts) {
-        if (ignoredDirectories.contains(part)) {
-            return true;
-        }
-        if (part.contains("backup")) {
-            return true;
-        }
+    const QString lowerName = name.toLower();
+    if (ignoredDirectories.contains(lowerName)) {
+        return true;
     }
 
-    return false;
+    // DAWs create auto-backup folders with varying names ("Backup", "Backups",
+    // "Auto Backup", ...). Match per directory component, never on full paths,
+    // so a projects root like "D:/Backups/Music" chosen by the user still works.
+    return lowerName.contains("backup");
 }
 
-} // namespace
-
 ProjectConfig::ProjectConfig(QString rootPath)
-    : m_rootPath(std::move(rootPath)),
-      m_excludedExtensions({"wav", "aif", "aiff", "mp3", "flac", "ogg", "m4a", "tmp", "lock"}) {}
+    : m_rootPath(std::move(rootPath)) {}
 
 void ProjectConfig::setRootPath(const QString& rootPath) {
     m_rootPath = QDir::cleanPath(rootPath);
@@ -67,32 +80,16 @@ bool ProjectConfig::shouldTrack(const QString& relativePath) const {
     }
 
     const QString normalized = QDir::fromNativeSeparators(relativePath).toLower();
-    if (normalized.startsWith(".musit/")) {
+    if (normalized.startsWith(".musit/") || normalized == ".musit") {
         return false;
-    }
-
-    if (normalized.endsWith(".bwproject")) {
-        if (containsIgnoredDirectory(normalized)) {
-            return false;
-        }
-        return true;
     }
 
     if (containsIgnoredDirectory(normalized)) {
         return false;
     }
 
-    const int dotIndex = normalized.lastIndexOf('.');
-    if (dotIndex > -1) {
-        const QString extension = normalized.mid(dotIndex + 1);
-        if (m_excludedExtensions.contains(extension)) {
-            return false;
-        }
-    }
-
-    if (normalized.endsWith("~") || normalized.endsWith(".swp") || normalized.contains(".tmp")) {
-        return false;
-    }
-
-    return true;
+    // The backup templates decide what gets versioned: main project files,
+    // accompanying files/bundle internals per include patterns, and never
+    // audio/temp files.
+    return BackupTemplates::shouldTrackPath(normalized);
 }

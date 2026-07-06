@@ -86,12 +86,17 @@ if(WIN32 AND Qt6_DIR AND Qt6_DIR MATCHES "[\\/]msvc[0-9_]+[\\/]")
 endif()
 
 find_package(Threads REQUIRED)
-find_package(Qt6 REQUIRED COMPONENTS Qml Gui Svg Network)
+# Only link what the C++ code uses. QtQuick/QtNetwork are pulled in at
+# runtime by the QML engine; linking extra modules here forces them (and
+# their plugins) into every deployed package.
+find_package(Qt6 REQUIRED COMPONENTS Qml Gui)
 
 add_executable(Immersion
     src/main.cpp
     src/ui/QmlBackend.cpp
     src/ui/QmlBackend.h
+    src/core/BackupTemplate.cpp
+    src/core/BackupTemplate.h
     src/core/FileEvent.h
     src/core/IFileWatcher.h
     src/core/FileWatcherFactory.cpp
@@ -102,6 +107,7 @@ add_executable(Immersion
     src/core/ProjectDiscovery.h
     src/core/SnapshotService.cpp
     src/core/SnapshotService.h
+    src/core/VersionId.h
     src/persistence/ObjectStore.cpp
     src/persistence/ObjectStore.h
     src/persistence/MetadataStore.cpp
@@ -113,15 +119,17 @@ add_executable(Immersion
 qt_add_resources(Immersion Immersion_qml
     PREFIX "/"
     FILES
-    src/qml/App.qml
+        src/qml/App.qml
         src/qml/Main.qml
         src/qml/Theme.qml
         src/qml/VersionManagerWindow.qml
-    src/qml/MainView.ui.qml
+        src/qml/MainView.ui.qml
+        src/qml/OnboardingView.qml
 )
 
 set_target_properties(Immersion PROPERTIES
-    WIN32_EXECUTABLE $<BOOL:WIN32>
+    # Only affects Windows; avoids a console window popping up with the GUI.
+    WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.Immersion.app"
     MACOSX_BUNDLE_BUNDLE_NAME "Immersion"
@@ -132,8 +140,6 @@ set_target_properties(Immersion PROPERTIES
 target_link_libraries(Immersion
     Qt6::Qml
     Qt6::Gui
-    Qt6::Svg
-    Qt6::Network
 )
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
@@ -144,14 +150,52 @@ target_compile_options(Immersion PRIVATE
     $<$<AND:$<CONFIG:MinSizeRel>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-fdata-sections>
 )
 
-target_link_options(Immersion PRIVATE
-    $<$<CONFIG:MinSizeRel>:-Wl,-dead_strip>
-)
+# -dead_strip is an Apple linker flag; GNU/LLD linkers reject it and would
+# break MinSizeRel builds on Windows/Linux (MinSizeRel is the default type).
+if(APPLE)
+    target_link_options(Immersion PRIVATE
+        $<$<CONFIG:MinSizeRel>:-Wl,-dead_strip>
+    )
+elseif(NOT MSVC)
+    target_link_options(Immersion PRIVATE
+        $<$<CONFIG:MinSizeRel>:-Wl,--gc-sections>
+    )
+endif()
 
 target_compile_options(Immersion PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive->
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic>
 )
+
+# End-to-end test binary (not part of packaged builds).
+option(MUSIT_BUILD_TESTS "Build the end-to-end test binary" OFF)
+if(MUSIT_BUILD_TESTS)
+    add_executable(musit_e2e_test
+        tests/e2e_backup_test.cpp
+        src/ui/QmlBackend.cpp
+        src/ui/QmlBackend.h
+        src/core/BackupTemplate.cpp
+        src/core/BackupTemplate.h
+        src/core/FileEvent.h
+        src/core/IFileWatcher.h
+        src/core/FileWatcherFactory.cpp
+        src/core/FileWatcherFactory.h
+        src/core/ProjectConfig.cpp
+        src/core/ProjectConfig.h
+        src/core/ProjectDiscovery.cpp
+        src/core/ProjectDiscovery.h
+        src/core/SnapshotService.cpp
+        src/core/SnapshotService.h
+        src/core/VersionId.h
+        src/persistence/ObjectStore.cpp
+        src/persistence/ObjectStore.h
+        src/persistence/MetadataStore.cpp
+        src/persistence/MetadataStore.h
+        src/persistence/ProjectRegistry.cpp
+        src/persistence/ProjectRegistry.h
+    )
+    target_link_libraries(musit_e2e_test Qt6::Qml Qt6::Gui)
+endif()
 
 include(GNUInstallDirs)
 install(TARGETS Immersion
@@ -173,57 +217,43 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
         endif()
 
         find_program(IMMERSION_WINDEPLOYQT_EXECUTABLE NAMES windeployqt windeployqt.exe HINTS ${_qt_bin_hints} REQUIRED)
-        if(IMMERSION_WINDEPLOYQT_EXECUTABLE)
-            # Find the actual qt directory to forcefully resolve plugins
-            get_filename_component(_qt_bin_dir_raw "${IMMERSION_WINDEPLOYQT_EXECUTABLE}" DIRECTORY)
-            get_filename_component(_qt_root_dir_raw "${_qt_bin_dir_raw}" DIRECTORY)
 
-            install(CODE "
-                set(_immersion_exe \"\${CMAKE_INSTALL_PREFIX}/Immersion.exe\")
-                
-                message(STATUS \"Deploying Qt libraries and plugins to \${CMAKE_INSTALL_PREFIX}...\")
-                message(STATUS \"Qt root directory: ${_qt_root_dir_raw}\")
-                
-                # Find LLVM toolchain directory for runtime dependencies
-                set(_llvm_bin_dir \"${CMAKE_CXX_COMPILER}\")
-                get_filename_component(_llvm_bin_dir \"\${_llvm_bin_dir}\" DIRECTORY)
-                
-                # Manually copy Qt libraries and plugins instead of using windeployqt
-                # This avoids the 'Unable to find the platform plugin' error
-                
-                # Core Qt libraries
-                set(_qt_libs \"Qt6Core\" \"Qt6Gui\" \"Qt6Qml\" \"Qt6QmlMeta\" \"Qt6QmlWorkerScript\" \"Qt6QmlModels\" \"Qt6Svg\" \"Qt6Network\")
-                foreach(_lib \${_qt_libs})
-                    set(_libfile \"${_qt_root_dir_raw}/bin/\${_lib}.dll\")
-                    if(EXISTS \"\${_libfile}\")
-                        file(COPY \"\${_libfile}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" NO_SOURCE_PERMISSIONS)
-                        message(STATUS \"Deployed \${_lib}.dll\")
-                    endif()
-                endforeach()
+        # Use windeployqt with --qmldir so only the Qt libraries, plugins and
+        # QML modules this app actually imports get deployed. The previous
+        # manual approach copied Qt's ENTIRE qml/ tree (QtQuick3D, all
+        # Controls styles, WebView, ... hundreds of MB of unused assets) and
+        # at the same time missed the platforms/ plugin the app needs to boot.
+        install(CODE "
+            message(STATUS \"Running windeployqt on \${CMAKE_INSTALL_PREFIX}/Immersion.exe\")
+            execute_process(
+                COMMAND \"${IMMERSION_WINDEPLOYQT_EXECUTABLE}\"
+                        --qmldir \"${CMAKE_SOURCE_DIR}/src/qml\"
+                        --no-translations
+                        --no-system-d3d-compiler
+                        --no-opengl-sw
+                        --compiler-runtime
+                        \"\${CMAKE_INSTALL_PREFIX}/Immersion.exe\"
+                RESULT_VARIABLE deploy_res
+            )
+            if(NOT deploy_res EQUAL 0)
+                message(FATAL_ERROR \"windeployqt failed with exit code \${deploy_res}\")
+            endif()
 
-
-                
-                # Copy QML modules (with error handling for permission issues)
-                if(EXISTS \"${_qt_root_dir_raw}/qml\")
-                    file(COPY \"${_qt_root_dir_raw}/qml\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" NO_SOURCE_PERMISSIONS)
-                    message(STATUS \"QML modules deployed\")
+            # llvm-mingw runtime DLLs that windeployqt's --compiler-runtime
+            # does not know about.
+            set(_llvm_bin_dir \"${CMAKE_CXX_COMPILER}\")
+            get_filename_component(_llvm_bin_dir \"\${_llvm_bin_dir}\" DIRECTORY)
+            set(_runtime_libs \"libc++\" \"libunwind\" \"libgcc_s_seh-1\" \"libstdc++-6\" \"libwinpthread-1\")
+            foreach(_lib \${_runtime_libs})
+                set(_libfile \"\${_llvm_bin_dir}/\${_lib}.dll\")
+                if(EXISTS \"\${_libfile}\")
+                    file(COPY \"\${_libfile}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
+                    message(STATUS \"Deployed \${_lib}.dll from toolchain\")
                 endif()
-                
-                # Copy LLVM/MinGW runtime dependencies from toolchain directory
-                set(_runtime_libs \"libc++\" \"libunwind\" \"libgcc_s_seh-1\" \"libstdc++-6\" \"libwinpthread-1\")
-                foreach(_lib \${_runtime_libs})
-                    set(_libfile \"\${_llvm_bin_dir}/\${_lib}.dll\")
-                    if(EXISTS \"\${_libfile}\")
-                        file(COPY \"\${_libfile}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}\")
-                        message(STATUS \"Deployed \${_lib}.dll from toolchain\")
-                    endif()
-                endforeach()
-                
-                message(STATUS \"Qt deployment complete\")
-            ")
-        else()
-            message(FATAL_ERROR "windeployqt not found! Cannot package for Windows without Qt deployment tools.")
-        endif()
+            endforeach()
+
+            message(STATUS \"Qt deployment complete\")
+        ")
     endif()
 
     if(APPLE)
@@ -241,11 +271,9 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
             install(CODE "
                 message(STATUS \"Running macdeployqt on \${CMAKE_INSTALL_PREFIX}/Immersion.app\")
                 execute_process(
-                    COMMAND \"${IMMERSION_MACDEPLOYQT_EXECUTABLE}\" 
-                            \"\${CMAKE_INSTALL_PREFIX}/Immersion.app\" 
-                            \"-qmldir=${CMAKE_SOURCE_DIR}/src/qml\" 
-                            \"-libpath=/opt/homebrew/opt/qtsvg/lib\" 
-                            \"-libpath=/usr/local/opt/qtsvg/lib\"
+                    COMMAND \"${IMMERSION_MACDEPLOYQT_EXECUTABLE}\"
+                            \"\${CMAKE_INSTALL_PREFIX}/Immersion.app\"
+                            \"-qmldir=${CMAKE_SOURCE_DIR}/src/qml\"
                     RESULT_VARIABLE deploy_res
                 )
                 if(NOT deploy_res EQUAL 0)
@@ -314,6 +342,38 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                     if(EXISTS \"\${plugins_dir}/quick/\${pl}\")
                         file(REMOVE \"\${plugins_dir}/quick/\${pl}\")
                         message(STATUS \"Pruned unused quick plugin: \${pl}\")
+                    endif()
+                endforeach()
+
+                # 3. Remove QML modules for Controls styles this app never
+                # uses (macdeployqt copies every installed style, incl. the
+                # multi-MB FluentWinUI3/Imagine asset sets). Only Basic (the
+                # fallback) and macOS (the native style) are kept.
+                set(qml_dir \"\${CMAKE_INSTALL_PREFIX}/Immersion.app/Contents/Resources/qml\")
+                set(unused_qml_dirs
+                    \"QtQuick/Controls/FluentWinUI3\"
+                    \"QtQuick/Controls/Material\"
+                    \"QtQuick/Controls/Universal\"
+                    \"QtQuick/Controls/Imagine\"
+                    \"QtQuick/Controls/iOS\"
+                    \"QtQuick/Controls/Fusion\"
+                    \"QtQuick/Controls/designer\"
+                    \"QtQuick/Particles\"
+                    \"QtQuick/VectorImage\"
+                )
+                foreach(qd IN LISTS unused_qml_dirs)
+                    if(EXISTS \"\${qml_dir}/\${qd}\")
+                        file(REMOVE_RECURSE \"\${qml_dir}/\${qd}\")
+                        message(STATUS \"Pruned unused QML module: \${qd}\")
+                    endif()
+                endforeach()
+
+                # 4. Plugin dirs whose owning frameworks were pruned above
+                # (e.g. sqldrivers depends on the removed QtSql).
+                foreach(pd \"sqldrivers\")
+                    if(EXISTS \"\${plugins_dir}/\${pd}\")
+                        file(REMOVE_RECURSE \"\${plugins_dir}/\${pd}\")
+                        message(STATUS \"Pruned unused plugin dir: \${pd}\")
                     endif()
                 endforeach()
             ")

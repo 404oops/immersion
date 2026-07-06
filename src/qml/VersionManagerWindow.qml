@@ -184,6 +184,26 @@ Window {
         }
     }
 
+    Dialog {
+        id: deleteConfirmDialog
+        anchors.centerIn: parent
+        modal: true
+        title: "Delete Version"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        Label {
+            text: "Delete version v" + root.selectedVersionId + "?\n\nThis removes its snapshot from .musit and cannot be undone."
+            wrapMode: Text.WordWrap
+        }
+
+        onAccepted: {
+            if (root.backend.deleteVersionById(root.selectedVersionId)) {
+                root.refreshVersionGraph();
+                versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).note : "";
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
@@ -401,12 +421,7 @@ Window {
                             text: "Delete"
                             Layout.fillWidth: true
                             enabled: root.hasBackend && root.selectedVersionId.length > 0
-                            onClicked: {
-                                if (root.backend.deleteVersionById(root.selectedVersionId)) {
-                                    root.refreshVersionGraph();
-                                    versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).note : "";
-                                }
-                            }
+                            onClicked: deleteConfirmDialog.open()
                         }
                     }
                 }

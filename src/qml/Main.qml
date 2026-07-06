@@ -23,8 +23,10 @@ ApplicationWindow {
         }
     }
 
-    // Show onboarding when no projects folder is selected (empty projects list)
-    readonly property bool isOnboarding: !window.backend.projects || window.backend.projects.length === 0
+    // Show onboarding only when nothing was discovered at all. The `projects`
+    // list is search-filtered, so it must not drive this (an unmatched search
+    // would otherwise kick the user back to the welcome screen).
+    readonly property bool isOnboarding: !window.backend.hasDiscoveredProjects
 
     function scrollActivityToBottom() {
         if (!mainView || !mainView.activityListView)
@@ -38,77 +40,9 @@ ApplicationWindow {
         id: onboardingLoader
         anchors.fill: parent
         visible: window.isOnboarding
-        sourceComponent: window.isOnboarding ? onboardingComponent : null
-    }
-
-    Component {
-        id: onboardingComponent
-        Rectangle {
-            color: theme.appBackground
-
-            Theme {
-                id: theme
-            }
-
-            ColumnLayout {
-                anchors.centerIn: parent
-                anchors.margins: 40
-                spacing: 32
-                width: Math.min(600, parent.width - 80)
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 16
-
-                    Text {
-                        text: "Welcome to Immersion"
-                        font.pixelSize: 48
-                        font.weight: Font.Bold
-                        color: theme.textPrimary
-                        horizontalAlignment: Text.AlignHCenter
-                        Layout.fillWidth: true
-                    }
-
-                    Text {
-                        text: "To start, pick a folder where all your project files sit, and we'll take care of the rest."
-                        font.pixelSize: 16
-                        color: theme.textSecondary
-                        wrapMode: Text.Wrap
-                        horizontalAlignment: Text.AlignHCenter
-                        Layout.fillWidth: true
-                        lineHeight: 1.5
-                    }
-                }
-
-                Button {
-                    id: button
-                    text: "Open Projects Folder"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 48
-                    font.pixelSize: 14
-                    font.weight: Font.Medium
-
-                    background: Rectangle {
-                        color: button.hovered || button.pressed ? theme.selection : theme.accent
-                        radius: 4
-                        Behavior on color {
-                            ColorAnimation {
-                                duration: 150
-                            }
-                        }
-                    }
-
-                    contentItem: Text {
-                        text: button.text
-                        color: "white"
-                        font: button.font
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-
-                    onClicked: folderDialog.open()
-                }
-            }
+        active: window.isOnboarding
+        sourceComponent: OnboardingView {
+            onChooseProjectFolderRequested: folderDialog.open()
         }
     }
 
