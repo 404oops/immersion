@@ -1,4 +1,4 @@
-pragma ComponentBehavior: Bound
+#pragma ComponentBehavior: Bound
 
 import QtQuick 2.15
 import QtQuick.Controls 2.15
@@ -34,6 +34,7 @@ ApplicationWindow {
     // scan runs, keep the main view visible and populate the list incrementally.
     readonly property bool isOnboarding: !window.backend.hasProjectsFolder
     readonly property int viewFadeDuration: 280
+    readonly property bool modalScrimVisible: versionManagerWindow.opened || settingsWindow.opened
 
     function scrollActivityToBottom() {
         if (!mainView || !mainView.activityListView)
@@ -41,6 +42,10 @@ ApplicationWindow {
         Qt.callLater(function () {
             mainView.activityListView.positionViewAtEnd();
         });
+    }
+
+    function openSettings() {
+        settingsWindow.openSettings();
     }
 
     Loader {
@@ -52,7 +57,7 @@ ApplicationWindow {
         opacity: window.isOnboarding ? 1 : 0
         visible: active
         sourceComponent: OnboardingView {
-            onChooseProjectFolderRequested: folderDialog.open()
+            onOpenSettingsRequested: window.openSettings()
         }
 
         Behavior on opacity {
@@ -75,12 +80,11 @@ ApplicationWindow {
         isScanningProjects: window.backend.isScanningProjects
         projectsModel: window.backend.projects
         activityModel: window.backend.activity
-        logLevel: window.backend.logLevel
         searchText: window.backend.searchText
         sortMode: window.backend.sortMode
         useDesignerPlaceholders: false
 
-        onChooseProjectFolderRequested: folderDialog.open()
+        onOpenSettingsRequested: window.openSettings()
         onSortModeRequested: function (mode) {
             window.backend.sortMode = mode;
         }
@@ -92,9 +96,6 @@ ApplicationWindow {
         }
         onManageProjectRequested: function (index) {
             versionManagerWindow.openForProject(index);
-        }
-        onLogLevelRequested: function (level) {
-            window.backend.logLevel = level;
         }
 
         Behavior on opacity {
@@ -112,21 +113,25 @@ ApplicationWindow {
         function onActivityChanged() {
             window.scrollActivityToBottom();
         }
+        function onProjectsFolderChanged() {
+            if (window.backend.hasProjectsFolder && settingsWindow.opened)
+                settingsWindow.close();
+        }
     }
 
     Theme {
         id: windowTheme
     }
 
-    // Full-window scrim behind the version manager (Overlay.modal ignores opacity).
+    // Full-window scrim behind modal popups (Overlay.modal ignores opacity).
     Rectangle {
-        id: versionManagerScrim
+        id: modalScrim
         parent: Overlay.overlay
         anchors.fill: parent
         color: windowTheme.modalScrim
-        opacity: versionManagerWindow.opened ? 1 : 0
+        opacity: window.modalScrimVisible ? 1 : 0
         visible: opacity > 0
-        z: versionManagerWindow.z - 1
+        z: Math.max(versionManagerWindow.z, settingsWindow.z) - 1
 
         Behavior on opacity {
             NumberAnimation {
@@ -139,6 +144,12 @@ ApplicationWindow {
     VersionManagerWindow {
         id: versionManagerWindow
         backend: window.backend
+    }
+
+    SettingsWindow {
+        id: settingsWindow
+        backend: window.backend
+        onChooseProjectsFolderRequested: folderDialog.open()
     }
 
     Component.onCompleted: {

@@ -90,7 +90,7 @@ find_package(Threads REQUIRED)
 # Only link what the C++ code uses. QtQuick/QtNetwork are pulled in at
 # runtime by the QML engine; linking extra modules here forces them (and
 # their plugins) into every deployed package.
-find_package(Qt6 REQUIRED COMPONENTS Qml Gui OpenGL QuickControls2 Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Qml Gui OpenGL QuickControls2 Widgets Network)
 
 add_executable(Immersion
     src/main.cpp
@@ -98,6 +98,8 @@ add_executable(Immersion
     src/ui/QmlBackend.h
     src/ui/TrayController.cpp
     src/ui/TrayController.h
+    src/ui/SingleInstanceGuard.cpp
+    src/ui/SingleInstanceGuard.h
     src/ui/PlatformAgent.h
     src/core/BackupTemplate.cpp
     src/core/BackupTemplate.h
@@ -129,11 +131,15 @@ qt_add_resources(Immersion Immersion_qml
         src/qml/Main.qml
         src/qml/Theme.qml
         src/qml/VersionManagerWindow.qml
+        src/qml/SettingsWindow.qml
         src/qml/MainView.ui.qml
         src/qml/OnboardingView.qml
         src/qml/ActionButton.qml
         src/qml/ThemedTextField.qml
         src/qml/ThemedComboBox.qml
+        src/qml/ThemedSlider.qml
+        src/qml/ThemedSwitch.qml
+        src/qml/ThemedSpinBox.qml
         src/qml/PanelButton.qml
         src/qml/ThemedTextArea.qml
         src/qml/VersionGraphNode.qml
@@ -155,6 +161,7 @@ target_link_libraries(Immersion
     Qt6::OpenGL
     Qt6::QuickControls2
     Qt6::Widgets
+    Qt6::Network
 )
 
 if(APPLE)
@@ -166,7 +173,10 @@ if(APPLE)
     target_link_libraries(Immersion
         "-framework AppKit"
         "-framework UserNotifications"
+        "-framework ServiceManagement"
     )
+elseif(WIN32)
+    target_sources(Immersion PRIVATE src/ui/PlatformAgent_win.cpp)
 else()
     target_sources(Immersion PRIVATE src/ui/PlatformAgent.cpp)
 endif()
@@ -226,9 +236,11 @@ if(MUSIT_BUILD_TESTS)
         src/persistence/ProjectRegistry.h
     )
     target_link_libraries(musit_e2e_test Qt6::Qml Qt6::Gui)
+    target_sources(musit_e2e_test PRIVATE src/ui/PlatformAgent.cpp)
 endif()
 
 include(GNUInstallDirs)
+set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_SOURCE_DIR}/cmake/ImmersionCPack.cmake")
 install(TARGETS Immersion
     BUNDLE DESTINATION .
     RUNTIME DESTINATION .

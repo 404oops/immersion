@@ -5,6 +5,7 @@
 
 #include "FileEvent.h"
 #include "ProjectConfig.h"
+#include "BackupTemplate.h"
 #include "../persistence/MetadataStore.h"
 #include "../persistence/ObjectStore.h"
 
@@ -23,6 +24,9 @@ public:
     bool hasVersionForArtifact(const QString& artifact) const;
     void suppressNextEventsForPath(const QString& relativePath, int count = 1);
     void setBranchBaseForArtifact(const QString& artifact, const QString& versionId);
+
+    void setUncompressedRecentVersions(int keepCount);
+    int uncompressedRecentVersions() const;
 
 public slots:
     void onFileEvent(const FileEvent& event);
@@ -56,4 +60,5 @@ private:
     };
     QHash<QString, ActiveGroup> m_activeGroupByArtifact;
     qint64 m_syntheticScanSequence {0};
+    int m_uncompressedRecentVersions {BackupTemplates::kUncompressedRecentVersions};
 };

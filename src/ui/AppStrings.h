@@ -12,6 +12,10 @@ inline const QString SortLastOpened = QStringLiteral("Last Opened");
 inline const QString LogLevelInfo = QStringLiteral("Info");
 inline const QString LogLevelDebug = QStringLiteral("Debug");
 
+inline const QString ColorSchemeSystem = QStringLiteral("System");
+inline const QString ColorSchemeLight = QStringLiteral("Light");
+inline const QString ColorSchemeDark = QStringLiteral("Dark");
+
 inline const QString StatusFirstTimeSetupFmt =
     QStringLiteral("First-time setup complete. Found %1 project folders.");
 inline const QString StatusScanningProjectsFmt =

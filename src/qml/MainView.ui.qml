@@ -22,19 +22,17 @@ Rectangle {
     property var projectsModel: []
     property var activityModel: []
     property alias activityListView: activityList
-    property string logLevel: "Info"
     property string searchText: ""
     property string sortMode: "Name"
     // Defaults to designer behavior; runtime explicitly overrides this to false.
     property bool useDesignerPlaceholders: true
 
-    signal chooseProjectFolderRequested
+    signal openSettingsRequested
     signal sortModeRequested(string mode)
     signal searchTextRequested(string text)
     signal openProjectRequested(int index)
     signal restoreProjectRequested(int index)
     signal manageProjectRequested(int index)
-    signal logLevelRequested(string level)
 
     ListModel {
         id: placeholderProjectsModel
@@ -180,16 +178,16 @@ Rectangle {
             }
 
             ActionButton {
-                id: chooseProjectFolderButton
-                objectName: "chooseProjectFolderButton"
-                text: "Open Projects"
+                id: settingsButton
+                objectName: "settingsButton"
+                text: "Settings"
                 Layout.preferredHeight: 36
-                Layout.preferredWidth: 160
+                Layout.preferredWidth: 120
 
                 Connections {
-                    target: chooseProjectFolderButton
+                    target: settingsButton
                     function onClicked() {
-                        root.chooseProjectFolderRequested();
+                        root.openSettingsRequested();
                     }
                 }
             }
@@ -268,6 +266,7 @@ Rectangle {
                         id: projectSearchField
                         objectName: "projectSearchField"
                         placeholderText: "Search projects..."
+                        text: root.searchText
                         Layout.fillWidth: true
 
                         Connections {
@@ -440,26 +439,6 @@ Rectangle {
 
                         Item {
                             Layout.fillWidth: true
-                        }
-
-                        Label {
-                            text: "Log level:"
-                            color: theme.textSecondary
-                        }
-
-                        ThemedComboBox {
-                            id: activityLogLevelCombo
-                            objectName: "activityLogLevelComboBox"
-                            model: ["Info", "Debug"]
-                            currentIndex: root.logLevel === "Debug" ? 1 : 0
-                            Layout.preferredWidth: 120
-
-                            Connections {
-                                target: activityLogLevelCombo
-                                function onActivated(index) {
-                                    root.logLevelRequested(activityLogLevelCombo.textAt(index));
-                                }
-                            }
                         }
                     }
 

@@ -1,10 +1,12 @@
 #include <QApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QQuickStyle>
 #include <QVariant>
 
 #include "core/FileEvent.h"
 #include "ui/QmlBackend.h"
+#include "ui/SingleInstanceGuard.h"
 #include "ui/TrayController.h"
 
 int main(int argc, char *argv[]) {
@@ -19,8 +21,15 @@ int main(int argc, char *argv[]) {
 
     qRegisterMetaType<FileEvent>("FileEvent");
 
+    SingleInstanceGuard instanceGuard(QStringLiteral("musit-immersion-v1"));
+    if (!instanceGuard.isPrimaryInstance()) {
+        instanceGuard.notifyExistingInstance();
+        return 0;
+    }
+
     QQmlApplicationEngine engine;
     QmlBackend backend;
+    engine.rootContext()->setContextProperty(QStringLiteral("MusitThemeBridge"), &backend);
     engine.setInitialProperties({
         {"backend", QVariant::fromValue(&backend)}
     });
@@ -36,6 +45,9 @@ int main(int argc, char *argv[]) {
 
     TrayController tray;
     tray.attach(&backend, &engine);
+    instanceGuard.setRaiseHandler([&tray]() {
+        QMetaObject::invokeMethod(&tray, &TrayController::showMainWindow, Qt::QueuedConnection);
+    });
 
     return app.exec();
 }

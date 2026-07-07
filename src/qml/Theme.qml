@@ -3,13 +3,25 @@ import QtQuick 2.15
 QtObject {
     // Base hue in degrees (0-360). Adjust this for the whole theme.
     // Example: 280 = mauve-ish, 220 = blue-ish, 140 = mint-ish.
-    property real hue: 280.0
+    property real hue: (typeof MusitThemeBridge !== "undefined" && MusitThemeBridge !== null)
+                         ? MusitThemeBridge.themeHue
+                         : 280.0
+
+    property string colorSchemeMode: (typeof MusitThemeBridge !== "undefined" && MusitThemeBridge !== null)
+                                      ? MusitThemeBridge.colorSchemeMode
+                                      : "System"
 
     readonly property SystemPalette systemPalette: SystemPalette {
         colorGroup: SystemPalette.Active
     }
 
-    readonly property bool isDarkMode: relativeLuminance(systemPalette.window) < relativeLuminance(systemPalette.windowText)
+    readonly property bool isDarkMode: {
+        if (colorSchemeMode === "Dark")
+            return true;
+        if (colorSchemeMode === "Light")
+            return false;
+        return relativeLuminance(systemPalette.window) < relativeLuminance(systemPalette.windowText);
+    }
 
     function clamp01(v) {
         return Math.max(0, Math.min(1, v));

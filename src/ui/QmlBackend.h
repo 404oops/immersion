@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QThread>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantList>
 
 #include <atomic>
@@ -38,6 +39,13 @@ class QmlBackend : public QObject {
     Q_PROPERTY(int selectedProjectIndex READ selectedProjectIndex WRITE setSelectedProjectIndex NOTIFY selectedProjectIndexChanged)
     Q_PROPERTY(QVariantList selectedProjectVersionGraph READ selectedProjectVersionGraph NOTIFY selectedProjectVersionGraphChanged)
     Q_PROPERTY(QString selectedProjectNote READ selectedProjectNote WRITE setSelectedProjectNote NOTIFY selectedProjectNoteChanged)
+    Q_PROPERTY(QString projectsFolderPath READ projectsFolderPath NOTIFY projectsFolderChanged)
+    Q_PROPERTY(double themeHue READ themeHue WRITE setThemeHue NOTIFY themeHueChanged)
+    Q_PROPERTY(bool launchAtStartup READ launchAtStartup WRITE setLaunchAtStartup NOTIFY launchAtStartupChanged)
+    Q_PROPERTY(bool launchAtStartupSupported READ launchAtStartupSupported CONSTANT)
+    Q_PROPERTY(int snapshotRetention READ snapshotRetention WRITE setSnapshotRetention NOTIFY snapshotRetentionChanged)
+    Q_PROPERTY(bool notificationsEnabled READ notificationsEnabled WRITE setNotificationsEnabled NOTIFY notificationsEnabledChanged)
+    Q_PROPERTY(QString colorSchemeMode READ colorSchemeMode WRITE setColorSchemeMode NOTIFY colorSchemeModeChanged)
 
 public:
     explicit QmlBackend(QObject* parent = nullptr);
@@ -64,6 +72,20 @@ public:
     QString selectedProjectNote() const;
     void setSelectedProjectNote(const QString& value);
 
+    QString projectsFolderPath() const;
+    double themeHue() const;
+    void setThemeHue(double value);
+    bool launchAtStartup() const;
+    void setLaunchAtStartup(bool value);
+    bool launchAtStartupSupported() const;
+
+    int snapshotRetention() const;
+    void setSnapshotRetention(int value);
+    bool notificationsEnabled() const;
+    void setNotificationsEnabled(bool value);
+    QString colorSchemeMode() const;
+    void setColorSchemeMode(const QString& value);
+
     Q_INVOKABLE void loadProjectsFromFolder(const QString& folderPath);
     Q_INVOKABLE void openProject(int visibleIndex);
     Q_INVOKABLE void manageProjectVersions(int visibleIndex);
@@ -71,6 +93,10 @@ public:
     Q_INVOKABLE bool restoreVersionById(const QString& versionId);
     Q_INVOKABLE bool saveVersionNote(const QString& versionId, const QString& note);
     Q_INVOKABLE bool deleteVersionById(const QString& versionId);
+    Q_INVOKABLE bool resetConfig();
+    Q_INVOKABLE bool exportActivityLog(const QUrl& fileUrl);
+    Q_INVOKABLE QUrl defaultActivityLogExportFolderUrl() const;
+    Q_INVOKABLE QUrl defaultActivityLogExportFileUrl() const;
 
 signals:
     void projectSaveRecorded(const QString& projectName,
@@ -87,6 +113,12 @@ signals:
     void selectedProjectIndexChanged();
     void selectedProjectVersionGraphChanged();
     void selectedProjectNoteChanged();
+    void themeHueChanged();
+    void launchAtStartupChanged();
+    void snapshotRetentionChanged();
+    void notificationsEnabledChanged();
+    void colorSchemeModeChanged();
+    void configReset();
 
 private:
     enum class SortMode {
@@ -97,6 +129,12 @@ private:
     enum class LogLevel {
         Info,
         Debug,
+    };
+
+    enum class ColorSchemeMode {
+        System,
+        Light,
+        Dark,
     };
 
     void runStartupSelfCheck();
@@ -116,6 +154,14 @@ private:
     void setScanningProjects(bool scanning);
     void applyDiscoveredProjects(const QList<DiscoveredProject>& projects);
     void finishLoadingProjects(const QList<DiscoveredProject>& projects, const QString& cleanPath);
+    void persistAppSettings();
+    void logConfigChange(const QString& detail);
+    void trimActivityLog();
+    void applySnapshotRetentionToServices();
+    SortMode sortModeFromString(const QString& value) const;
+    LogLevel logLevelFromString(const QString& value) const;
+    ColorSchemeMode colorSchemeModeFromString(const QString& value) const;
+    QString colorSchemeModeToString(ColorSchemeMode mode) const;
     void handleProjectScanDirectory(const QString& directoryPath, int directoriesScanned);
     void handleProjectsUpdated(const QList<DiscoveredProject>& partialProjects,
                                int directoriesScanned,
@@ -142,6 +188,11 @@ private:
     SortMode m_sortMode {SortMode::Name};
     int m_selectedProjectIndex {-1};
     QString m_selectedProjectNote;
+    double m_themeHue {280.0};
+    bool m_launchAtStartup {false};
+    int m_snapshotRetention {5};
+    bool m_notificationsEnabled {true};
+    ColorSchemeMode m_colorSchemeMode {ColorSchemeMode::System};
 
     QList<DiscoveredProject> m_discoveredProjects;
     QList<int> m_visibleProjectIndexes;

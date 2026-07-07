@@ -86,6 +86,12 @@ void TrayController::attach(QmlBackend* backend, QQmlApplicationEngine* engine) 
 
     m_menu = new QMenu;
     m_menu->addAction(QStringLiteral("Open Immersion"), this, &TrayController::showMainWindow);
+    m_menu->addAction(QStringLiteral("Settings"), this, [this]() {
+        showMainWindow();
+        if (QObject* root = mainWindowObject()) {
+            QMetaObject::invokeMethod(root, "openSettings");
+        }
+    });
     m_menu->addSeparator();
     m_menu->addAction(QStringLiteral("Quit"), this, &TrayController::quitApplication);
 
@@ -118,6 +124,10 @@ void TrayController::attach(QmlBackend* backend, QQmlApplicationEngine* engine) 
 void TrayController::onProjectSaveRecorded(const QString& projectName,
                                            const QString& versionLabel,
                                            const QString& relativePath) {
+    if (m_backend && !m_backend->notificationsEnabled()) {
+        return;
+    }
+
     const QString artifactPath = BackupTemplates::artifactForPath(relativePath);
     const QString artifactName = QFileInfo(artifactPath).fileName();
     const QString body = artifactName.isEmpty()

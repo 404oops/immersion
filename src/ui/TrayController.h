@@ -23,11 +23,13 @@ public:
 
     void attach(QmlBackend* backend, QQmlApplicationEngine* engine);
 
+public slots:
+    void showMainWindow();
+
 private slots:
     void onProjectSaveRecorded(const QString& projectName,
                                const QString& versionLabel,
                                const QString& relativePath);
-    void showMainWindow();
     void hideMainWindow();
     void quitApplication();
 

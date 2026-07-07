@@ -10,9 +10,10 @@ Button {
 
     property string variant: "default" // default | primary | danger
 
-    implicitHeight: 36
-    padding: 10
+    implicitHeight: 38
+    padding: 12
     font.pixelSize: 13
+    font.weight: variant === "danger" ? Font.Medium : Font.Normal
 
     Theme {
         id: theme
@@ -45,14 +46,15 @@ Button {
     }
 
     background: Rectangle {
-        radius: 6
+        radius: 8
         color: control.fillColor
-        border.width: theme.isDarkMode ? 0 : 1
+        border.width: control.variant === "default" && !theme.isDarkMode ? 1 : (theme.isDarkMode ? 0 : 1)
         border.color: control.borderColor
         opacity: control.enabled ? 1.0 : 0.55
         Behavior on color {
             ColorAnimation {
-                duration: 120
+                duration: 140
+                easing.type: Easing.OutCubic
             }
         }
     }

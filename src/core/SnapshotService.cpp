@@ -11,6 +11,8 @@
 #include <QJsonObject>
 #include <QSaveFile>
 
+#include <algorithm>
+
 namespace {
 
 QString resolveBranchBaseVersion(const QString& explicitBranchBase,
@@ -33,6 +35,14 @@ QString resolveBranchBaseVersion(const QString& explicitBranchBase,
 
 SnapshotService::SnapshotService(QObject* parent)
     : QObject(parent) {}
+
+void SnapshotService::setUncompressedRecentVersions(const int keepCount) {
+    m_uncompressedRecentVersions = std::max(1, keepCount);
+}
+
+int SnapshotService::uncompressedRecentVersions() const {
+    return m_uncompressedRecentVersions;
+}
 
 bool SnapshotService::setProjectRoot(const QString& rootPath) {
     m_projectConfig.setRootPath(rootPath);
@@ -188,7 +198,7 @@ void SnapshotService::compactStagedCopies(const QString& relativePath) {
     // versions live on solely as compressed objects and are decompressed on
     // demand when restored.
     const QStringList oldStagedPaths = m_metadataStore.stagedPathsBeyondNewest(
-        relativePath, BackupTemplates::kUncompressedRecentVersions);
+        relativePath, m_uncompressedRecentVersions);
     if (oldStagedPaths.isEmpty()) {
         return;
     }

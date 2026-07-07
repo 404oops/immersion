@@ -1,6 +1,7 @@
 #include "QmlBackend.h"
 
 #include "AppStrings.h"
+#include "PlatformAgent.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -12,10 +13,14 @@
 #include <QJsonObject>
 #include <QSaveFile>
 #include <QSet>
+#include <QStandardPaths>
+#include <QStringConverter>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 #include "../core/BackupTemplate.h"
@@ -31,6 +36,8 @@
 #include "../persistence/ProjectRegistry.h"
 
 namespace {
+
+constexpr int kMaxActivityLines = 2000;
 
 QString formatHumanDateTime(const QDateTime& dateTime) {
     if (!dateTime.isValid()) {
@@ -199,6 +206,24 @@ QmlBackend::QmlBackend(QObject* parent)
             Qt::QueuedConnection);
     m_discoveryThread.start();
 
+    const AppSettings savedSettings = m_projectRegistry->loadAppSettings();
+    m_themeHue = savedSettings.themeHue;
+    m_sortMode = sortModeFromString(savedSettings.sortMode.isEmpty()
+                                        ? AppStrings::SortName
+                                        : savedSettings.sortMode);
+    m_logLevel = logLevelFromString(savedSettings.logLevel.isEmpty()
+                                        ? AppStrings::LogLevelInfo
+                                        : savedSettings.logLevel);
+    m_snapshotRetention = std::clamp(savedSettings.snapshotRetention, 1, 50);
+    m_notificationsEnabled = savedSettings.notificationsEnabled;
+    m_colorSchemeMode = colorSchemeModeFromString(savedSettings.colorSchemeMode.isEmpty()
+                                                      ? AppStrings::ColorSchemeSystem
+                                                      : savedSettings.colorSchemeMode);
+    m_launchAtStartup = savedSettings.launchAtStartup;
+    if (PlatformAgent::isLaunchAtStartupSupported()) {
+        PlatformAgent::setLaunchAtStartup(m_launchAtStartup);
+    }
+
     const QString savedProjectsFolder = m_projectRegistry->loadProjectsFolder();
     if (!savedProjectsFolder.isEmpty()) {
         loadProjectsFromFolder(savedProjectsFolder);
@@ -230,6 +255,261 @@ bool QmlBackend::hasProjectsFolder() const {
     return !m_projectsFolderRoot.isEmpty();
 }
 
+QString QmlBackend::projectsFolderPath() const {
+    return m_projectsFolderRoot;
+}
+
+double QmlBackend::themeHue() const {
+    return m_themeHue;
+}
+
+void QmlBackend::setThemeHue(const double value) {
+    const double normalized = std::fmod(value, 360.0);
+    const double wrapped = normalized < 0.0 ? normalized + 360.0 : normalized;
+    if (qFuzzyCompare(m_themeHue + 1.0, wrapped + 1.0)) {
+        return;
+    }
+
+    m_themeHue = wrapped;
+    persistAppSettings();
+    logConfigChange(QStringLiteral("theme hue set to %1").arg(wrapped, 0, 'f', 0));
+    emit themeHueChanged();
+}
+
+bool QmlBackend::launchAtStartup() const {
+    return m_launchAtStartup;
+}
+
+void QmlBackend::setLaunchAtStartup(const bool value) {
+    if (m_launchAtStartup == value) {
+        return;
+    }
+
+    m_launchAtStartup = value;
+    PlatformAgent::setLaunchAtStartup(value);
+    persistAppSettings();
+    logConfigChange(value ? QStringLiteral("launch at startup enabled")
+                          : QStringLiteral("launch at startup disabled"));
+    emit launchAtStartupChanged();
+}
+
+bool QmlBackend::launchAtStartupSupported() const {
+    return PlatformAgent::isLaunchAtStartupSupported();
+}
+
+int QmlBackend::snapshotRetention() const {
+    return m_snapshotRetention;
+}
+
+void QmlBackend::setSnapshotRetention(int value) {
+    const int clamped = std::clamp(value, 1, 50);
+    if (m_snapshotRetention == clamped) {
+        return;
+    }
+
+    m_snapshotRetention = clamped;
+    applySnapshotRetentionToServices();
+    persistAppSettings();
+    logConfigChange(QStringLiteral("snapshot retention set to %1").arg(clamped));
+    emit snapshotRetentionChanged();
+}
+
+bool QmlBackend::notificationsEnabled() const {
+    return m_notificationsEnabled;
+}
+
+void QmlBackend::setNotificationsEnabled(const bool value) {
+    if (m_notificationsEnabled == value) {
+        return;
+    }
+
+    m_notificationsEnabled = value;
+    persistAppSettings();
+    logConfigChange(value ? QStringLiteral("save notifications enabled")
+                          : QStringLiteral("save notifications disabled"));
+    emit notificationsEnabledChanged();
+}
+
+QString QmlBackend::colorSchemeMode() const {
+    return colorSchemeModeToString(m_colorSchemeMode);
+}
+
+void QmlBackend::setColorSchemeMode(const QString& value) {
+    const ColorSchemeMode nextMode = colorSchemeModeFromString(value);
+    if (nextMode == m_colorSchemeMode) {
+        return;
+    }
+
+    m_colorSchemeMode = nextMode;
+    persistAppSettings();
+    logConfigChange(QStringLiteral("appearance set to %1").arg(colorSchemeMode()));
+    emit colorSchemeModeChanged();
+}
+
+void QmlBackend::applySnapshotRetentionToServices() {
+    for (const std::unique_ptr<SnapshotService>& service : m_snapshotServices) {
+        if (service) {
+            service->setUncompressedRecentVersions(m_snapshotRetention);
+        }
+    }
+}
+
+QmlBackend::SortMode QmlBackend::sortModeFromString(const QString& value) const {
+    const QString lowered = value.trimmed().toLower();
+    return lowered == AppStrings::SortLastOpened.toLower() ? SortMode::LastOpened : SortMode::Name;
+}
+
+QmlBackend::LogLevel QmlBackend::logLevelFromString(const QString& value) const {
+    const QString lowered = value.trimmed().toLower();
+    return lowered == AppStrings::LogLevelDebug.toLower() ? LogLevel::Debug : LogLevel::Info;
+}
+
+QmlBackend::ColorSchemeMode QmlBackend::colorSchemeModeFromString(const QString& value) const {
+    const QString lowered = value.trimmed().toLower();
+    if (lowered == AppStrings::ColorSchemeLight.toLower()) {
+        return ColorSchemeMode::Light;
+    }
+    if (lowered == AppStrings::ColorSchemeDark.toLower()) {
+        return ColorSchemeMode::Dark;
+    }
+    return ColorSchemeMode::System;
+}
+
+QString QmlBackend::colorSchemeModeToString(const ColorSchemeMode mode) const {
+    switch (mode) {
+    case ColorSchemeMode::Light:
+        return AppStrings::ColorSchemeLight;
+    case ColorSchemeMode::Dark:
+        return AppStrings::ColorSchemeDark;
+    case ColorSchemeMode::System:
+    default:
+        return AppStrings::ColorSchemeSystem;
+    }
+}
+
+bool QmlBackend::resetConfig() {
+    cancelProjectScan();
+    stopMonitoring();
+
+    const QString configDir = ProjectRegistry::appConfigDirectory();
+    if (!configDir.isEmpty()) {
+        QFile::remove(QDir(configDir).filePath(QStringLiteral("config.json")));
+        QFile::remove(QDir(configDir).filePath(QStringLiteral("projects.json")));
+    }
+
+    if (PlatformAgent::isLaunchAtStartupSupported()) {
+        PlatformAgent::setLaunchAtStartup(false);
+    }
+
+    m_projectsFolderRoot.clear();
+    m_activeScanFolder.clear();
+    m_projectRoot.clear();
+    m_discoveredProjects.clear();
+    m_visibleProjectIndexes.clear();
+    m_projects.clear();
+    m_activityAll.clear();
+    m_activity.clear();
+    m_activityLevels.clear();
+    m_searchText.clear();
+    m_selectedProjectIndex = -1;
+    m_selectedProjectNote.clear();
+    m_projectNotes.clear();
+    m_lastOpenedAtByProjectRoot.clear();
+    m_isScanningProjects = false;
+
+    m_themeHue = 280.0;
+    m_sortMode = SortMode::Name;
+    m_logLevel = LogLevel::Info;
+    m_snapshotRetention = BackupTemplates::kUncompressedRecentVersions;
+    m_notificationsEnabled = true;
+    m_colorSchemeMode = ColorSchemeMode::System;
+    m_launchAtStartup = false;
+
+    m_statusMessage = AppStrings::StatusSelectProjectsFolder;
+
+    emit projectsChanged();
+    emit projectsFolderChanged();
+    emit isScanningProjectsChanged();
+    emit activityChanged();
+    emit statusMessageChanged();
+    emit searchTextChanged();
+    emit selectedProjectIndexChanged();
+    emit selectedProjectNoteChanged();
+    emit selectedProjectVersionGraphChanged();
+    emit themeHueChanged();
+    emit sortModeChanged();
+    emit logLevelChanged();
+    emit snapshotRetentionChanged();
+    emit notificationsEnabledChanged();
+    emit colorSchemeModeChanged();
+    emit launchAtStartupChanged();
+    emit configReset();
+
+    logConfigChange(QStringLiteral("configuration reset to defaults"));
+    return true;
+}
+
+bool QmlBackend::exportActivityLog(const QUrl& fileUrl) {
+    QString localPath = fileUrl.toLocalFile();
+    if (localPath.isEmpty() && fileUrl.isLocalFile()) {
+        localPath = fileUrl.path();
+    }
+    if (localPath.isEmpty()) {
+        return false;
+    }
+
+    QSaveFile file(localPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        return false;
+    }
+
+    QTextStream stream(&file);
+    stream.setEncoding(QStringConverter::Utf8);
+    for (const QString& line : m_activityAll) {
+        stream << line << '\n';
+    }
+
+    if (!file.commit()) {
+        return false;
+    }
+
+    appendActivity(QStringLiteral("[%1] exported activity log to %2").arg(nowHuman(), localPath));
+    return true;
+}
+
+QUrl QmlBackend::defaultActivityLogExportFolderUrl() const {
+    const QString documentsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (documentsPath.isEmpty()) {
+        return QUrl::fromLocalFile(QDir::homePath());
+    }
+    return QUrl::fromLocalFile(documentsPath);
+}
+
+QUrl QmlBackend::defaultActivityLogExportFileUrl() const {
+    const QString timestamp = QDateTime::currentDateTime().toLocalTime()
+                                  .toString(QStringLiteral("yyyy-MM-dd HH-mm-ss"));
+    const QString fileName = QStringLiteral("Immersion Logs at %1.log").arg(timestamp);
+    const QUrl folderUrl = defaultActivityLogExportFolderUrl();
+    const QString folderPath = folderUrl.toLocalFile();
+    return QUrl::fromLocalFile(QDir(folderPath).filePath(fileName));
+}
+
+void QmlBackend::persistAppSettings() {
+    if (!m_projectRegistry) {
+        return;
+    }
+
+    AppSettings settings;
+    settings.themeHue = m_themeHue;
+    settings.launchAtStartup = m_launchAtStartup;
+    settings.sortMode = sortMode();
+    settings.logLevel = logLevel();
+    settings.snapshotRetention = m_snapshotRetention;
+    settings.notificationsEnabled = m_notificationsEnabled;
+    settings.colorSchemeMode = colorSchemeMode();
+    m_projectRegistry->saveAppSettings(settings);
+}
+
 bool QmlBackend::isScanningProjects() const {
     return m_isScanningProjects;
 }
@@ -250,6 +530,8 @@ void QmlBackend::setLogLevel(const QString& value) {
     }
 
     m_logLevel = nextLevel;
+    persistAppSettings();
+    logConfigChange(QStringLiteral("activity log level set to %1").arg(logLevel()));
     emit logLevelChanged();
     rebuildVisibleActivity();
 }
@@ -280,6 +562,8 @@ void QmlBackend::setSortMode(const QString& value) {
     }
 
     m_sortMode = nextMode;
+    persistAppSettings();
+    logConfigChange(QStringLiteral("default sort mode set to %1").arg(sortMode()));
     emit sortModeChanged();
     rebuildVisibleProjects();
 }
@@ -357,6 +641,7 @@ void QmlBackend::loadProjectsFromFolder(const QString& folderPath) {
     m_projectsFolderRoot = cleanPath;
     m_activeScanFolder = cleanPath;
     emit projectsFolderChanged();
+    logConfigChange(QStringLiteral("projects folder set to %1").arg(cleanPath));
     m_lastScanStatusDirectories = 0;
     m_scanCancelFlag = std::make_shared<std::atomic<bool>>(false);
 
@@ -1110,7 +1395,26 @@ bool QmlBackend::deleteVersionById(const QString& versionId) {
 void QmlBackend::appendActivityWithLevel(const QString& line, LogLevel level) {
     m_activityAll.append(line);
     m_activityLevels.append(level);
+    trimActivityLog();
     rebuildVisibleActivity();
+}
+
+void QmlBackend::logConfigChange(const QString& detail) {
+    appendDebugActivity(QStringLiteral("[%1] config: %2").arg(nowHuman(), detail));
+}
+
+void QmlBackend::trimActivityLog() {
+    if (m_activityAll.size() <= kMaxActivityLines) {
+        return;
+    }
+
+    const int excess = m_activityAll.size() - kMaxActivityLines;
+    m_activityAll.erase(m_activityAll.begin(), m_activityAll.begin() + excess);
+    if (m_activityLevels.size() > excess) {
+        m_activityLevels.erase(m_activityLevels.begin(), m_activityLevels.begin() + excess);
+    } else {
+        m_activityLevels.clear();
+    }
 }
 
 void QmlBackend::appendActivity(const QString& line) {
@@ -1334,6 +1638,8 @@ bool QmlBackend::initMonitoringForProject(const DiscoveredProject& project) {
                                 .arg(nowHuman(), project.rootPath));
         return false;
     }
+
+    snapshotService->setUncompressedRecentVersions(m_snapshotRetention);
 
     connect(snapshotService.get(), &SnapshotService::snapshotCreated, this,
             [this, projectRoot = project.rootPath](const QString& message) {

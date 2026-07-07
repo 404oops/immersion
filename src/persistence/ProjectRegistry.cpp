@@ -199,36 +199,97 @@ bool ProjectRegistry::saveProjectNote(const QString& rootPath, const QString& no
     return writeJsonAtomically(dataFilePath(), root);
 }
 
+namespace {
+
+QString configFilePathForApp() {
+    return QDir(ProjectRegistry::appConfigDirectory()).filePath(QStringLiteral("config.json"));
+}
+
+QJsonObject readConfigRoot() {
+    QJsonObject root;
+    const QString configFilePath = configFilePathForApp();
+    QFile configFile(configFilePath);
+    if (!configFile.exists() || !configFile.open(QIODevice::ReadOnly)) {
+        return root;
+    }
+
+    const QJsonDocument doc = QJsonDocument::fromJson(configFile.readAll());
+    configFile.close();
+    if (doc.isObject()) {
+        root = doc.object();
+    }
+    return root;
+}
+
+} // namespace
+
 bool ProjectRegistry::saveProjectsFolder(const QString& folderPath) {
     const QString dirPath = appConfigDirectory();
     if (dirPath.isEmpty() || !QDir().mkpath(dirPath)) {
         return false;
     }
 
-    const QString configFilePath = QDir(dirPath).filePath("config.json");
-    QFile configFile(configFilePath);
-
-    QJsonObject root;
-    if (configFile.exists()) {
-        if (!configFile.open(QIODevice::ReadOnly)) {
-            return false;
-        }
-
-        const QJsonDocument existingDoc = QJsonDocument::fromJson(configFile.readAll());
-        configFile.close();
-        if (existingDoc.isObject()) {
-            root = existingDoc.object();
-        }
-    }
-
+    QJsonObject root = readConfigRoot();
     root.insert("projects_folder", QDir::cleanPath(folderPath));
     root.insert("updated_utc", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
 
-    return writeJsonAtomically(configFilePath, root);
+    return writeJsonAtomically(configFilePathForApp(), root);
+}
+
+AppSettings ProjectRegistry::loadAppSettings() const {
+    AppSettings settings;
+    const QJsonObject root = readConfigRoot();
+    if (root.contains(QStringLiteral("theme_hue"))) {
+        settings.themeHue = root.value(QStringLiteral("theme_hue")).toDouble(settings.themeHue);
+    }
+    if (root.contains(QStringLiteral("launch_at_startup"))) {
+        settings.launchAtStartup = root.value(QStringLiteral("launch_at_startup")).toBool(false);
+    }
+    if (root.contains(QStringLiteral("sort_mode"))) {
+        settings.sortMode = root.value(QStringLiteral("sort_mode")).toString();
+    }
+    if (root.contains(QStringLiteral("log_level"))) {
+        settings.logLevel = root.value(QStringLiteral("log_level")).toString();
+    }
+    if (root.contains(QStringLiteral("snapshot_retention"))) {
+        settings.snapshotRetention = root.value(QStringLiteral("snapshot_retention")).toInt(settings.snapshotRetention);
+    }
+    if (root.contains(QStringLiteral("notifications_enabled"))) {
+        settings.notificationsEnabled = root.value(QStringLiteral("notifications_enabled")).toBool(true);
+    }
+    if (root.contains(QStringLiteral("color_scheme_mode"))) {
+        settings.colorSchemeMode = root.value(QStringLiteral("color_scheme_mode")).toString();
+    }
+    return settings;
+}
+
+bool ProjectRegistry::saveAppSettings(const AppSettings& settings) {
+    const QString dirPath = appConfigDirectory();
+    if (dirPath.isEmpty() || !QDir().mkpath(dirPath)) {
+        return false;
+    }
+
+    QJsonObject root = readConfigRoot();
+    root.insert(QStringLiteral("theme_hue"), settings.themeHue);
+    root.insert(QStringLiteral("launch_at_startup"), settings.launchAtStartup);
+    if (!settings.sortMode.isEmpty()) {
+        root.insert(QStringLiteral("sort_mode"), settings.sortMode);
+    }
+    if (!settings.logLevel.isEmpty()) {
+        root.insert(QStringLiteral("log_level"), settings.logLevel);
+    }
+    root.insert(QStringLiteral("snapshot_retention"), settings.snapshotRetention);
+    root.insert(QStringLiteral("notifications_enabled"), settings.notificationsEnabled);
+    if (!settings.colorSchemeMode.isEmpty()) {
+        root.insert(QStringLiteral("color_scheme_mode"), settings.colorSchemeMode);
+    }
+    root.insert(QStringLiteral("updated_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+
+    return writeJsonAtomically(configFilePathForApp(), root);
 }
 
 QString ProjectRegistry::loadProjectsFolder() const {
-    const QString configFilePath = QDir(appConfigDirectory()).filePath("config.json");
+    const QString configFilePath = configFilePathForApp();
     QFile configFile(configFilePath);
     if (!configFile.exists() || !configFile.open(QIODevice::ReadOnly)) {
         return {};

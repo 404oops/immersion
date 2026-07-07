@@ -13,7 +13,7 @@ Rectangle {
         id: theme
     }
 
-    signal chooseProjectFolderRequested
+    signal openSettingsRequested
 
     ColumnLayout {
         anchors.centerIn: parent
@@ -35,7 +35,7 @@ Rectangle {
             }
 
             Text {
-                text: "To start, pick a folder where all your project files sit, and we'll take care of the rest."
+                text: "Open Settings to choose the folder where all your project files sit, and we'll take care of the rest."
                 font.pixelSize: 16
                 color: theme.textSecondary
                 wrapMode: Text.Wrap
@@ -47,7 +47,7 @@ Rectangle {
 
         Button {
             id: button
-            text: "Open Projects Folder"
+            text: "Open Settings"
             Layout.fillWidth: true
             Layout.preferredHeight: 48
             font.pixelSize: 14
@@ -71,7 +71,7 @@ Rectangle {
                 verticalAlignment: Text.AlignVCenter
             }
 
-            onClicked: root.chooseProjectFolderRequested()
+            onClicked: root.openSettingsRequested()
         }
     }
 }
