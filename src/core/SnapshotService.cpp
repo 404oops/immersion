@@ -160,6 +160,10 @@ bool SnapshotService::createSnapshot(const FileEvent& event, bool isBaseline) {
         versionId = m_metadataStore.nextVersionIdForArtifact(artifact, branchBaseVersion);
         parentVersion = branchBaseVersion;
         m_activeGroupByArtifact.insert(artifact, ActiveGroup {event.scanSequence, versionId, parentVersion});
+
+        if (!isBaseline) {
+            emit saveRecorded(versionId, event.relativePath);
+        }
     }
 
     const bool appended = m_metadataStore.appendSnapshotEvent(

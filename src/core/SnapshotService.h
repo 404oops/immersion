@@ -29,6 +29,9 @@ public slots:
 
 signals:
     void snapshotCreated(const QString& message);
+    // Emitted once per user save (not baselines/seeds), including the first
+    // file of a grouped bundle save.
+    void saveRecorded(const QString& versionId, const QString& relativePath);
     void snapshotSkipped(const QString& reason);
     void snapshotError(const QString& error);
 

@@ -54,7 +54,7 @@ Rectangle {
             font.weight: Font.Medium
 
             background: Rectangle {
-                color: button.hovered || button.pressed ? theme.selection : theme.accent
+                color: button.hovered || button.pressed ? theme.buttonFillHover : theme.buttonFill
                 radius: 4
                 Behavior on color {
                     ColorAnimation {
@@ -65,7 +65,7 @@ Rectangle {
 
             contentItem: Text {
                 text: button.text
-                color: "white"
+                color: theme.buttonLabel
                 font: button.font
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter

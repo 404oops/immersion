@@ -11,8 +11,15 @@ ApplicationWindow {
     required property var backend
     width: 1100
     height: 720
-    visible: true
+    minimumWidth: 880
+    minimumHeight: 560
+    visible: false
     title: "Immersion"
+
+    onClosing: function (close) {
+        close.accepted = false
+        window.hide()
+    }
 
     FolderDialog {
         id: folderDialog
@@ -23,10 +30,9 @@ ApplicationWindow {
         }
     }
 
-    // Show onboarding only when nothing was discovered at all. The `projects`
-    // list is search-filtered, so it must not drive this (an unmatched search
-    // would otherwise kick the user back to the welcome screen).
-    readonly property bool isOnboarding: !window.backend.hasDiscoveredProjects
+    // Show onboarding only until the user picks a projects folder. While a NAS
+    // scan runs, keep the main view visible and populate the list incrementally.
+    readonly property bool isOnboarding: !window.backend.hasProjectsFolder
 
     function scrollActivityToBottom() {
         if (!mainView || !mainView.activityListView)
@@ -52,6 +58,7 @@ ApplicationWindow {
         anchors.fill: parent
         visible: !window.isOnboarding
         statusMessage: window.backend.statusMessage
+        isScanningProjects: window.backend.isScanningProjects
         projectsModel: window.backend.projects
         activityModel: window.backend.activity
         logLevel: window.backend.logLevel
@@ -83,6 +90,28 @@ ApplicationWindow {
         target: window.backend
         function onActivityChanged() {
             window.scrollActivityToBottom();
+        }
+    }
+
+    Theme {
+        id: windowTheme
+    }
+
+    // Full-window scrim behind the version manager (Overlay.modal ignores opacity).
+    Rectangle {
+        id: versionManagerScrim
+        parent: Overlay.overlay
+        anchors.fill: parent
+        color: windowTheme.modalScrim
+        opacity: versionManagerWindow.opened ? 1 : 0
+        visible: opacity > 0
+        z: versionManagerWindow.z - 1
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: 220
+                easing.type: Easing.OutCubic
+            }
         }
     }
 

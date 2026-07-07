@@ -22,6 +22,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <cstdint>
+
 #include <cstdio>
 #include <functional>
 
@@ -183,8 +185,27 @@ int main(int argc, char** argv) {
     backend.setLogLevel(QStringLiteral("debug")); // expose suppression events in activity
     backend.loadProjectsFromFolder(projectsDir.path());
 
+    const bool scanReady = waitFor([&]() {
+        return backend.hasDiscoveredProjects() && !backend.property("isScanningProjects").toBool();
+    }, 20000);
+    if (!scanReady) {
+        std::printf("FAIL  project scan never completed\n");
+        ++g_failed;
+        return 1;
+    }
+
     const QVariantList projects = backend.projects();
     check(projects.size() == 1, "discovery: exactly one project found (bundle dir, not its contents)");
+
+    const bool monitoringReady = waitFor([&]() {
+        const QVariantList versions = backend.getProjectVersions(0);
+        return versions.size() >= 1;
+    }, 20000);
+    if (!monitoringReady) {
+        std::printf("FAIL  monitoring baseline never seeded\n");
+        ++g_failed;
+        return 1;
+    }
 
     QVariantList versions = backend.getProjectVersions(0);
     check(versions.size() == 1, "baseline: one grouped version seeded");
@@ -195,6 +216,20 @@ int main(int argc, char** argv) {
     }
     check(!stagingContainsSuffix(projectRoot, QStringLiteral(".wav")),
           "baseline: no audio staged");
+
+    // ---- Event-triggered rediscovery of a new project ----
+    const QString projectRoot2 = QDir(projectsDir.path()).filePath("OtherSong");
+    const QString bundleRoot2 = QDir(projectRoot2).filePath("Another.logicx");
+    const QString projectDataPath2 = QDir(bundleRoot2).filePath("Alternatives/000/ProjectData");
+    const QString plistPath2 = QDir(bundleRoot2).filePath("Metadata.plist");
+    check(writeFile(projectDataPath2, "other projectdata v1")
+              && writeFile(plistPath2, "other plist v1"),
+          "rediscovery: second fake .logicx bundle created");
+
+    const bool secondProjectAppeared = waitFor([&]() {
+        return backend.projects().size() == 2;
+    }, 15000);
+    check(secondProjectAppeared, "rediscovery: watcher detected new project folder");
 
     // ---- Simulated saves through the real watcher ----
     // 7 saves -> 8 versions total; versions 1..3 must lose their staged

@@ -1,12 +1,18 @@
-#include <QGuiApplication>
+#include <QApplication>
 #include <QQmlApplicationEngine>
+#include <QQuickStyle>
 #include <QVariant>
 
 #include "core/FileEvent.h"
 #include "ui/QmlBackend.h"
+#include "ui/TrayController.h"
 
 int main(int argc, char *argv[]) {
-    QGuiApplication app(argc, argv);
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
+
+    QApplication app(argc, argv);
+    QApplication::setQuitOnLastWindowClosed(false);
+
     app.setOrganizationName("musit");
     app.setOrganizationDomain("musit.app");
     app.setApplicationName("musit");
@@ -20,7 +26,6 @@ int main(int argc, char *argv[]) {
     });
     engine.load(QUrl(QStringLiteral("qrc:/src/qml/App.qml")));
 
-    // Compatibility fallback in case resource prefix/path changes.
     if (engine.rootObjects().isEmpty()) {
         engine.load(QUrl(QStringLiteral("qrc:/src/qml/Main.qml")));
     }
@@ -28,6 +33,9 @@ int main(int argc, char *argv[]) {
     if (engine.rootObjects().isEmpty()) {
         return -1;
     }
+
+    TrayController tray;
+    tray.attach(&backend, &engine);
 
     return app.exec();
 }

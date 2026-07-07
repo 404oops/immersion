@@ -18,6 +18,7 @@ Rectangle {
 
     // Semantic hooks for app logic.
     property string statusMessage: "Please select the folder where all of your project files sit."
+    property bool isScanningProjects: false
     property var projectsModel: []
     property var activityModel: []
     property alias activityListView: activityList
@@ -178,11 +179,12 @@ Rectangle {
                 Layout.fillWidth: true
             }
 
-            Button {
+            ActionButton {
                 id: chooseProjectFolderButton
                 objectName: "chooseProjectFolderButton"
                 text: "Open Projects"
                 Layout.preferredHeight: 36
+                Layout.preferredWidth: 160
 
                 Connections {
                     target: chooseProjectFolderButton
@@ -245,7 +247,7 @@ Rectangle {
                                 color: theme.textSecondary
                             }
 
-                            ComboBox {
+                            ThemedComboBox {
                                 id: sortCombo
                                 objectName: "sortModeComboBox"
                                 model: ["Name", "Last Opened"]
@@ -262,9 +264,8 @@ Rectangle {
                         }
                     }
 
-                    TextField {
+                    ThemedTextField {
                         id: projectSearchField
-                        renderType: Text.NativeRendering
                         objectName: "projectSearchField"
                         placeholderText: "Search projects..."
                         Layout.fillWidth: true
@@ -285,116 +286,129 @@ Rectangle {
                             id: projectList
                             objectName: "projectList"
                             anchors.fill: parent
+                            anchors.rightMargin: projectListScrollBar.visible ? projectListScrollBar.implicitWidth : 0
                             model: root.hasProjects ? root.projectsModel : (root.useDesignerPlaceholders ? placeholderProjectsModel : [])
                             clip: true
                             spacing: 8
                             boundsBehavior: Flickable.StopAtBounds
-                            ScrollBar.vertical: ScrollBar {
-                                id: projectListScrollBar
-                                policy: ScrollBar.AsNeeded
-                            }
-                            rightPadding: projectListScrollBar.visible ? projectListScrollBar.implicitWidth + 6 : 6
+                            ScrollBar.vertical: projectListScrollBar
 
                             delegate: Rectangle {
-                                id: projectDelegate
-                                objectName: "projectItem"
-                                required property int index
-                                required property var modelData
-                                width: ListView.view.width - ListView.view.leftPadding - ListView.view.rightPadding
-                                height: 86
-                                radius: 6
-                                color: projectDelegate.index % 2 === 0 ? theme.rowEven : theme.rowOdd
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 10
-
-                                    Rectangle {
-                                        Layout.preferredWidth: 48
-                                        Layout.preferredHeight: 48
-                                        Layout.alignment: Qt.AlignVCenter
-                                        radius: 6
-                                        color: theme.accent
-                                        Label {
-                                            anchors.centerIn: parent
-                                            text: (projectDelegate.modelData && projectDelegate.modelData.type) ? projectDelegate.modelData.type : "DAW"
-                                            color: "white"
-                                            font.pixelSize: 10
-                                            horizontalAlignment: Text.AlignHCenter
-                                            wrapMode: Text.WordWrap
-                                            width: 42
-                                        }
-                                    }
-
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        Layout.alignment: Qt.AlignVCenter
-                                        spacing: 2
-
-                                        Label {
-                                            text: projectDelegate.modelData && projectDelegate.modelData.name ? projectDelegate.modelData.name : ("Project " + (projectDelegate.index + 1))
-                                            color: theme.textPrimary
-                                            font.bold: true
-                                        }
-
-                                        Label {
-                                            text: "Project file: " + ((projectDelegate.modelData && projectDelegate.modelData.file) ? projectDelegate.modelData.file : "example.bwproject")
-                                            color: theme.textSecondary
-                                        }
-
-                                        Label {
-                                            text: "Path: " + ((projectDelegate.modelData && projectDelegate.modelData.path) ? projectDelegate.modelData.path : "~/Music/Projects")
-                                            color: theme.textMuted
-                                            elide: Text.ElideRight
-                                            Layout.fillWidth: true
-                                        }
-                                    }
+                                    id: projectDelegate
+                                    objectName: "projectItem"
+                                    required property int index
+                                    required property var modelData
+                                    width: ListView.view.width
+                                    height: 86
+                                    radius: 6
+                                    color: projectDelegate.index % 2 === 0 ? theme.rowEven : theme.rowOdd
 
                                     RowLayout {
-                                        Layout.alignment: Qt.AlignVCenter
-                                        Layout.minimumWidth: 196
-                                        spacing: 8
+                                        anchors.fill: parent
+                                        anchors.margins: 8
+                                        spacing: 10
 
-                                        Button {
-                                            id: openProjectButton
-                                            objectName: "openProjectButton"
-                                            text: "Open"
-                                            Layout.preferredWidth: 90
-                                            Layout.preferredHeight: 34
-
-                                            Connections {
-                                                target: openProjectButton
-                                                function onClicked() {
-                                                    root.openProjectRequested(projectDelegate.index);
-                                                }
+                                        Rectangle {
+                                            Layout.preferredWidth: 48
+                                            Layout.preferredHeight: 48
+                                            Layout.alignment: Qt.AlignVCenter
+                                            radius: 6
+                                            color: theme.accent
+                                            Label {
+                                                anchors.centerIn: parent
+                                                text: (projectDelegate.modelData && projectDelegate.modelData.type) ? projectDelegate.modelData.type : "DAW"
+                                                color: "white"
+                                                font.pixelSize: 10
+                                                horizontalAlignment: Text.AlignHCenter
+                                                wrapMode: Text.WordWrap
+                                                width: 42
                                             }
                                         }
 
-                                        Button {
-                                            id: manageProjectButton
-                                            objectName: "manageProjectButton"
-                                            text: "Manage"
-                                            Layout.preferredWidth: 90
-                                            Layout.preferredHeight: 34
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            Layout.alignment: Qt.AlignVCenter
+                                            spacing: 2
 
-                                            Connections {
-                                                target: manageProjectButton
-                                                function onClicked() {
-                                                    root.manageProjectRequested(projectDelegate.index);
+                                            Label {
+                                                text: projectDelegate.modelData && projectDelegate.modelData.name ? projectDelegate.modelData.name : ("Project " + (projectDelegate.index + 1))
+                                                color: theme.textPrimary
+                                                font.bold: true
+                                            }
+
+                                            Label {
+                                                text: "Project file: " + ((projectDelegate.modelData && projectDelegate.modelData.file) ? projectDelegate.modelData.file : "example.bwproject")
+                                                color: theme.textSecondary
+                                            }
+
+                                            Label {
+                                                text: "Path: " + ((projectDelegate.modelData && projectDelegate.modelData.path) ? projectDelegate.modelData.path : "~/Music/Projects")
+                                                color: theme.textMuted
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+
+                                        // Full-height action column beside project metadata.
+                                        Item {
+                                            Layout.preferredWidth: 210
+                                            Layout.fillHeight: true
+                                            Layout.alignment: Qt.AlignVCenter
+
+                                            Row {
+                                                anchors.fill: parent
+                                                spacing: 8
+
+                                                ActionButton {
+                                                    id: openProjectButton
+                                                    objectName: "openProjectButton"
+                                                    width: (parent.width - parent.spacing) / 2
+                                                    height: parent.height
+                                                    text: "Open"
+
+                                                    Connections {
+                                                        target: openProjectButton
+                                                        function onClicked() {
+                                                            root.openProjectRequested(projectDelegate.index);
+                                                        }
+                                                    }
+                                                }
+
+                                                ActionButton {
+                                                    id: manageProjectButton
+                                                    objectName: "manageProjectButton"
+                                                    width: (parent.width - parent.spacing) / 2
+                                                    height: parent.height
+                                                    text: "Manage"
+
+                                                    Connections {
+                                                        target: manageProjectButton
+                                                        function onClicked() {
+                                                            root.manageProjectRequested(projectDelegate.index);
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
+
+                        ScrollBar {
+                            id: projectListScrollBar
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.rightMargin: -4
+                            policy: ScrollBar.AsNeeded
+                            orientation: Qt.Vertical
                         }
 
                         Label {
                             objectName: "noProjectsLoadedLabel"
                             anchors.centerIn: parent
                             visible: !root.useDesignerPlaceholders && !root.hasProjects
-                            text: "No projects loaded"
+                            text: root.isScanningProjects ? "Scanning for projects…" : "No projects loaded"
                             color: theme.textStatus
                             font.pixelSize: 20
                             font.bold: true
@@ -433,7 +447,7 @@ Rectangle {
                             color: theme.textSecondary
                         }
 
-                        ComboBox {
+                        ThemedComboBox {
                             id: activityLogLevelCombo
                             objectName: "activityLogLevelComboBox"
                             model: ["Info", "Debug"]
@@ -449,26 +463,37 @@ Rectangle {
                         }
                     }
 
-                    ListView {
-                        id: activityList
-                        objectName: "activityList"
+                    Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        model: root.activityModel
-                        clip: true
-                        boundsBehavior: Flickable.StopAtBounds
-                        ScrollBar.vertical: ScrollBar {
-                            id: activityListScrollBar
-                            policy: ScrollBar.AsNeeded
-                        }
-                        rightPadding: activityListScrollBar.visible ? activityListScrollBar.implicitWidth + 6 : 6
 
-                        delegate: Label {
-                            required property var modelData
-                            text: modelData
-                            color: theme.textActivity
-                            elide: Text.ElideRight
-                            width: ListView.view.width - ListView.view.leftPadding - ListView.view.rightPadding
+                        ListView {
+                            id: activityList
+                            objectName: "activityList"
+                            anchors.fill: parent
+                            anchors.rightMargin: activityListScrollBar.visible ? activityListScrollBar.implicitWidth : 0
+                            model: root.activityModel
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            ScrollBar.vertical: activityListScrollBar
+
+                            delegate: Label {
+                                required property var modelData
+                                text: modelData
+                                color: theme.textActivity
+                                elide: Text.ElideRight
+                                width: ListView.view.width
+                            }
+                        }
+
+                        ScrollBar {
+                            id: activityListScrollBar
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.rightMargin: -4
+                            policy: ScrollBar.AsNeeded
+                            orientation: Qt.Vertical
                         }
                     }
                 }

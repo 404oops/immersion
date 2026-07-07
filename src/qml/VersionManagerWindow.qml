@@ -18,14 +18,72 @@ Popup {
     padding: 0
     closePolicy: Popup.CloseOnEscape
 
+    transformOrigin: Item.Center
+    dim: false
+
+    enter: Transition {
+        ParallelAnimation {
+            NumberAnimation {
+                property: "opacity"
+                from: 0.0
+                to: 1.0
+                duration: 220
+                easing.type: Easing.OutCubic
+            }
+            NumberAnimation {
+                property: "scale"
+                from: 0.97
+                to: 1.0
+                duration: 220
+                easing.type: Easing.OutCubic
+            }
+        }
+    }
+
+    exit: Transition {
+        ParallelAnimation {
+            NumberAnimation {
+                property: "opacity"
+                from: 1.0
+                to: 0.0
+                duration: 160
+                easing.type: Easing.InCubic
+            }
+            NumberAnimation {
+                property: "scale"
+                from: 1.0
+                to: 0.985
+                duration: 160
+                easing.type: Easing.InCubic
+            }
+        }
+    }
+
+    readonly property int popupMinWidth: 720
+    readonly property int popupMinHeight: 480
+    readonly property int popupMaxWidth: 1120
+    readonly property int popupMaxHeight: 700
+
     anchors.centerIn: parent
-    width: parent ? Math.min(1120, Math.max(900, parent.width - 48)) : 1120
-    height: parent ? Math.min(700, Math.max(560, parent.height - 48)) : 700
+    width: {
+        if (!parent)
+            return popupMaxWidth;
+        const available = Math.max(0, parent.width - 48);
+        const preferred = Math.min(popupMaxWidth, Math.max(900, available));
+        return Math.min(available, Math.max(popupMinWidth, preferred));
+    }
+    height: {
+        if (!parent)
+            return popupMaxHeight;
+        const available = Math.max(0, parent.height - 48);
+        const preferred = Math.min(popupMaxHeight, Math.max(560, available));
+        return Math.min(available, Math.max(popupMinHeight, preferred));
+    }
 
     background: Rectangle {
-        color: theme.panelSurfaceAlt
+        color: theme.vmPanel
         radius: 10
-        border.color: theme.border
+        border.color: theme.vmBorder
         border.width: 1
     }
 
@@ -34,15 +92,15 @@ Popup {
         let row = 0;
 
         // 1x2x2x2x2: one root, each level branches by 2 for four levels.
-        const depthX = [80, 240, 400, 560, 720];
-        const rowStep = 70;
+        const depthX = [88, 264, 440, 616, 792];
+        const rowStep = 92;
 
         graph.push({
             id: "1",
             label: "v1",
             fullLabel: "v1",
             x: depthX[0],
-            y: 60 + row * rowStep,
+            y: 72 + row * rowStep,
             parentId: "",
             note: "root 1",
             timestamp: "preview",
@@ -60,7 +118,7 @@ Popup {
                     label: "." + childIndex,
                     fullLabel: "v" + childId,
                     x: depthX[depth],
-                    y: 60 + row * rowStep,
+                    y: 72 + row * rowStep,
                     parentId: parentId,
                     note: "node " + childId,
                     timestamp: "preview",
@@ -115,6 +173,17 @@ Popup {
         return null;
     }
 
+    function ancestorIdSet(versionId) {
+        const ids = {};
+        let currentId = versionId;
+        while (currentId) {
+            ids[currentId] = true;
+            const node = nodeById(currentId);
+            currentId = node && node.parentId ? node.parentId : "";
+        }
+        return ids;
+    }
+
     function refreshVersionGraph() {
         versionGraph = hasBackend ? root.backend.selectedProjectVersionGraph : designGraph;
         if (versionGraph.length === 0) {
@@ -141,15 +210,18 @@ Popup {
                 maxY = Math.max(maxY, y);
             }
 
-            const nodeRadius = 20;
-            const labelPad = 20;
-            const viewportPad = 24;
-            graphExtentWidth = (maxX - minX) + (nodeRadius + viewportPad) * 2;
-            graphExtentHeight = (maxY - minY) + (nodeRadius + labelPad + viewportPad) * 2;
+            const nodeHalfW = 38;
+            const nodeHalfH = 23;
+            const labelPad = 28;
+            const viewportPad = 32;
+            graphExtentWidth = (maxX - minX) + (nodeHalfW + viewportPad) * 2;
+            graphExtentHeight = (maxY - minY) + (nodeHalfH + labelPad + viewportPad) * 2;
         }
 
         graphCanvas.requestPaint();
     }
+
+    onSelectedVersionIdChanged: graphCanvas.requestPaint()
 
     function openForProject(index) {
         if (!hasBackend)
@@ -188,6 +260,36 @@ Popup {
         modal: true
         title: "Delete Version"
         standardButtons: Dialog.Ok | Dialog.Cancel
+        transformOrigin: Item.Center
+
+        enter: Transition {
+            ParallelAnimation {
+                NumberAnimation {
+                    property: "opacity"
+                    from: 0.0
+                    to: 1.0
+                    duration: 180
+                    easing.type: Easing.OutCubic
+                }
+                NumberAnimation {
+                    property: "scale"
+                    from: 0.98
+                    to: 1.0
+                    duration: 180
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+
+        exit: Transition {
+            NumberAnimation {
+                property: "opacity"
+                from: 1.0
+                to: 0.0
+                duration: 120
+                easing.type: Easing.InCubic
+            }
+        }
 
         Label {
             text: "Delete version v" + root.selectedVersionId + "?\n\nThis removes its snapshot from .musit and cannot be undone."
@@ -214,12 +316,12 @@ Popup {
                 text: "Version Manager"
                 font.pixelSize: 19
                 font.bold: true
-                color: theme.textPrimary
+                color: theme.vmTextPrimary
             }
             Item {
                 Layout.fillWidth: true
             }
-            Button {
+            PanelButton {
                 text: "Close"
                 onClicked: root.close()
             }
@@ -233,10 +335,18 @@ Popup {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: theme.graphSurface
+                color: theme.vmGraph
                 radius: 8
                 border.width: 1
-                border.color: theme.border
+                border.color: theme.vmBorder
+
+                Label {
+                    anchors.centerIn: parent
+                    visible: root.versionGraph.length === 0
+                    text: "No versions yet"
+                    color: theme.vmTextMeta
+                    font.pixelSize: 15
+                }
 
                 Flickable {
                     id: graphFlick
@@ -265,11 +375,48 @@ Popup {
                         Canvas {
                             id: graphCanvas
                             anchors.fill: parent
+
                             onPaint: {
                                 const ctx = getContext("2d");
                                 ctx.reset();
-                                ctx.strokeStyle = theme.graphLink;
-                                ctx.lineWidth = 2;
+
+                                const gridStep = 28;
+                                ctx.fillStyle = theme.vmGraphGrid;
+                                for (let gx = gridStep; gx < width; gx += gridStep) {
+                                    for (let gy = gridStep; gy < height; gy += gridStep) {
+                                        ctx.beginPath();
+                                        ctx.arc(gx, gy, 1.1, 0, Math.PI * 2);
+                                        ctx.fill();
+                                    }
+                                }
+
+                                const halfW = 38;
+                                const halfH = 23;
+                                const ancestors = ancestorIdSet(root.selectedVersionId);
+
+                                function drawLink(parent, child, highlighted) {
+                                    const px = parent.x;
+                                    const py = parent.y;
+                                    const cx = child.x;
+                                    const cy = child.y;
+                                    const x1 = px + halfW;
+                                    const y1 = py;
+                                    const x2 = cx - halfW;
+                                    const y2 = cy;
+                                    const midX = x1 + (x2 - x1) * 0.5;
+
+                                    ctx.beginPath();
+                                    ctx.moveTo(x1, y1);
+                                    ctx.lineTo(midX, y1);
+                                    ctx.lineTo(midX, y2);
+                                    ctx.lineTo(x2, y2);
+                                    ctx.strokeStyle = highlighted ? theme.vmGraphLinkActive : theme.vmGraphLink;
+                                    ctx.lineWidth = highlighted ? 2.5 : 1.75;
+                                    ctx.lineCap = "round";
+                                    ctx.lineJoin = "round";
+                                    ctx.stroke();
+                                }
+
                                 for (let i = 0; i < root.versionGraph.length; ++i) {
                                     const node = root.versionGraph[i];
                                     if (!node.parentId)
@@ -277,58 +424,24 @@ Popup {
                                     const parent = root.nodeById(node.parentId);
                                     if (!parent)
                                         continue;
-                                    ctx.beginPath();
-                                    ctx.moveTo(parent.x, parent.y);
-                                    const midX = parent.x + (node.x - parent.x) * 0.55;
-                                    ctx.bezierCurveTo(midX, parent.y, midX, node.y, node.x, node.y);
-                                    ctx.stroke();
+                                    const highlighted = ancestors[node.parentId] && ancestors[node.id];
+                                    drawLink(parent, node, highlighted);
                                 }
                             }
                         }
 
                         Repeater {
                             model: root.versionGraph
-                            delegate: Item {
-                                id: nodeItem
+                            delegate: VersionGraphNode {
                                 required property var modelData
-                                x: nodeItem.modelData.x - 20
-                                y: nodeItem.modelData.y - 20
-                                width: 40
-                                height: 40
 
-                                Rectangle {
-                                    anchors.fill: parent
-                                    radius: 20
-                                    color: root.selectedVersionId === nodeItem.modelData.id ? theme.selection : (nodeItem.modelData.isCurrent ? theme.success : theme.accent)
-                                    border.color: nodeItem.modelData.isCurrent ? theme.successBorder : theme.nodeBorder
-                                    border.width: root.selectedVersionId === nodeItem.modelData.id ? 2 : 1
-                                }
+                                node: modelData
+                                selected: root.selectedVersionId === modelData.id
+                                current: !!modelData.isCurrent
 
-                                Label {
-                                    anchors.centerIn: parent
-                                    text: nodeItem.modelData.label
-                                    color: "white"
-                                    font.bold: true
-                                    font.pixelSize: 11
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: {
-                                        root.selectedVersionId = nodeItem.modelData.id;
-                                        versionNoteEdit.text = nodeItem.modelData.note || "";
-                                    }
-                                }
-
-                                Label {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    anchors.top: parent.bottom
-                                    anchors.topMargin: 2
-                                    visible: nodeItem.modelData.isCurrent
-                                    text: "CURRENT"
-                                    color: theme.successStrong
-                                    font.pixelSize: 9
-                                    font.bold: true
+                                onClicked: {
+                                    root.selectedVersionId = modelData.id;
+                                    versionNoteEdit.text = modelData.note || "";
                                 }
                             }
                         }
@@ -339,10 +452,10 @@ Popup {
             Rectangle {
                 Layout.preferredWidth: 340
                 Layout.fillHeight: true
-                color: theme.sidePanelSurface
+                color: theme.vmSidePanel
                 radius: 8
                 border.width: 1
-                border.color: theme.border
+                border.color: theme.vmBorder
 
                 ScrollView {
                     id: sidePanelScroll
@@ -358,20 +471,20 @@ Popup {
 
                         Label {
                             text: "Project Note"
-                            color: theme.textPrimary
+                            color: theme.vmTextPrimary
                             font.bold: true
                         }
 
-                        TextArea {
+                        ThemedTextArea {
                             id: projectNoteEdit
                             Layout.fillWidth: true
                             Layout.preferredHeight: 110
                             placeholderText: "Write a note for this project..."
-                            wrapMode: TextEdit.Wrap
                         }
 
-                        Button {
+                        PanelButton {
                             text: "Save Project Note"
+                            variant: "primary"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 36
                             enabled: root.hasBackend
@@ -379,7 +492,7 @@ Popup {
                         }
 
                         Label {
-                            color: theme.textPrimary
+                            color: theme.vmTextPrimary
                             font.bold: true
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
@@ -395,23 +508,23 @@ Popup {
                         }
 
                         Label {
-                            color: theme.textMeta
+                            color: theme.vmTextMeta
                             Layout.fillWidth: true
                             wrapMode: Text.WordWrap
                             text: root.selectedVersionId && root.nodeById(root.selectedVersionId) ? ("Time: " + (root.nodeById(root.selectedVersionId).timestamp || "unknown") + "\nCurrent note: " + ((root.nodeById(root.selectedVersionId).note || "").length > 0 ? root.nodeById(root.selectedVersionId).note : "<none>")) : "Select a blob in the graph to inspect metadata."
                         }
 
-                        TextArea {
+                        ThemedTextArea {
                             id: versionNoteEdit
                             Layout.fillWidth: true
                             Layout.preferredHeight: 120
                             enabled: root.selectedVersionId.length > 0
                             placeholderText: "Write a note for selected version..."
-                            wrapMode: TextEdit.Wrap
                         }
 
-                        Button {
+                        PanelButton {
                             text: "Save Version Note"
+                            variant: "primary"
                             Layout.fillWidth: true
                             Layout.preferredHeight: 36
                             enabled: root.hasBackend && root.selectedVersionId.length > 0
@@ -425,8 +538,9 @@ Popup {
                             Layout.fillWidth: true
                             spacing: 8
 
-                            Button {
+                            PanelButton {
                                 text: "Open Version"
+                                variant: "primary"
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 36
                                 enabled: root.hasBackend && root.selectedVersionId.length > 0
@@ -438,8 +552,9 @@ Popup {
                                 }
                             }
 
-                            Button {
+                            PanelButton {
                                 text: "Delete"
+                                variant: "danger"
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 36
                                 enabled: root.hasBackend && root.selectedVersionId.length > 0

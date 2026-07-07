@@ -8,6 +8,7 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
@@ -89,12 +90,16 @@ find_package(Threads REQUIRED)
 # Only link what the C++ code uses. QtQuick/QtNetwork are pulled in at
 # runtime by the QML engine; linking extra modules here forces them (and
 # their plugins) into every deployed package.
-find_package(Qt6 REQUIRED COMPONENTS Qml Gui OpenGL)
+find_package(Qt6 REQUIRED COMPONENTS Qml Gui OpenGL QuickControls2 Widgets)
 
 add_executable(Immersion
     src/main.cpp
     src/ui/QmlBackend.cpp
     src/ui/QmlBackend.h
+    src/ui/TrayController.cpp
+    src/ui/TrayController.h
+    src/ui/PlatformAgent.h
+    src/ui/MacStatusBar.h
     src/core/BackupTemplate.cpp
     src/core/BackupTemplate.h
     src/core/FileEvent.h
@@ -105,6 +110,8 @@ add_executable(Immersion
     src/core/ProjectConfig.h
     src/core/ProjectDiscovery.cpp
     src/core/ProjectDiscovery.h
+    src/core/ProjectDiscoveryScanWorker.cpp
+    src/core/ProjectDiscoveryScanWorker.h
     src/core/SnapshotService.cpp
     src/core/SnapshotService.h
     src/core/VersionId.h
@@ -125,6 +132,12 @@ qt_add_resources(Immersion Immersion_qml
         src/qml/VersionManagerWindow.qml
         src/qml/MainView.ui.qml
         src/qml/OnboardingView.qml
+        src/qml/ActionButton.qml
+        src/qml/ThemedTextField.qml
+        src/qml/ThemedComboBox.qml
+        src/qml/PanelButton.qml
+        src/qml/ThemedTextArea.qml
+        src/qml/VersionGraphNode.qml
 )
 
 set_target_properties(Immersion PROPERTIES
@@ -141,7 +154,22 @@ target_link_libraries(Immersion
     Qt6::Qml
     Qt6::Gui
     Qt6::OpenGL
+    Qt6::QuickControls2
+    Qt6::Widgets
 )
+
+if(APPLE)
+    target_sources(Immersion PRIVATE
+        src/ui/PlatformAgent_mac.mm
+        src/ui/MacStatusBar.mm
+    )
+    target_link_libraries(Immersion
+        "-framework AppKit"
+        "-framework UserNotifications"
+    )
+else()
+    target_sources(Immersion PRIVATE src/ui/PlatformAgent.cpp)
+endif()
 
 set_target_properties(Immersion PROPERTIES INTERPROCEDURAL_OPTIMIZATION_MINSIZEREL ON)
 
@@ -185,6 +213,8 @@ if(MUSIT_BUILD_TESTS)
         src/core/ProjectConfig.h
         src/core/ProjectDiscovery.cpp
         src/core/ProjectDiscovery.h
+        src/core/ProjectDiscoveryScanWorker.cpp
+        src/core/ProjectDiscoveryScanWorker.h
         src/core/SnapshotService.cpp
         src/core/SnapshotService.h
         src/core/VersionId.h

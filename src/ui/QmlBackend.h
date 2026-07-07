@@ -5,12 +5,18 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QThread>
+#include <QTimer>
 #include <QVariantList>
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
 #include "../core/ProjectDiscovery.h"
+#include "../core/ProjectDiscoveryScanWorker.h"
+
+struct FileEvent;
 
 class ProjectRegistry;
 class ProjectDiscovery;
@@ -23,6 +29,8 @@ class QmlBackend : public QObject {
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(QVariantList projects READ projects NOTIFY projectsChanged)
     Q_PROPERTY(bool hasDiscoveredProjects READ hasDiscoveredProjects NOTIFY projectsChanged)
+    Q_PROPERTY(bool hasProjectsFolder READ hasProjectsFolder NOTIFY projectsFolderChanged)
+    Q_PROPERTY(bool isScanningProjects READ isScanningProjects NOTIFY isScanningProjectsChanged)
     Q_PROPERTY(QStringList activity READ activity NOTIFY activityChanged)
     Q_PROPERTY(QString logLevel READ logLevel WRITE setLogLevel NOTIFY logLevelChanged)
     Q_PROPERTY(QString searchText READ searchText WRITE setSearchText NOTIFY searchTextChanged)
@@ -38,6 +46,8 @@ public:
     QString statusMessage() const;
     QVariantList projects() const;
     bool hasDiscoveredProjects() const;
+    bool hasProjectsFolder() const;
+    bool isScanningProjects() const;
     QStringList activity() const;
     QString logLevel() const;
     void setLogLevel(const QString& value);
@@ -63,8 +73,13 @@ public:
     Q_INVOKABLE bool deleteVersionById(const QString& versionId);
 
 signals:
+    void projectSaveRecorded(const QString& projectName,
+                             const QString& versionLabel,
+                             const QString& relativePath);
     void statusMessageChanged();
     void projectsChanged();
+    void projectsFolderChanged();
+    void isScanningProjectsChanged();
     void activityChanged();
     void logLevelChanged();
     void searchTextChanged();
@@ -92,8 +107,27 @@ private:
     void appendDebugActivity(const QString& line);
     void rebuildVisibleActivity();
     void rebuildVisibleProjects();
-    void startMonitoring();
+    void startMonitoringDeferred();
+    void advanceMonitoringInit();
+    bool initMonitoringForProject(const DiscoveredProject& project);
+    void startFileWatcherIfReady();
     void stopMonitoring();
+    void cancelProjectScan();
+    void setScanningProjects(bool scanning);
+    void applyDiscoveredProjects(const QList<DiscoveredProject>& projects);
+    void finishLoadingProjects(const QList<DiscoveredProject>& projects, const QString& cleanPath);
+    void handleProjectScanDirectory(const QString& directoryPath, int directoriesScanned);
+    void handleProjectsUpdated(const QList<DiscoveredProject>& partialProjects,
+                               int directoriesScanned,
+                               const QString& folderPath);
+    void handleProjectScanCompleted(const QList<DiscoveredProject>& projects,
+                                    qint64 elapsedMs,
+                                    int directoriesScanned,
+                                    const QString& folderPath);
+    void adoptDiscoveredProject(const DiscoveredProject& project);
+    bool containsProjectRoot(const QString& rootPath) const;
+    bool tryDiscoverProjectFromEvent(const FileEvent& event);
+    bool dispatchFileEvent(const FileEvent& event);
     SnapshotService* snapshotServiceForRoot(const QString& projectRoot);
 
     QString m_statusMessage;
@@ -114,8 +148,16 @@ private:
     QHash<QString, QDateTime> m_lastOpenedAtByProjectRoot;
     QHash<QString, QString> m_projectNotes;
 
-    std::unique_ptr<ProjectDiscovery> m_projectDiscovery;
     std::unique_ptr<ProjectRegistry> m_projectRegistry;
+    QThread m_discoveryThread;
+    ProjectDiscoveryScanWorker* m_discoveryWorker {nullptr};
+    std::shared_ptr<std::atomic<bool>> m_scanCancelFlag;
+    bool m_isScanningProjects {false};
+    int m_lastScanStatusDirectories {0};
+    QString m_activeScanFolder;
+    int m_monitorInitIndex {0};
+    bool m_monitorInitActive {false};
+    ProjectDiscovery m_projectDiscovery;
     std::unique_ptr<IFileWatcher> m_fileWatcher;
     std::vector<std::unique_ptr<SnapshotService>> m_snapshotServices;
     QHash<QString, SnapshotService*> m_snapshotServiceByRoot;

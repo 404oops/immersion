@@ -14,6 +14,14 @@ inline const QString LogLevelDebug = QStringLiteral("Debug");
 
 inline const QString StatusFirstTimeSetupFmt =
     QStringLiteral("First-time setup complete. Found %1 project folders.");
+inline const QString StatusScanningProjectsFmt =
+    QStringLiteral("Scanning %1 for projects...");
+inline const QString StatusScanningProjectsProgressFmt =
+    QStringLiteral("Scanning %1 (%2 folders)...");
+inline const QString StatusScanningProjectsWithCountFmt =
+    QStringLiteral("Scanning %1 (%2 folders, %3 projects)...");
+inline const QString StatusInitializingMonitoringFmt =
+    QStringLiteral("Initializing versioning (%1/%2)...");
 inline const QString StatusNoSupportedProjectFiles = QStringLiteral("No supported project files found.");
 inline const QString StatusSelectedProjectFmt = QStringLiteral("Selected: %1 (%2)");
 
@@ -25,6 +33,15 @@ inline const QString StatusRestoredToVersionFmt = QStringLiteral("Restored %1 to
 
 inline const QString ActivityFirstDaySetupNoProjectsFmt = QStringLiteral("[%1] first-day setup found no project files under %2");
 inline const QString ActivityDiscoveredProjectsFmt = QStringLiteral("[%1] discovered %2 projects from %3");
+inline const QString ActivityProjectRediscoveredFmt =
+    QStringLiteral("[%1] new project detected: %2 (%3)");
+inline const QString ActivityProjectScanStartedFmt = QStringLiteral("[%1] project scan started: %2");
+inline const QString ActivityProjectScanDirectoryFmt = QStringLiteral("[%1] scan folder: %2");
+inline const QString ActivityProjectScanCompletedFmt =
+    QStringLiteral("[%1] project scan finished: %2 folders in %3 ms (%4 projects)");
+inline const QString ActivityProjectScanCancelledFmt = QStringLiteral("[%1] project scan cancelled: %2");
+inline const QString ActivityWatcherScanFmt =
+    QStringLiteral("[%1] watcher %2 scan: %3 items in %4 ms (%5)");
 inline const QString ActivityOpenFailedNoFileSelected = QStringLiteral("[%1] open failed: no project file selected");
 inline const QString ActivityOpenFailedMissingFileFmt = QStringLiteral("[%1] open failed: missing file %2");
 inline const QString ActivityOpenFailedFmt = QStringLiteral("[%1] open failed for %2");

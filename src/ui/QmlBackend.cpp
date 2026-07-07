@@ -12,14 +12,18 @@
 #include <QJsonObject>
 #include <QSaveFile>
 #include <QSet>
+#include <QTimer>
 #include <QUrl>
 
 #include <algorithm>
+#include <optional>
 
 #include "../core/BackupTemplate.h"
 #include "../core/FileWatcherFactory.h"
 #include "../core/IFileWatcher.h"
 #include "../core/PathCleanup.h"
+#include "../core/ProjectDiscovery.h"
+#include "../core/ProjectDiscoveryScanWorker.h"
 #include "../core/SnapshotService.h"
 #include "../core/VersionId.h"
 #include "../persistence/MetadataStore.h"
@@ -56,13 +60,14 @@ QString humanizeTimestamp(const QString& rawTimestamp) {
 }
 
 QDateTime effectiveLastOpenedForProject(const DiscoveredProject& project,
-                                        const QHash<QString, QDateTime>& lastOpenedByRoot) {
+                                        const QHash<QString, QDateTime>& lastOpenedByRoot,
+                                        bool allowFileStatFallback) {
     const QDateTime explicitLastOpened = lastOpenedByRoot.value(pathKey(project.rootPath));
     if (explicitLastOpened.isValid()) {
         return explicitLastOpened;
     }
 
-    if (project.primaryProjectFile.isEmpty()) {
+    if (!allowFileStatFallback || project.primaryProjectFile.isEmpty()) {
         return {};
     }
 
@@ -171,19 +176,43 @@ bool writeLinesAtomically(const QString& filePath, const QList<QByteArray>& line
 
 QmlBackend::QmlBackend(QObject* parent)
     : QObject(parent)
-    , m_projectDiscovery(std::make_unique<ProjectDiscovery>())
     , m_projectRegistry(std::make_unique<ProjectRegistry>()) {
     m_statusMessage = AppStrings::StatusSelectProjectsFolder;
+
+    m_discoveryWorker = new ProjectDiscoveryScanWorker();
+    m_discoveryWorker->moveToThread(&m_discoveryThread);
+    connect(&m_discoveryThread, &QThread::finished, m_discoveryWorker, &QObject::deleteLater);
+    connect(m_discoveryWorker,
+            &ProjectDiscoveryScanWorker::directoryScanned,
+            this,
+            &QmlBackend::handleProjectScanDirectory,
+            Qt::QueuedConnection);
+    connect(m_discoveryWorker,
+            &ProjectDiscoveryScanWorker::scanCompleted,
+            this,
+            &QmlBackend::handleProjectScanCompleted,
+            Qt::QueuedConnection);
+    connect(m_discoveryWorker,
+            &ProjectDiscoveryScanWorker::projectsUpdated,
+            this,
+            &QmlBackend::handleProjectsUpdated,
+            Qt::QueuedConnection);
+    m_discoveryThread.start();
 
     const QString savedProjectsFolder = m_projectRegistry->loadProjectsFolder();
     if (!savedProjectsFolder.isEmpty()) {
         loadProjectsFromFolder(savedProjectsFolder);
     }
 
-    runStartupSelfCheck();
+    QTimer::singleShot(0, this, &QmlBackend::runStartupSelfCheck);
 }
 
-QmlBackend::~QmlBackend() = default;
+QmlBackend::~QmlBackend() {
+    cancelProjectScan();
+    stopMonitoring();
+    m_discoveryThread.quit();
+    m_discoveryThread.wait();
+}
 
 QString QmlBackend::statusMessage() const {
     return m_statusMessage;
@@ -195,6 +224,14 @@ QVariantList QmlBackend::projects() const {
 
 bool QmlBackend::hasDiscoveredProjects() const {
     return !m_discoveredProjects.isEmpty();
+}
+
+bool QmlBackend::hasProjectsFolder() const {
+    return !m_projectsFolderRoot.isEmpty();
+}
+
+bool QmlBackend::isScanningProjects() const {
+    return m_isScanningProjects;
 }
 
 QStringList QmlBackend::activity() const {
@@ -302,10 +339,14 @@ void QmlBackend::loadProjectsFromFolder(const QString& folderPath) {
     if (folderPath.isEmpty()) {
         return;
     }
+
     QString cleanPath = folderPath;
     if (cleanPath.startsWith(QStringLiteral("file://"))) {
         cleanPath = QUrl(cleanPath).toLocalFile();
     }
+    cleanPath = QDir::cleanPath(cleanPath);
+
+    cancelProjectScan();
 
     // A stale filter from a previous folder must not hide the new projects.
     if (!m_searchText.isEmpty()) {
@@ -313,15 +354,132 @@ void QmlBackend::loadProjectsFromFolder(const QString& folderPath) {
         emit searchTextChanged();
     }
 
-    m_projectsFolderRoot = QDir::cleanPath(cleanPath);
-    m_discoveredProjects = m_projectDiscovery->discoverAll(m_projectsFolderRoot);
+    m_projectsFolderRoot = cleanPath;
+    m_activeScanFolder = cleanPath;
+    emit projectsFolderChanged();
+    m_lastScanStatusDirectories = 0;
+    m_scanCancelFlag = std::make_shared<std::atomic<bool>>(false);
+
+    stopMonitoring();
+    m_discoveredProjects.clear();
+    rebuildVisibleProjects();
+
+    setScanningProjects(true);
+    m_statusMessage = QString(AppStrings::StatusScanningProjectsFmt).arg(cleanPath);
+    emit statusMessageChanged();
+    appendActivity(QString(AppStrings::ActivityProjectScanStartedFmt).arg(nowHuman(), cleanPath));
+
+    if (m_discoveryWorker) {
+        m_discoveryWorker->setCancelledFlag(m_scanCancelFlag);
+        QMetaObject::invokeMethod(m_discoveryWorker,
+                                  [worker = m_discoveryWorker, cleanPath]() {
+                                      worker->scan(cleanPath);
+                                  },
+                                  Qt::QueuedConnection);
+    }
+}
+
+void QmlBackend::cancelProjectScan() {
+    if (m_scanCancelFlag) {
+        m_scanCancelFlag->store(true);
+    }
+
+    if (!m_isScanningProjects) {
+        return;
+    }
+
+    appendActivity(QString(AppStrings::ActivityProjectScanCancelledFmt)
+                       .arg(nowHuman(), m_activeScanFolder));
+    setScanningProjects(false);
+}
+
+void QmlBackend::setScanningProjects(bool scanning) {
+    if (m_isScanningProjects == scanning) {
+        return;
+    }
+
+    m_isScanningProjects = scanning;
+    emit isScanningProjectsChanged();
+}
+
+void QmlBackend::handleProjectScanDirectory(const QString& directoryPath, int directoriesScanned) {
+    appendDebugActivity(QString(AppStrings::ActivityProjectScanDirectoryFmt)
+                            .arg(nowHuman(), directoryPath));
+
+    if (!m_isScanningProjects) {
+        return;
+    }
+
+    m_lastScanStatusDirectories = directoriesScanned;
+    if (directoriesScanned == 1 || directoriesScanned % 25 == 0) {
+        m_statusMessage = QString(AppStrings::StatusScanningProjectsProgressFmt)
+                              .arg(m_activeScanFolder)
+                              .arg(directoriesScanned);
+        emit statusMessageChanged();
+    }
+}
+
+void QmlBackend::handleProjectsUpdated(const QList<DiscoveredProject>& partialProjects,
+                                         int directoriesScanned,
+                                         const QString& folderPath) {
+    if (folderPath != m_activeScanFolder || !m_isScanningProjects) {
+        return;
+    }
+
+    applyDiscoveredProjects(partialProjects);
+
+    m_lastScanStatusDirectories = directoriesScanned;
+    m_statusMessage = partialProjects.isEmpty()
+        ? QString(AppStrings::StatusScanningProjectsProgressFmt)
+              .arg(m_activeScanFolder)
+              .arg(directoriesScanned)
+        : QString(AppStrings::StatusScanningProjectsWithCountFmt)
+              .arg(m_activeScanFolder)
+              .arg(directoriesScanned)
+              .arg(partialProjects.size());
+    emit statusMessageChanged();
+}
+
+void QmlBackend::applyDiscoveredProjects(const QList<DiscoveredProject>& projects) {
+    m_discoveredProjects = projects;
+    rebuildVisibleProjects();
+}
+
+void QmlBackend::handleProjectScanCompleted(const QList<DiscoveredProject>& projects,
+                                            qint64 elapsedMs,
+                                            int directoriesScanned,
+                                            const QString& folderPath) {
+    if (folderPath != m_activeScanFolder) {
+        return;
+    }
+
+    if (m_scanCancelFlag && m_scanCancelFlag->load()) {
+        return;
+    }
+
+    if (!m_isScanningProjects) {
+        return;
+    }
+
+    setScanningProjects(false);
+    appendActivity(QString(AppStrings::ActivityProjectScanCompletedFmt)
+                       .arg(nowHuman())
+                       .arg(directoriesScanned)
+                       .arg(elapsedMs)
+                       .arg(projects.size()));
+
+    finishLoadingProjects(projects, folderPath);
+}
+
+void QmlBackend::finishLoadingProjects(const QList<DiscoveredProject>& projects,
+                                       const QString& cleanPath) {
+    applyDiscoveredProjects(projects);
     if (m_discoveredProjects.isEmpty()) {
         stopMonitoring();
         m_statusMessage = AppStrings::StatusNoSupportedProjectFiles;
         emit statusMessageChanged();
         appendActivity(QString(AppStrings::ActivityFirstDaySetupNoProjectsFmt)
-            .arg(nowHuman(), cleanPath));
-        rebuildVisibleProjects();
+                           .arg(nowHuman(), cleanPath));
         return;
     }
 
@@ -336,12 +494,11 @@ void QmlBackend::loadProjectsFromFolder(const QString& folderPath) {
     emit statusMessageChanged();
 
     appendActivity(QString(AppStrings::ActivityDiscoveredProjectsFmt)
-        .arg(nowHuman())
-        .arg(m_discoveredProjects.size())
-        .arg(folderPath));
+                       .arg(nowHuman())
+                       .arg(m_discoveredProjects.size())
+                       .arg(cleanPath));
 
-    rebuildVisibleProjects();
-    startMonitoring();
+    startMonitoringDeferred();
 }
 
 void QmlBackend::openProject(int visibleIndex) {
@@ -593,8 +750,8 @@ QVariantList QmlBackend::selectedProjectVersionGraph() const {
             QVariantMap node = nodeById.value(childId);
             node.insert(QStringLiteral("depth"), depth);
             node.insert(QStringLiteral("row"), row);
-            node.insert(QStringLiteral("x"), 80 + depth * 160);
-            node.insert(QStringLiteral("y"), 60 + row * 84);
+            node.insert(QStringLiteral("x"), 88 + depth * 176);
+            node.insert(QStringLiteral("y"), 72 + row * 92);
             graph.append(node);
             ++row;
             appendChildren(childId, depth + 1);
@@ -1068,8 +1225,10 @@ void QmlBackend::rebuildVisibleProjects() {
         const DiscoveredProject& r = m_discoveredProjects.at(right);
 
         if (m_sortMode == SortMode::LastOpened) {
-            const QDateTime lOpened = effectiveLastOpenedForProject(l, m_lastOpenedAtByProjectRoot);
-            const QDateTime rOpened = effectiveLastOpenedForProject(r, m_lastOpenedAtByProjectRoot);
+            const QDateTime lOpened = effectiveLastOpenedForProject(
+                l, m_lastOpenedAtByProjectRoot, !m_isScanningProjects);
+            const QDateTime rOpened = effectiveLastOpenedForProject(
+                r, m_lastOpenedAtByProjectRoot, !m_isScanningProjects);
             if (lOpened.isValid() != rOpened.isValid()) {
                 return lOpened.isValid();
             }
@@ -1111,7 +1270,8 @@ void QmlBackend::rebuildVisibleProjects() {
     items.reserve(m_visibleProjectIndexes.size());
     for (const int index : m_visibleProjectIndexes) {
         const DiscoveredProject& project = m_discoveredProjects.at(index);
-        const QDateTime effectiveLastOpened = effectiveLastOpenedForProject(project, m_lastOpenedAtByProjectRoot);
+        const QDateTime effectiveLastOpened = effectiveLastOpenedForProject(
+            project, m_lastOpenedAtByProjectRoot, true);
         const QFileInfo rootInfo(project.rootPath);
         const QString parentPath = rootInfo.dir().absolutePath();
         QVariantMap item;
@@ -1127,70 +1287,120 @@ void QmlBackend::rebuildVisibleProjects() {
     emit projectsChanged();
 }
 
-void QmlBackend::startMonitoring() {
+void QmlBackend::startMonitoringDeferred() {
     if (m_projectsFolderRoot.isEmpty() || m_discoveredProjects.isEmpty()) {
         return;
     }
+
+    m_monitorInitActive = true;
+    m_monitorInitIndex = 0;
 
     if (m_fileWatcher) {
         m_fileWatcher->stopWatching();
         m_fileWatcher.reset();
     }
-
     m_snapshotServiceByRoot.clear();
     m_canonicalRootByKey.clear();
     m_snapshotServices.clear();
-    for (const DiscoveredProject& project : m_discoveredProjects) {
-        auto snapshotService = std::make_unique<SnapshotService>();
-        if (!snapshotService->setProjectRoot(project.rootPath)) {
-            appendDebugActivity(QStringLiteral("[%1] failed to initialize versioning for %2")
-                .arg(nowHuman(), project.rootPath));
-            continue;
-        }
 
-        connect(snapshotService.get(), &SnapshotService::snapshotCreated, this,
-                [this, projectRoot = project.rootPath](const QString& message) {
-                    appendActivity(QString("[%1] %2").arg(nowHuman(), message));
+    QTimer::singleShot(0, this, &QmlBackend::advanceMonitoringInit);
+}
 
-                    if (pathEquals(projectRoot, m_projectRoot)) {
-                        emit selectedProjectVersionGraphChanged();
-                    }
-                });
+void QmlBackend::advanceMonitoringInit() {
+    if (!m_monitorInitActive) {
+        return;
+    }
 
-        connect(snapshotService.get(), &SnapshotService::snapshotSkipped, this,
-                [this](const QString& reason) {
-                    appendDebugActivity(QString("[%1] %2").arg(nowHuman(), reason));
-                });
+    if (m_monitorInitIndex >= m_discoveredProjects.size()) {
+        m_monitorInitActive = false;
+        startFileWatcherIfReady();
+        return;
+    }
 
-        connect(snapshotService.get(), &SnapshotService::snapshotError, this,
-                [this](const QString& error) {
-                    appendActivity(QString("[%1] %2").arg(nowHuman(), error));
-                });
+    m_statusMessage = QString(AppStrings::StatusInitializingMonitoringFmt)
+                          .arg(m_monitorInitIndex + 1)
+                          .arg(m_discoveredProjects.size());
+    emit statusMessageChanged();
 
-        SnapshotService* rawService = snapshotService.get();
-        const QString rootKey = pathKey(project.rootPath);
-        m_snapshotServiceByRoot.insert(rootKey, rawService);
-        m_canonicalRootByKey.insert(rootKey, project.rootPath);
-        m_snapshotServices.emplace_back(std::move(snapshotService));
+    initMonitoringForProject(m_discoveredProjects.at(m_monitorInitIndex));
+    ++m_monitorInitIndex;
+    QTimer::singleShot(0, this, &QmlBackend::advanceMonitoringInit);
+}
 
-        const QString primaryFile = project.primaryProjectFile;
-        if (!primaryFile.isEmpty() && !rawService->hasVersionForArtifact(primaryFile)) {
-            const QString absolutePrimaryPath = QDir(project.rootPath).filePath(primaryFile);
-            const bool seeded = rawService->snapshotPathNow(absolutePrimaryPath, primaryFile);
-            if (seeded) {
-                appendDebugActivity(QStringLiteral("[%1] seeded initial version v1 for %2")
-                    .arg(nowHuman(), absolutePrimaryPath));
-            }
+bool QmlBackend::initMonitoringForProject(const DiscoveredProject& project) {
+    auto snapshotService = std::make_unique<SnapshotService>();
+    if (!snapshotService->setProjectRoot(project.rootPath)) {
+        appendDebugActivity(QStringLiteral("[%1] failed to initialize versioning for %2")
+                                .arg(nowHuman(), project.rootPath));
+        return false;
+    }
+
+    connect(snapshotService.get(), &SnapshotService::snapshotCreated, this,
+            [this, projectRoot = project.rootPath](const QString& message) {
+                appendActivity(QString("[%1] %2").arg(nowHuman(), message));
+
+                if (pathEquals(projectRoot, m_projectRoot)) {
+                    emit selectedProjectVersionGraphChanged();
+                }
+            });
+
+    connect(snapshotService.get(), &SnapshotService::saveRecorded, this,
+            [this, projectRoot = project.rootPath](const QString& versionId, const QString& relativePath) {
+                const QString projectName = QFileInfo(projectRoot).fileName();
+                emit projectSaveRecorded(projectName, versionLabelFromId(versionId), relativePath);
+            });
+
+    connect(snapshotService.get(), &SnapshotService::snapshotSkipped, this,
+            [this](const QString& reason) {
+                appendDebugActivity(QString("[%1] %2").arg(nowHuman(), reason));
+            });
+
+    connect(snapshotService.get(), &SnapshotService::snapshotError, this,
+            [this](const QString& error) {
+                appendActivity(QString("[%1] %2").arg(nowHuman(), error));
+            });
+
+    SnapshotService* rawService = snapshotService.get();
+    const QString rootKey = pathKey(project.rootPath);
+    m_snapshotServiceByRoot.insert(rootKey, rawService);
+    m_canonicalRootByKey.insert(rootKey, project.rootPath);
+    m_snapshotServices.emplace_back(std::move(snapshotService));
+
+    const QString primaryFile = project.primaryProjectFile;
+    if (!primaryFile.isEmpty() && !rawService->hasVersionForArtifact(primaryFile)) {
+        const QString absolutePrimaryPath = QDir(project.rootPath).filePath(primaryFile);
+        const bool seeded = rawService->snapshotPathNow(absolutePrimaryPath, primaryFile);
+        if (seeded) {
+            appendDebugActivity(QStringLiteral("[%1] seeded initial version v1 for %2")
+                                    .arg(nowHuman(), absolutePrimaryPath));
         }
     }
 
+    return true;
+}
+
+void QmlBackend::startFileWatcherIfReady() {
     if (m_snapshotServiceByRoot.isEmpty()) {
         m_statusMessage = AppStrings::StatusFailedInitializeVersioning;
         emit statusMessageChanged();
         return;
     }
 
-    m_fileWatcher = createFileWatcher();
+    m_fileWatcher = createFileWatcher([this](const QString& scanKind,
+                                             const QString& rootPath,
+                                             int itemCount,
+                                             qint64 elapsedMs) {
+        QMetaObject::invokeMethod(this,
+                                  [this, scanKind, rootPath, itemCount, elapsedMs]() {
+                                      appendDebugActivity(QString(AppStrings::ActivityWatcherScanFmt)
+                                                              .arg(nowHuman(),
+                                                                   scanKind,
+                                                                   QString::number(itemCount),
+                                                                   QString::number(elapsedMs),
+                                                                   rootPath));
+                                  },
+                                  Qt::QueuedConnection);
+    });
     if (!m_fileWatcher) {
         m_statusMessage = AppStrings::StatusFailedCreateWatcher;
         emit statusMessageChanged();
@@ -1202,40 +1412,11 @@ void QmlBackend::startMonitoring() {
 
     connect(m_fileWatcher.get(), &IFileWatcher::fileEvent,
             this, [this](const FileEvent& event) {
-                const QString normalizedAbsolutePath = normalizeAbsolutePath(event.absolutePath);
-
-                QString matchedRootKey;
-                int matchedLength = -1;
-                for (auto it = m_snapshotServiceByRoot.constBegin(); it != m_snapshotServiceByRoot.constEnd(); ++it) {
-                    const QString rootKey = it.key();
-                    const QString canonicalRoot = m_canonicalRootByKey.value(rootKey);
-                    if (canonicalRoot.isEmpty() || !pathIsUnderRoot(normalizedAbsolutePath, canonicalRoot)) {
-                        continue;
-                    }
-
-                    if (canonicalRoot.size() > matchedLength) {
-                        matchedRootKey = rootKey;
-                        matchedLength = canonicalRoot.size();
+                if (!dispatchFileEvent(event)) {
+                    if (tryDiscoverProjectFromEvent(event)) {
+                        dispatchFileEvent(event);
                     }
                 }
-
-                if (matchedRootKey.isEmpty()) {
-                    return;
-                }
-
-                auto it = m_snapshotServiceByRoot.find(matchedRootKey);
-                if (it == m_snapshotServiceByRoot.end() || !it.value()) {
-                    return;
-                }
-
-                const QString canonicalRoot = m_canonicalRootByKey.value(matchedRootKey);
-                if (canonicalRoot.isEmpty()) {
-                    return;
-                }
-
-                FileEvent translatedEvent = event;
-                translatedEvent.relativePath = QDir(canonicalRoot).relativeFilePath(normalizedAbsolutePath);
-                it.value()->onFileEvent(translatedEvent);
             });
 
     if (!m_fileWatcher->startWatching(m_projectsFolderRoot)) {
@@ -1252,10 +1433,12 @@ void QmlBackend::startMonitoring() {
     emit statusMessageChanged();
 
     appendActivity(QStringLiteral("[%1] monitoring started for %2")
-        .arg(QDateTime::currentDateTime().toString(Qt::ISODate), m_projectsFolderRoot));
+                       .arg(QDateTime::currentDateTime().toString(Qt::ISODate), m_projectsFolderRoot));
 }
 
 void QmlBackend::stopMonitoring() {
+    m_monitorInitActive = false;
+
     if (m_fileWatcher) {
         m_fileWatcher->stopWatching();
         m_fileWatcher.reset();
@@ -1265,7 +1448,93 @@ void QmlBackend::stopMonitoring() {
     m_canonicalRootByKey.clear();
     m_snapshotServices.clear();
     appendActivity(QStringLiteral("[%1] monitoring stopped")
-        .arg(QDateTime::currentDateTime().toString(Qt::ISODate)));
+                       .arg(QDateTime::currentDateTime().toString(Qt::ISODate)));
+}
+
+bool QmlBackend::containsProjectRoot(const QString& rootPath) const {
+    for (const DiscoveredProject& project : m_discoveredProjects) {
+        if (pathEquals(project.rootPath, rootPath)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void QmlBackend::adoptDiscoveredProject(const DiscoveredProject& project) {
+    if (containsProjectRoot(project.rootPath)) {
+        return;
+    }
+
+    m_discoveredProjects.append(project);
+    m_projectRegistry->saveProject(project);
+    m_projectNotes.insert(project.rootPath, m_projectRegistry->loadProjectNote(project.rootPath));
+    rebuildVisibleProjects();
+
+    appendActivity(QString(AppStrings::ActivityProjectRediscoveredFmt)
+                       .arg(nowHuman(), project.name, project.rootPath));
+
+    initMonitoringForProject(project);
+}
+
+bool QmlBackend::tryDiscoverProjectFromEvent(const FileEvent& event) {
+    if (m_isScanningProjects || m_projectsFolderRoot.isEmpty()) {
+        return false;
+    }
+
+    if (event.type != FileEvent::Type::Created && event.type != FileEvent::Type::Modified) {
+        return false;
+    }
+
+    const std::optional<DiscoveredProject> discovered = m_projectDiscovery.discoverProjectForChangedPath(
+        m_projectsFolderRoot, event.absolutePath);
+    if (!discovered.has_value()) {
+        return false;
+    }
+
+    if (containsProjectRoot(discovered->rootPath)) {
+        return false;
+    }
+
+    adoptDiscoveredProject(*discovered);
+    return true;
+}
+
+bool QmlBackend::dispatchFileEvent(const FileEvent& event) {
+    const QString normalizedAbsolutePath = normalizeAbsolutePath(event.absolutePath);
+
+    QString matchedRootKey;
+    int matchedLength = -1;
+    for (auto it = m_snapshotServiceByRoot.constBegin(); it != m_snapshotServiceByRoot.constEnd(); ++it) {
+        const QString rootKey = it.key();
+        const QString canonicalRoot = m_canonicalRootByKey.value(rootKey);
+        if (canonicalRoot.isEmpty() || !pathIsUnderRoot(normalizedAbsolutePath, canonicalRoot)) {
+            continue;
+        }
+
+        if (canonicalRoot.size() > matchedLength) {
+            matchedRootKey = rootKey;
+            matchedLength = canonicalRoot.size();
+        }
+    }
+
+    if (matchedRootKey.isEmpty()) {
+        return false;
+    }
+
+    auto it = m_snapshotServiceByRoot.find(matchedRootKey);
+    if (it == m_snapshotServiceByRoot.end() || !it.value()) {
+        return false;
+    }
+
+    const QString canonicalRoot = m_canonicalRootByKey.value(matchedRootKey);
+    if (canonicalRoot.isEmpty()) {
+        return false;
+    }
+
+    FileEvent translatedEvent = event;
+    translatedEvent.relativePath = QDir(canonicalRoot).relativeFilePath(normalizedAbsolutePath);
+    it.value()->onFileEvent(translatedEvent);
+    return true;
 }
 
 SnapshotService* QmlBackend::snapshotServiceForRoot(const QString& projectRoot) {
