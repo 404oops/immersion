@@ -19,6 +19,8 @@ public:
     void setRaiseHandler(std::function<void()> handler);
 
 private:
+    bool tryBecomePrimary();
+
     void handleConnection();
 
     QString m_serverName;

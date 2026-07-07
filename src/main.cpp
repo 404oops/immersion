@@ -44,10 +44,10 @@ int main(int argc, char *argv[]) {
     }
 
     TrayController tray;
-    tray.attach(&backend, &engine);
     instanceGuard.setRaiseHandler([&tray]() {
         QMetaObject::invokeMethod(&tray, &TrayController::showMainWindow, Qt::QueuedConnection);
     });
+    tray.attach(&backend, &engine);
 
     return app.exec();
 }

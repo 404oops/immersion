@@ -155,6 +155,7 @@ private:
     void applyDiscoveredProjects(const QList<DiscoveredProject>& projects);
     void finishLoadingProjects(const QList<DiscoveredProject>& projects, const QString& cleanPath);
     void persistAppSettings();
+    void flushPendingThemeHuePersist();
     void logConfigChange(const QString& detail);
     void trimActivityLog();
     void applySnapshotRetentionToServices();
@@ -189,6 +190,7 @@ private:
     int m_selectedProjectIndex {-1};
     QString m_selectedProjectNote;
     double m_themeHue {280.0};
+    QTimer m_themeHuePersistTimer;
     bool m_launchAtStartup {false};
     int m_snapshotRetention {5};
     bool m_notificationsEnabled {true};

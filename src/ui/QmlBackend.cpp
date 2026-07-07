@@ -206,6 +206,13 @@ QmlBackend::QmlBackend(QObject* parent)
             Qt::QueuedConnection);
     m_discoveryThread.start();
 
+    m_themeHuePersistTimer.setSingleShot(true);
+    m_themeHuePersistTimer.setInterval(400);
+    connect(&m_themeHuePersistTimer, &QTimer::timeout, this, [this]() {
+        persistAppSettings();
+        logConfigChange(QStringLiteral("theme hue set to %1").arg(m_themeHue, 0, 'f', 0));
+    });
+
     const AppSettings savedSettings = m_projectRegistry->loadAppSettings();
     m_themeHue = savedSettings.themeHue;
     m_sortMode = sortModeFromString(savedSettings.sortMode.isEmpty()
@@ -233,6 +240,7 @@ QmlBackend::QmlBackend(QObject* parent)
 }
 
 QmlBackend::~QmlBackend() {
+    flushPendingThemeHuePersist();
     cancelProjectScan();
     stopMonitoring();
     m_discoveryThread.quit();
@@ -271,9 +279,8 @@ void QmlBackend::setThemeHue(const double value) {
     }
 
     m_themeHue = wrapped;
-    persistAppSettings();
-    logConfigChange(QStringLiteral("theme hue set to %1").arg(wrapped, 0, 'f', 0));
     emit themeHueChanged();
+    m_themeHuePersistTimer.start();
 }
 
 bool QmlBackend::launchAtStartup() const {
@@ -418,6 +425,7 @@ bool QmlBackend::resetConfig() {
     m_isScanningProjects = false;
 
     m_themeHue = 280.0;
+    m_themeHuePersistTimer.stop();
     m_sortMode = SortMode::Name;
     m_logLevel = LogLevel::Info;
     m_snapshotRetention = BackupTemplates::kUncompressedRecentVersions;
@@ -508,6 +516,15 @@ void QmlBackend::persistAppSettings() {
     settings.notificationsEnabled = m_notificationsEnabled;
     settings.colorSchemeMode = colorSchemeMode();
     m_projectRegistry->saveAppSettings(settings);
+}
+
+void QmlBackend::flushPendingThemeHuePersist() {
+    if (!m_themeHuePersistTimer.isActive()) {
+        return;
+    }
+
+    m_themeHuePersistTimer.stop();
+    persistAppSettings();
 }
 
 bool QmlBackend::isScanningProjects() const {

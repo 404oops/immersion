@@ -330,7 +330,6 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                 # 1. Remove unused frameworks (keep QtOpenGL — libqtquick2plugin
                 # depends on it even though the app does not call OpenGL directly).
                 set(unused_frameworks
-                    \"QtWidgets.framework\"
                     \"QtSql.framework\"
                     \"QtQuickControls2FluentWinUI3StyleImpl.framework\"
                     \"QtQuickControls2Imagine.framework\"
@@ -349,7 +348,6 @@ if(Qt6_VERSION_MAJOR EQUAL 6)
                     \"QtQuickVectorImage.framework\"
                     \"QtQuickVectorImageGenerator.framework\"
                     \"QtQuickVectorImageHelpers.framework\"
-                    \"QtQuickDialogs2QuickImpl.framework\"
                 )
                 foreach(fw IN LISTS unused_frameworks)
                     if(EXISTS \"\${frameworks_dir}/\${fw}\")

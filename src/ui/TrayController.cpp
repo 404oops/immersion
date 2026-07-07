@@ -14,6 +14,7 @@
 #include <QPixmap>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
+#include <QTimer>
 
 #if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC) && !defined(__APPLE__)
 #include <QSystemTrayIcon>
@@ -154,16 +155,29 @@ void TrayController::showMainWindow() {
 #ifdef Q_OS_MACOS
     PlatformAgent::setBackgroundAgentMode(false);
 #endif
-    PlatformAgent::activateApplication();
 
     if (auto* window = quickWindowForObject(root)) {
         window->show();
         window->raise();
+#ifdef Q_OS_WIN
+        window->setFlag(Qt::WindowStaysOnTopHint, true);
+        window->raise();
         window->requestActivate();
-        return;
+        window->setFlag(Qt::WindowStaysOnTopHint, false);
+        PlatformAgent::activateApplication();
+#elif defined(Q_OS_MACOS)
+        QTimer::singleShot(0, window, [window]() {
+            window->requestActivate();
+            PlatformAgent::activateApplication();
+        });
+#else
+        window->requestActivate();
+        PlatformAgent::activateApplication();
+#endif
+    } else {
+        root->setProperty("visible", true);
+        PlatformAgent::activateApplication();
     }
-
-    root->setProperty("visible", true);
 }
 
 void TrayController::hideMainWindow() {
