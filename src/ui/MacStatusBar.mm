@@ -1,4 +1,5 @@
 #include "MacStatusBar.h"
+#include "PlatformAgent.h"
 
 #include <QMetaObject>
 
@@ -74,16 +75,37 @@ MusitNotificationDelegate* notificationDelegateInstance() {
 
 struct MacStatusBar::Private {
     NSStatusItem* statusItem {nil};
+    NSMenu* menu {nil};
     id target {nil};
 };
 
 @interface MusitStatusBarTarget : NSObject
 @property (nonatomic, assign) MacStatusBar* controller;
+@property (nonatomic, strong) NSMenu* menu;
+- (void)statusBarButtonClicked:(id)sender;
 - (void)openFromMenu:(id)sender;
 - (void)quitFromMenu:(id)sender;
 @end
 
 @implementation MusitStatusBarTarget
+
+- (void)statusBarButtonClicked:(id)sender {
+    NSEvent* const event = [NSApp currentEvent];
+    const BOOL rightClick = event.type == NSEventTypeRightMouseDown
+        || (event.type == NSEventTypeLeftMouseDown
+            && (event.modifierFlags & NSEventModifierFlagControl));
+
+    if (rightClick && self.menu != nil) {
+        PlatformAgent::setPresentationSuppressed(true);
+        NSStatusBarButton* const button = (NSStatusBarButton*)sender;
+        const NSPoint location = NSMakePoint(0.0, button.bounds.size.height + 4.0);
+        [self.menu popUpMenuPositioningItem:nil atLocation:location inView:button];
+        PlatformAgent::setPresentationSuppressed(false);
+        return;
+    }
+
+    [self openFromMenu:sender];
+}
 
 - (void)openFromMenu:(__unused id)sender {
     if (self.controller) {
@@ -137,7 +159,14 @@ void MacStatusBar::install() {
     [menu addItemWithTitle:@"Quit"
                     action:@selector(quitFromMenu:)
              keyEquivalent:@"q"].target = target;
-    d->statusItem.menu = menu;
+    d->menu = menu;
+    target.menu = menu;
+
+    d->statusItem.button.target = target;
+    d->statusItem.button.action = @selector(statusBarButtonClicked:);
+    if ([d->statusItem.button respondsToSelector:@selector(setSendsActionOnMouseDown:)]) {
+        [d->statusItem.button setSendsActionOnMouseDown:YES];
+    }
 }
 
 void MacStatusBar::showNotification(const QString& title, const QString& body) {

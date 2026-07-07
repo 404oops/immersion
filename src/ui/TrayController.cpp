@@ -14,7 +14,6 @@
 #include <QPixmap>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
-#include <QTimer>
 
 #if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC) && !defined(__APPLE__)
 #include <QSystemTrayIcon>
@@ -68,8 +67,9 @@ void TrayController::attach(QmlBackend* backend, QQmlApplicationEngine* engine) 
 
     if (QQuickWindow* window = quickWindowForObject(mainWindowObject())) {
         connect(window, &QQuickWindow::visibleChanged, window, [window]() {
-            // Menu-bar agent when hidden; normal Dock app while the window is open.
-            PlatformAgent::setBackgroundAgentMode(!window->isVisible());
+            if (!window->isVisible()) {
+                PlatformAgent::setBackgroundAgentMode(true);
+            }
         });
     }
 
@@ -77,6 +77,7 @@ void TrayController::attach(QmlBackend* backend, QQmlApplicationEngine* engine) 
         showMainWindow();
     } else {
         PlatformAgent::setBackgroundAgentMode(true);
+        PlatformAgent::setSkipNextActivationPresent(true);
     }
     return;
 #else
@@ -152,32 +153,8 @@ void TrayController::showMainWindow() {
         return;
     }
 
-#ifdef Q_OS_MACOS
-    PlatformAgent::setBackgroundAgentMode(false);
-#endif
-
-    if (auto* window = quickWindowForObject(root)) {
-        window->show();
-        window->raise();
-#ifdef Q_OS_WIN
-        window->setFlag(Qt::WindowStaysOnTopHint, true);
-        window->raise();
-        window->requestActivate();
-        window->setFlag(Qt::WindowStaysOnTopHint, false);
-        PlatformAgent::activateApplication();
-#elif defined(Q_OS_MACOS)
-        QTimer::singleShot(0, window, [window]() {
-            window->requestActivate();
-            PlatformAgent::activateApplication();
-        });
-#else
-        window->requestActivate();
-        PlatformAgent::activateApplication();
-#endif
-    } else {
-        root->setProperty("visible", true);
-        PlatformAgent::activateApplication();
-    }
+    root->setProperty("visible", true);
+    PlatformAgent::presentMainWindow(quickWindowForObject(root));
 }
 
 void TrayController::hideMainWindow() {

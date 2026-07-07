@@ -4,6 +4,8 @@
 #include <QQuickStyle>
 #include <QVariant>
 
+#include "ui/PlatformAgent.h"
+
 #include "core/FileEvent.h"
 #include "ui/QmlBackend.h"
 #include "ui/SingleInstanceGuard.h"
@@ -18,6 +20,8 @@ int main(int argc, char *argv[]) {
     app.setOrganizationName("musit");
     app.setOrganizationDomain("musit.app");
     app.setApplicationName("musit");
+
+    PlatformAgent::initActivationHandling();
 
     qRegisterMetaType<FileEvent>("FileEvent");
 
@@ -44,10 +48,15 @@ int main(int argc, char *argv[]) {
     }
 
     TrayController tray;
-    instanceGuard.setRaiseHandler([&tray]() {
+    const auto showMainWindow = [&tray]() {
         QMetaObject::invokeMethod(&tray, &TrayController::showMainWindow, Qt::QueuedConnection);
-    });
+    };
+    instanceGuard.setRaiseHandler(showMainWindow);
+    PlatformAgent::setShowWindowHandler(showMainWindow);
     tray.attach(&backend, &engine);
+
+    // QML/engine setup can replace NSApp's delegate; wrap again before the event loop.
+    PlatformAgent::initActivationHandling();
 
     return app.exec();
 }

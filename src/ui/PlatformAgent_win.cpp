@@ -6,6 +6,8 @@
 #include <QSettings>
 #include <QWindow>
 
+#include <functional>
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -54,6 +56,39 @@ void activateApplication() {
     ShowWindow(hwnd, SW_SHOWNA);
     SetForegroundWindow(hwnd);
 }
+
+void presentMainWindow(QWindow* window) {
+    if (!window) {
+        activateApplication();
+        return;
+    }
+
+    window->setVisible(true);
+    window->show();
+    window->raise();
+    window->requestActivate();
+
+    window->setFlag(Qt::WindowStaysOnTopHint, true);
+    window->raise();
+    window->requestActivate();
+    window->setFlag(Qt::WindowStaysOnTopHint, false);
+
+    activateApplication();
+}
+
+void installShowWindowHandler(std::function<void()> /*handler*/) {}
+
+void initActivationHandling() {}
+
+void setShowWindowHandler(std::function<void()> /*handler*/) {}
+
+void setPresentationSuppressed(bool /*suppressed*/) {}
+
+bool isPresentationSuppressed() {
+    return false;
+}
+
+void setSkipNextActivationPresent(bool /*skip*/) {}
 
 void setLaunchAtStartup(const bool enabled) {
     QSettings settings(kRunKeyPath, QSettings::NativeFormat);
