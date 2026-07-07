@@ -3,11 +3,45 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QAbstractSocket>
+#include <QThread>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
 constexpr char kRaiseCommand[] = "raise";
 constexpr int kProbeTimeoutMs = 500;
+
+#ifdef Q_OS_WIN
+constexpr wchar_t kInstanceMutexName[] = L"Local\\musit-immersion-v1";
+
+bool acquireWindowsInstanceMutex(void*& lock) {
+    HANDLE mutex = CreateMutexW(nullptr, FALSE, kInstanceMutexName);
+    if (!mutex) {
+        return true;
+    }
+
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(mutex);
+        lock = nullptr;
+        return false;
+    }
+
+    lock = mutex;
+    return true;
+}
+
+void releaseWindowsInstanceMutex(void* lock) {
+    if (lock) {
+        CloseHandle(static_cast<HANDLE>(lock));
+    }
+}
+#endif
 
 void processRaiseMessage(const QByteArray& message, const std::function<void()>& raiseHandler) {
     if (message.contains(kRaiseCommand) && raiseHandler) {
@@ -44,6 +78,20 @@ bool isAnotherInstanceRunning(const QString& serverName) {
     return true;
 }
 
+bool startLocalServer(QLocalServer* server, const QString& serverName) {
+    if (server->listen(serverName)) {
+        return true;
+    }
+
+    if (server->serverError() == QAbstractSocket::AddressInUseError
+        && isAnotherInstanceRunning(serverName)) {
+        return false;
+    }
+
+    QLocalServer::removeServer(serverName);
+    return server->listen(serverName);
+}
+
 } // namespace
 
 SingleInstanceGuard::SingleInstanceGuard(const QString& serverName, QObject* parent)
@@ -62,26 +110,29 @@ SingleInstanceGuard::~SingleInstanceGuard() {
     if (m_isPrimary) {
         QLocalServer::removeServer(m_serverName);
     }
+#ifdef Q_OS_WIN
+    releaseWindowsInstanceMutex(m_platformInstanceLock);
+    m_platformInstanceLock = nullptr;
+#endif
 }
 
 bool SingleInstanceGuard::tryBecomePrimary() {
-    if (m_server->listen(m_serverName)) {
-        return true;
-    }
-
-    if (m_server->serverError() == QAbstractSocket::AddressInUseError
-        && isAnotherInstanceRunning(m_serverName)) {
+#ifdef Q_OS_WIN
+    if (!acquireWindowsInstanceMutex(m_platformInstanceLock)) {
         return false;
     }
 
-    QLocalServer::removeServer(m_serverName);
-    if (m_server->listen(m_serverName)) {
+    if (!startLocalServer(m_server, m_serverName)) {
+        // We own the mutex but the pipe failed; still run as primary so the app
+        // launches, just without cross-process raise until the next restart.
         return true;
     }
 
-    // Could not bind even after cleanup. Only defer to an existing instance if one
-    // is actually reachable; otherwise launch anyway rather than exiting silently.
-    return !isAnotherInstanceRunning(m_serverName);
+    return true;
+#else
+    return startLocalServer(m_server, m_serverName)
+        || !isAnotherInstanceRunning(m_serverName);
+#endif
 }
 
 bool SingleInstanceGuard::isPrimaryInstance() const {
@@ -89,18 +140,22 @@ bool SingleInstanceGuard::isPrimaryInstance() const {
 }
 
 void SingleInstanceGuard::notifyExistingInstance() const {
-    QLocalSocket socket;
-    socket.connectToServer(m_serverName);
-    if (!socket.waitForConnected(3000)) {
-        return;
-    }
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        QLocalSocket socket;
+        socket.connectToServer(m_serverName);
+        if (!socket.waitForConnected(250)) {
+            QThread::msleep(50);
+            continue;
+        }
 
-    socket.write(kRaiseCommand);
-    socket.flush();
-    socket.waitForBytesWritten(3000);
-    socket.disconnectFromServer();
-    if (socket.state() != QLocalSocket::UnconnectedState) {
-        socket.waitForDisconnected(1000);
+        socket.write(kRaiseCommand);
+        socket.flush();
+        socket.waitForBytesWritten(1000);
+        socket.disconnectFromServer();
+        if (socket.state() != QLocalSocket::UnconnectedState) {
+            socket.waitForDisconnected(500);
+        }
+        return;
     }
 }
 

@@ -25,6 +25,7 @@ private:
 
     QString m_serverName;
     QLocalServer* m_server {nullptr};
+    void* m_platformInstanceLock {nullptr};
     bool m_isPrimary {false};
     std::function<void()> m_raiseHandler;
 };
