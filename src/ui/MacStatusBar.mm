@@ -42,6 +42,36 @@ void requestNotificationAuthorizationOnce() {
 
 } // namespace
 
+@interface MusitNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
+@end
+
+@implementation MusitNotificationDelegate
+
+- (void)userNotificationCenter:(UNUserNotificationCenter*)center
+       willPresentNotification:(UNNotification*)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))completionHandler {
+    Q_UNUSED(center);
+    Q_UNUSED(notification);
+    if (@available(macOS 11.0, *)) {
+        completionHandler(UNNotificationPresentationOptionBanner
+                          | UNNotificationPresentationOptionSound
+                          | UNNotificationPresentationOptionList);
+    } else {
+        completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
+    }
+}
+
+@end
+
+namespace {
+
+MusitNotificationDelegate* notificationDelegateInstance() {
+    static MusitNotificationDelegate* delegate = [[MusitNotificationDelegate alloc] init];
+    return delegate;
+}
+
+} // namespace
+
 struct MacStatusBar::Private {
     NSStatusItem* statusItem {nil};
     id target {nil};
@@ -88,6 +118,9 @@ void MacStatusBar::install() {
 
     requestNotificationAuthorizationOnce();
 
+    UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];
+    center.delegate = notificationDelegateInstance();
+
     MusitStatusBarTarget* target = [[MusitStatusBarTarget alloc] init];
     target.controller = this;
     d->target = target;
@@ -111,6 +144,7 @@ void MacStatusBar::showNotification(const QString& title, const QString& body) {
     UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
     content.title = title.toNSString();
     content.body = body.toNSString();
+    content.sound = [UNNotificationSound defaultSound];
 
     NSString* identifier = [[NSUUID UUID] UUIDString];
     UNNotificationRequest* request =

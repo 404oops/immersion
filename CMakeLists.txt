@@ -99,7 +99,6 @@ add_executable(Immersion
     src/ui/TrayController.cpp
     src/ui/TrayController.h
     src/ui/PlatformAgent.h
-    src/ui/MacStatusBar.h
     src/core/BackupTemplate.cpp
     src/core/BackupTemplate.h
     src/core/FileEvent.h
@@ -160,6 +159,7 @@ target_link_libraries(Immersion
 
 if(APPLE)
     target_sources(Immersion PRIVATE
+        src/ui/MacStatusBar.h
         src/ui/PlatformAgent_mac.mm
         src/ui/MacStatusBar.mm
     )

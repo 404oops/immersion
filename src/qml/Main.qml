@@ -33,6 +33,7 @@ ApplicationWindow {
     // Show onboarding only until the user picks a projects folder. While a NAS
     // scan runs, keep the main view visible and populate the list incrementally.
     readonly property bool isOnboarding: !window.backend.hasProjectsFolder
+    readonly property int viewFadeDuration: 280
 
     function scrollActivityToBottom() {
         if (!mainView || !mainView.activityListView)
@@ -45,10 +46,20 @@ ApplicationWindow {
     Loader {
         id: onboardingLoader
         anchors.fill: parent
-        visible: window.isOnboarding
-        active: window.isOnboarding
+        z: 2
+        active: window.isOnboarding || opacity > 0
+        enabled: window.isOnboarding
+        opacity: window.isOnboarding ? 1 : 0
+        visible: active
         sourceComponent: OnboardingView {
             onChooseProjectFolderRequested: folderDialog.open()
+        }
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: window.viewFadeDuration
+                easing.type: Easing.OutCubic
+            }
         }
     }
 
@@ -56,7 +67,10 @@ ApplicationWindow {
         id: mainView
         objectName: "mainView"
         anchors.fill: parent
-        visible: !window.isOnboarding
+        z: 1
+        opacity: window.isOnboarding ? 0 : 1
+        enabled: !window.isOnboarding
+        visible: opacity > 0 || !window.isOnboarding
         statusMessage: window.backend.statusMessage
         isScanningProjects: window.backend.isScanningProjects
         projectsModel: window.backend.projects
@@ -81,6 +95,13 @@ ApplicationWindow {
         }
         onLogLevelRequested: function (level) {
             window.backend.logLevel = level;
+        }
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: window.viewFadeDuration
+                easing.type: Easing.OutCubic
+            }
         }
 
         Component.onCompleted: window.scrollActivityToBottom()
@@ -118,5 +139,10 @@ ApplicationWindow {
     VersionManagerWindow {
         id: versionManagerWindow
         backend: window.backend
+    }
+
+    Component.onCompleted: {
+        if (window.isOnboarding)
+            window.show();
     }
 }

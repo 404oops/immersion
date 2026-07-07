@@ -173,6 +173,39 @@ Popup {
         return null;
     }
 
+    function defaultSelectedVersionId() {
+        const current = currentVersionNode();
+        if (current)
+            return current.id;
+
+        if (versionGraph.length === 0)
+            return "";
+
+        let latest = versionGraph[0];
+        for (let i = 1; i < versionGraph.length; ++i) {
+            const node = versionGraph[i];
+            const nodeTime = node.timestamp || "";
+            const latestTime = latest.timestamp || "";
+            if (nodeTime > latestTime)
+                latest = node;
+        }
+        return latest.id;
+    }
+
+    function applyVersionSelection(selectLatest) {
+        if (versionGraph.length === 0) {
+            selectedVersionId = "";
+            versionNoteEdit.text = "";
+            return;
+        }
+
+        if (selectLatest || !selectedVersionId || !nodeById(selectedVersionId))
+            selectedVersionId = defaultSelectedVersionId();
+
+        const selected = nodeById(selectedVersionId);
+        versionNoteEdit.text = selected ? (selected.note || "") : "";
+    }
+
     function ancestorIdSet(versionId) {
         const ids = {};
         let currentId = versionId;
@@ -184,13 +217,9 @@ Popup {
         return ids;
     }
 
-    function refreshVersionGraph() {
+    function refreshVersionGraph(selectLatest) {
         versionGraph = hasBackend ? root.backend.selectedProjectVersionGraph : designGraph;
-        if (versionGraph.length === 0) {
-            selectedVersionId = "";
-        } else if (!selectedVersionId || !nodeById(selectedVersionId)) {
-            selectedVersionId = versionGraph[0].id;
-        }
+        applyVersionSelection(!!selectLatest);
 
         if (versionGraph.length === 0) {
             graphExtentWidth = graphFlick ? graphFlick.width : 0;
@@ -227,14 +256,13 @@ Popup {
         if (!hasBackend)
             return;
         root.backend.manageProjectVersions(index);
-        refreshVersionGraph();
+        refreshVersionGraph(true);
         projectNoteEdit.text = root.backend.selectedProjectNote;
-        versionNoteEdit.text = selectedVersionId && nodeById(selectedVersionId) ? nodeById(selectedVersionId).note : "";
         open();
     }
 
     Component.onCompleted: {
-        refreshVersionGraph();
+        refreshVersionGraph(true);
         if (!hasBackend)
             projectNoteEdit.text = "Preview project note";
     }
@@ -243,8 +271,7 @@ Popup {
         target: root.backend
         function onSelectedProjectVersionGraphChanged() {
             if (root.opened && root.hasBackend) {
-                root.refreshVersionGraph();
-                versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).note : "";
+                root.refreshVersionGraph(false);
             }
         }
         function onSelectedProjectNoteChanged() {
@@ -298,8 +325,7 @@ Popup {
 
         onAccepted: {
             if (root.backend.deleteVersionById(root.selectedVersionId)) {
-                root.refreshVersionGraph();
-                versionNoteEdit.text = root.selectedVersionId && root.nodeById(root.selectedVersionId) ? root.nodeById(root.selectedVersionId).note : "";
+                root.refreshVersionGraph(false);
             }
         }
     }
@@ -530,7 +556,7 @@ Popup {
                             enabled: root.hasBackend && root.selectedVersionId.length > 0
                             onClicked: {
                                 if (root.backend.saveVersionNote(root.selectedVersionId, versionNoteEdit.text))
-                                    root.refreshVersionGraph();
+                                    root.refreshVersionGraph(false);
                             }
                         }
 
@@ -546,7 +572,7 @@ Popup {
                                 enabled: root.hasBackend && root.selectedVersionId.length > 0
                                 onClicked: {
                                     if (root.backend.restoreVersionById(root.selectedVersionId)) {
-                                        root.refreshVersionGraph();
+                                        root.refreshVersionGraph(true);
                                         root.close();
                                     }
                                 }

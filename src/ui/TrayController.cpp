@@ -3,6 +3,8 @@
 #include "PlatformAgent.h"
 #include "QmlBackend.h"
 
+#include "../core/BackupTemplate.h"
+
 #include <QAction>
 #include <QApplication>
 #include <QFileInfo>
@@ -62,13 +64,18 @@ void TrayController::attach(QmlBackend* backend, QQmlApplicationEngine* engine) 
     connect(m_macStatusBar, &MacStatusBar::openRequested, this, &TrayController::showMainWindow);
     connect(m_macStatusBar, &MacStatusBar::quitRequested, this, &TrayController::quitApplication);
     m_macStatusBar->install();
-    PlatformAgent::setBackgroundAgentMode(true);
 
     if (QQuickWindow* window = quickWindowForObject(mainWindowObject())) {
         connect(window, &QQuickWindow::visibleChanged, window, [window]() {
             // Menu-bar agent when hidden; normal Dock app while the window is open.
             PlatformAgent::setBackgroundAgentMode(!window->isVisible());
         });
+    }
+
+    if (m_backend && !m_backend->hasProjectsFolder()) {
+        showMainWindow();
+    } else {
+        PlatformAgent::setBackgroundAgentMode(true);
     }
     return;
 #else
@@ -101,24 +108,29 @@ void TrayController::attach(QmlBackend* backend, QQmlApplicationEngine* engine) 
     });
 
     m_tray->show();
+
+    if (m_backend && !m_backend->hasProjectsFolder()) {
+        showMainWindow();
+    }
 #endif
 }
 
 void TrayController::onProjectSaveRecorded(const QString& projectName,
                                            const QString& versionLabel,
                                            const QString& relativePath) {
-    const QString fileName = QFileInfo(relativePath).fileName();
-    const QString body = fileName.isEmpty()
-        ? QStringLiteral("Saved %1 (%2)").arg(projectName, versionLabel)
-        : QStringLiteral("Saved %1 — %2 (%3)").arg(projectName, versionLabel, fileName);
+    const QString artifactPath = BackupTemplates::artifactForPath(relativePath);
+    const QString artifactName = QFileInfo(artifactPath).fileName();
+    const QString body = artifactName.isEmpty()
+        ? QStringLiteral("%1 saved %2").arg(projectName, versionLabel)
+        : QStringLiteral("%1 — %2 saved %3").arg(projectName, artifactName, versionLabel);
 
 #ifdef Q_OS_MACOS
     if (m_macStatusBar) {
-        m_macStatusBar->showNotification(QStringLiteral("Immersion"), body);
+        m_macStatusBar->showNotification(QStringLiteral("Snapshot saved"), body);
     }
 #else
     if (m_tray) {
-        m_tray->showMessage(QStringLiteral("Immersion"), body, QSystemTrayIcon::Information, 5000);
+        m_tray->showMessage(QStringLiteral("Snapshot saved"), body, QSystemTrayIcon::Information, 5000);
     }
 #endif
 }
