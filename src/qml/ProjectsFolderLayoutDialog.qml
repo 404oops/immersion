@@ -41,6 +41,10 @@ ThemedPopup {
         else
             root.selectedLayout = "Bundles";
         root.open();
+        Qt.callLater(function () {
+            if (root.opened && !root.awaitingScan)
+                root.confirmSelection();
+        });
     }
 
     function openForCurrentFolder() {
