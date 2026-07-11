@@ -10,6 +10,8 @@
 #include <memory>
 #include <optional>
 
+#include "../persistence/ProjectsFolderSettings.h"
+
 enum class ProjectKind {
     // DawElectronic — clip/pattern-oriented
     Ableton,
@@ -103,12 +105,14 @@ public:
         const ScanCallback& onDirectoryScanned = {},
         const std::shared_ptr<std::atomic<bool>>& cancelled = {},
         const ProgressCallback& onProgress = {},
-        int progressEveryDirectories = 20) const;
+        int progressEveryDirectories = 20,
+        ProjectsFolderLayout layout = ProjectsFolderLayout::Bundles) const;
 
     // Resolve a single project from a changed file path (for watcher rediscovery).
     std::optional<DiscoveredProject> discoverProjectForChangedPath(
         const QString& selectedFolder,
-        const QString& absoluteChangedPath) const;
+        const QString& absoluteChangedPath,
+        ProjectsFolderLayout layout = ProjectsFolderLayout::Bundles) const;
 
     static QList<ProjectKind> knownKinds();
     static QString kindToString(ProjectKind kind);

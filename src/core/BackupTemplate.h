@@ -44,6 +44,8 @@ struct BackupTemplate {
 namespace BackupTemplates {
 
 inline constexpr int kUncompressedRecentVersions = 5;
+inline constexpr int kMinUncompressedRecentVersions = 1;
+inline constexpr int kMaxUncompressedRecentVersions = 50;
 
 const QList<BackupTemplate>& all();
 

@@ -47,7 +47,7 @@ Item {
         color: current ? theme.vmNodeCurrentFill
                        : (selected ? theme.vmNodeSelectedFill : theme.vmNodeFill)
         border.color: current ? theme.successBorder
-                              : (selected ? theme.vmNodeSelectedBorder : theme.vmBorder)
+                              : (selected ? theme.vmNodeSelectedBorder : theme.nodeBorder)
         border.width: selected ? 2 : 1
 
         Behavior on color {

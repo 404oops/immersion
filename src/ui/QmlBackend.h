@@ -16,6 +16,8 @@
 
 #include "../core/ProjectDiscovery.h"
 #include "../core/ProjectDiscoveryScanWorker.h"
+#include "../core/BackupTemplate.h"
+#include "../persistence/ProjectsFolderSettings.h"
 
 struct FileEvent;
 
@@ -39,7 +41,11 @@ class QmlBackend : public QObject {
     Q_PROPERTY(int selectedProjectIndex READ selectedProjectIndex WRITE setSelectedProjectIndex NOTIFY selectedProjectIndexChanged)
     Q_PROPERTY(QVariantList selectedProjectVersionGraph READ selectedProjectVersionGraph NOTIFY selectedProjectVersionGraphChanged)
     Q_PROPERTY(QString selectedProjectNote READ selectedProjectNote WRITE setSelectedProjectNote NOTIFY selectedProjectNoteChanged)
+    Q_PROPERTY(QStringList selectedProjectFiles READ selectedProjectFiles NOTIFY selectedProjectFilesChanged)
+    Q_PROPERTY(QString selectedProjectPrimaryFile READ selectedProjectPrimaryFile WRITE setSelectedProjectPrimaryFile NOTIFY selectedProjectPrimaryFileChanged)
     Q_PROPERTY(QString projectsFolderPath READ projectsFolderPath NOTIFY projectsFolderChanged)
+    Q_PROPERTY(QString projectsFolderLayout READ projectsFolderLayout NOTIFY projectsFolderLayoutChanged)
+    Q_PROPERTY(QString pendingProjectsFolderSetup READ pendingProjectsFolderSetup NOTIFY pendingProjectsFolderSetupChanged)
     Q_PROPERTY(double themeHue READ themeHue WRITE setThemeHue NOTIFY themeHueChanged)
     Q_PROPERTY(bool launchAtStartup READ launchAtStartup WRITE setLaunchAtStartup NOTIFY launchAtStartupChanged)
     Q_PROPERTY(bool launchAtStartupSupported READ launchAtStartupSupported CONSTANT)
@@ -71,8 +77,13 @@ public:
     QVariantList selectedProjectVersionGraph() const;
     QString selectedProjectNote() const;
     void setSelectedProjectNote(const QString& value);
+    QStringList selectedProjectFiles() const;
+    QString selectedProjectPrimaryFile() const;
+    void setSelectedProjectPrimaryFile(const QString& value);
 
     QString projectsFolderPath() const;
+    QString projectsFolderLayout() const;
+    QString pendingProjectsFolderSetup() const;
     double themeHue() const;
     void setThemeHue(double value);
     bool launchAtStartup() const;
@@ -86,7 +97,12 @@ public:
     QString colorSchemeMode() const;
     void setColorSchemeMode(const QString& value);
 
-    Q_INVOKABLE void loadProjectsFromFolder(const QString& folderPath);
+    Q_INVOKABLE void loadProjectsFromFolder(const QString& folderPath,
+                                            const QString& layoutOverride = QString());
+    Q_INVOKABLE void confirmProjectsFolder(const QString& folderPath, const QString& layout);
+    Q_INVOKABLE void reselectProjectsFolderLayout(const QString& layout);
+    Q_INVOKABLE QString projectsFolderLayoutForPath(const QString& folderPath) const;
+    Q_INVOKABLE QString displayLocalPath(const QString& urlOrPath) const;
     Q_INVOKABLE void openProject(int visibleIndex);
     Q_INVOKABLE void manageProjectVersions(int visibleIndex);
     Q_INVOKABLE QVariantList getProjectVersions(int visibleIndex) const;
@@ -113,6 +129,11 @@ signals:
     void selectedProjectIndexChanged();
     void selectedProjectVersionGraphChanged();
     void selectedProjectNoteChanged();
+    void selectedProjectFilesChanged();
+    void selectedProjectPrimaryFileChanged();
+    void projectsFolderLayoutChanged();
+    void pendingProjectsFolderSetupChanged();
+    void projectsFolderScanFinished(bool foundProjects);
     void themeHueChanged();
     void launchAtStartupChanged();
     void snapshotRetentionChanged();
@@ -153,12 +174,13 @@ private:
     void cancelProjectScan();
     void setScanningProjects(bool scanning);
     void applyDiscoveredProjects(const QList<DiscoveredProject>& projects);
+    void applySavedPrimaryFileOverrides(QList<DiscoveredProject>& projects) const;
     void finishLoadingProjects(const QList<DiscoveredProject>& projects, const QString& cleanPath);
     void persistAppSettings();
     void flushPendingThemeHuePersist();
     void logConfigChange(const QString& detail);
     void trimActivityLog();
-    void applySnapshotRetentionToServices();
+    void applySnapshotRetentionToServices(bool compactExisting = false);
     SortMode sortModeFromString(const QString& value) const;
     LogLevel logLevelFromString(const QString& value) const;
     ColorSchemeMode colorSchemeModeFromString(const QString& value) const;
@@ -166,19 +188,23 @@ private:
     void handleProjectScanDirectory(const QString& directoryPath, int directoriesScanned);
     void handleProjectsUpdated(const QList<DiscoveredProject>& partialProjects,
                                int directoriesScanned,
-                               const QString& folderPath);
+                               const QString& folderPath,
+                               int scanGeneration);
     void handleProjectScanCompleted(const QList<DiscoveredProject>& projects,
                                     qint64 elapsedMs,
                                     int directoriesScanned,
-                                    const QString& folderPath);
+                                    const QString& folderPath,
+                                    int scanGeneration);
     void adoptDiscoveredProject(const DiscoveredProject& project);
-    bool containsProjectRoot(const QString& rootPath) const;
+    bool containsDiscoveredProject(const DiscoveredProject& candidate) const;
     bool tryDiscoverProjectFromEvent(const FileEvent& event);
     bool dispatchFileEvent(const FileEvent& event);
     SnapshotService* snapshotServiceForRoot(const QString& projectRoot);
 
     QString m_statusMessage;
     QString m_projectsFolderRoot;
+    QString m_pendingProjectsFolderSetup;
+    ProjectsFolderLayout m_projectsFolderLayout {ProjectsFolderLayout::Bundles};
     QString m_projectRoot;
     QVariantList m_projects;
     QStringList m_activity;
@@ -189,10 +215,11 @@ private:
     SortMode m_sortMode {SortMode::Name};
     int m_selectedProjectIndex {-1};
     QString m_selectedProjectNote;
+    QString m_selectedProjectPrimaryFile;
     double m_themeHue {280.0};
     QTimer m_themeHuePersistTimer;
     bool m_launchAtStartup {false};
-    int m_snapshotRetention {5};
+    int m_snapshotRetention {BackupTemplates::kUncompressedRecentVersions};
     bool m_notificationsEnabled {true};
     ColorSchemeMode m_colorSchemeMode {ColorSchemeMode::System};
 
@@ -200,14 +227,17 @@ private:
     QList<int> m_visibleProjectIndexes;
     QHash<QString, QDateTime> m_lastOpenedAtByProjectRoot;
     QHash<QString, QString> m_projectNotes;
+    QHash<QString, QString> m_projectPrimaryFiles;
 
     std::unique_ptr<ProjectRegistry> m_projectRegistry;
+    ProjectsFolderSettings m_projectsFolderSettings;
     QThread m_discoveryThread;
     ProjectDiscoveryScanWorker* m_discoveryWorker {nullptr};
     std::shared_ptr<std::atomic<bool>> m_scanCancelFlag;
     bool m_isScanningProjects {false};
     int m_lastScanStatusDirectories {0};
     QString m_activeScanFolder;
+    int m_activeScanGeneration {0};
     int m_monitorInitIndex {0};
     bool m_monitorInitActive {false};
     ProjectDiscovery m_projectDiscovery;

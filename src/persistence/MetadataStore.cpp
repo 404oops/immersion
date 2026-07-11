@@ -220,6 +220,32 @@ QStringList MetadataStore::stagedPathsBeyondNewest(const QString& relativePath, 
     return stagedPathsInOrder.mid(0, excess);
 }
 
+QStringList MetadataStore::snapshotPaths() const {
+    if (m_musitRoot.isEmpty()) {
+        return {};
+    }
+
+    QFile logFile(QDir(m_musitRoot).filePath("versions/log.jsonl"));
+    if (!logFile.exists() || !logFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+
+    QStringList paths;
+    while (!logFile.atEnd()) {
+        const QJsonDocument doc = QJsonDocument::fromJson(logFile.readLine().trimmed());
+        if (!doc.isObject()) {
+            continue;
+        }
+
+        const QString path = doc.object().value("path").toString();
+        if (!path.isEmpty()) {
+            paths.append(path);
+        }
+    }
+    paths.removeDuplicates();
+    return paths;
+}
+
 QString MetadataStore::latestStagedVersionForArtifact(const QString& artifact) const {
     if (m_musitRoot.isEmpty() || artifact.isEmpty()) {
         return {};

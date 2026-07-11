@@ -164,9 +164,7 @@ void MacStatusBar::install() {
 
     d->statusItem.button.target = target;
     d->statusItem.button.action = @selector(statusBarButtonClicked:);
-    if ([d->statusItem.button respondsToSelector:@selector(setSendsActionOnMouseDown:)]) {
-        [d->statusItem.button setSendsActionOnMouseDown:YES];
-    }
+    [d->statusItem.button sendActionOn:(NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown)];
 }
 
 void MacStatusBar::showNotification(const QString& title, const QString& body) {

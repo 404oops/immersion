@@ -122,6 +122,8 @@ add_executable(Immersion
     src/persistence/MetadataStore.h
     src/persistence/ProjectRegistry.cpp
     src/persistence/ProjectRegistry.h
+    src/persistence/ProjectsFolderSettings.cpp
+    src/persistence/ProjectsFolderSettings.h
 )
 
 qt_add_resources(Immersion Immersion_qml
@@ -132,6 +134,9 @@ qt_add_resources(Immersion Immersion_qml
         src/qml/Theme.qml
         src/qml/VersionManagerWindow.qml
         src/qml/SettingsWindow.qml
+        src/qml/ThemedPopup.qml
+        src/qml/ThemedConfirmDialog.qml
+        src/qml/ProjectsFolderLayoutDialog.qml
         src/qml/MainView.ui.qml
         src/qml/OnboardingView.qml
         src/qml/ActionButton.qml
@@ -234,6 +239,8 @@ if(MUSIT_BUILD_TESTS)
         src/persistence/MetadataStore.h
         src/persistence/ProjectRegistry.cpp
         src/persistence/ProjectRegistry.h
+        src/persistence/ProjectsFolderSettings.cpp
+        src/persistence/ProjectsFolderSettings.h
     )
     target_link_libraries(musit_e2e_test Qt6::Qml Qt6::Gui)
     target_sources(musit_e2e_test PRIVATE src/ui/PlatformAgent.cpp)

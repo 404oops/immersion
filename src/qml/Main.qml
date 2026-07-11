@@ -3,7 +3,6 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
-import QtQuick.Dialogs
 import "."
 
 ApplicationWindow {
@@ -21,20 +20,24 @@ ApplicationWindow {
         window.hide()
     }
 
-    FolderDialog {
-        id: folderDialog
-        currentFolder: ""
-        title: "Select Projects Folder"
-        onAccepted: {
-            window.backend.loadProjectsFromFolder(selectedFolder)
-        }
+    function showProjectsFolderLayoutDialog(folderPath) {
+        window.show();
+        layoutDialogOpenTimer.folderPath = folderPath;
+        layoutDialogOpenTimer.restart();
+    }
+
+    Timer {
+        id: layoutDialogOpenTimer
+        interval: 150
+        property string folderPath
+        onTriggered: projectsFolderLayoutDialog.openForFolder(folderPath)
     }
 
     // Show onboarding only until the user picks a projects folder. While a NAS
     // scan runs, keep the main view visible and populate the list incrementally.
     readonly property bool isOnboarding: !window.backend.hasProjectsFolder
     readonly property int viewFadeDuration: 280
-    readonly property bool modalScrimVisible: versionManagerWindow.opened || settingsWindow.opened
+    readonly property bool modalScrimVisible: versionManagerWindow.opened || settingsWindow.opened || projectsFolderLayoutDialog.opened
 
     function scrollActivityToBottom() {
         if (!mainView || !mainView.activityListView)
@@ -113,9 +116,11 @@ ApplicationWindow {
         function onActivityChanged() {
             window.scrollActivityToBottom();
         }
-        function onProjectsFolderChanged() {
-            if (window.backend.hasProjectsFolder && settingsWindow.opened)
-                settingsWindow.close();
+        function onPendingProjectsFolderSetupChanged() {
+            if (window.backend.pendingProjectsFolderSetup.length > 0) {
+                window.showProjectsFolderLayoutDialog(
+                            window.backend.pendingProjectsFolderSetup);
+            }
         }
     }
 
@@ -131,11 +136,30 @@ ApplicationWindow {
         color: windowTheme.modalScrim
         opacity: window.modalScrimVisible ? 1 : 0
         visible: opacity > 0
-        z: Math.max(versionManagerWindow.z, settingsWindow.z) - 1
+        z: 10
 
         Behavior on opacity {
             NumberAnimation {
-                duration: 220
+                duration: windowTheme.modalEnterDuration
+                easing.type: Easing.OutCubic
+            }
+        }
+    }
+
+    // A child modal over Settings gets its own scrim so modal depth is clear.
+    Rectangle {
+        id: nestedModalScrim
+        parent: Overlay.overlay
+        anchors.fill: parent
+        color: windowTheme.modalScrim
+        opacity: (settingsWindow.childDialogOpened
+                  || versionManagerWindow.childDialogOpened) ? 0.72 : 0
+        visible: opacity > 0
+        z: 30
+
+        Behavior on opacity {
+            NumberAnimation {
+                duration: windowTheme.modalEnterDuration
                 easing.type: Easing.OutCubic
             }
         }
@@ -144,16 +168,27 @@ ApplicationWindow {
     VersionManagerWindow {
         id: versionManagerWindow
         backend: window.backend
+        z: 20
     }
 
     SettingsWindow {
         id: settingsWindow
         backend: window.backend
-        onChooseProjectsFolderRequested: folderDialog.open()
+        z: 20
+    }
+
+    ProjectsFolderLayoutDialog {
+        id: projectsFolderLayoutDialog
+        backend: window.backend
+        z: 20
     }
 
     Component.onCompleted: {
         if (window.isOnboarding)
             window.show();
+        if (window.backend.pendingProjectsFolderSetup.length > 0) {
+            window.showProjectsFolderLayoutDialog(
+                        window.backend.pendingProjectsFolderSetup);
+        }
     }
 }

@@ -4,6 +4,22 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
+
+namespace {
+
+bool compressedObjectMatchesHash(const QByteArray& compressed, const QString& hashHex) {
+    if (compressed.size() < 4 || hashHex.size() != 64) {
+        return false;
+    }
+
+    const QByteArray decompressed = qUncompress(compressed);
+    const QByteArray actualHash =
+        QCryptographicHash::hash(decompressed, QCryptographicHash::Sha256).toHex();
+    return actualHash == hashHex.toLatin1();
+}
+
+} // namespace
 
 ObjectStore::ObjectStore(QString musitRoot)
     : m_musitRoot(std::move(musitRoot)) {}
@@ -61,10 +77,13 @@ QString ObjectStore::stageFile(const QString& absolutePath, const QString& relat
         return {};
     }
 
-    if (target.write(bytes) < 0) {
+    if (target.write(bytes) != bytes.size()) {
+        target.close();
+        QFile::remove(targetFilePath);
         return {};
     }
 
+    target.close();
     return targetFilePath;
 }
 
@@ -88,15 +107,12 @@ bool ObjectStore::extractObject(const QString& objectHash, const QString& destPa
         return false;
     }
 
-    const QByteArray decompressed = qUncompress(object.readAll());
+    const QByteArray compressed = object.readAll();
     object.close();
-    if (decompressed.isEmpty()) {
-        // qUncompress returns empty on corrupt input; an empty original file
-        // is indistinguishable, so double-check via the stored size header.
-        if (object.size() > 4) {
-            return false;
-        }
+    if (!compressedObjectMatchesHash(compressed, objectHash)) {
+        return false;
     }
+    const QByteArray decompressed = qUncompress(compressed);
 
     QFile dest(destPath);
     if (!dest.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -135,16 +151,20 @@ QString ObjectStore::storeFile(const QString& absolutePath) {
 
     const QString objectPath = QDir(shardDir).filePath(filePart + ".z");
     if (QFileInfo::exists(objectPath)) {
-        return hashHex;
-    }
-
-    QFile object(objectPath);
-    if (!object.open(QIODevice::WriteOnly)) {
-        return {};
+        QFile existing(objectPath);
+        if (existing.open(QIODevice::ReadOnly)
+            && compressedObjectMatchesHash(existing.readAll(), hashHex)) {
+            return hashHex;
+        }
     }
 
     const QByteArray compressed = qCompress(bytes, 6);
-    if (object.write(compressed) < 0) {
+    QSaveFile object(objectPath);
+    if (!object.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return {};
+    }
+
+    if (object.write(compressed) != compressed.size() || !object.commit()) {
         return {};
     }
 

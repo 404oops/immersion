@@ -5,86 +5,22 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import "."
 
-// Modal overlay on the main window (stays above it on macOS/Windows/Linux).
-Popup {
+ThemedPopup {
     id: root
     property var backend: null
     readonly property bool hasBackend: backend !== null && backend !== undefined
+    readonly property bool childDialogOpened: deleteConfirmDialog.opened
     property var designGraph: buildEdgeCaseGraph()
 
-    parent: Overlay.overlay
-    modal: true
-    focus: true
-    padding: 0
-    closePolicy: Popup.CloseOnEscape
+    popupMinWidth: 720
+    popupMinHeight: 480
+    popupMaxWidth: 1120
+    popupMaxHeight: 700
+    popupPreferredWidth: 900
+    popupPreferredHeight: 560
 
-    transformOrigin: Item.Center
-    dim: false
-
-    enter: Transition {
-        ParallelAnimation {
-            NumberAnimation {
-                property: "opacity"
-                from: 0.0
-                to: 1.0
-                duration: 220
-                easing.type: Easing.OutCubic
-            }
-            NumberAnimation {
-                property: "scale"
-                from: 0.97
-                to: 1.0
-                duration: 220
-                easing.type: Easing.OutCubic
-            }
-        }
-    }
-
-    exit: Transition {
-        ParallelAnimation {
-            NumberAnimation {
-                property: "opacity"
-                from: 1.0
-                to: 0.0
-                duration: 160
-                easing.type: Easing.InCubic
-            }
-            NumberAnimation {
-                property: "scale"
-                from: 1.0
-                to: 0.985
-                duration: 160
-                easing.type: Easing.InCubic
-            }
-        }
-    }
-
-    readonly property int popupMinWidth: 720
-    readonly property int popupMinHeight: 480
-    readonly property int popupMaxWidth: 1120
-    readonly property int popupMaxHeight: 700
-
-    anchors.centerIn: parent
-    width: {
-        if (!parent)
-            return popupMaxWidth;
-        const available = Math.max(0, parent.width - 48);
-        const preferred = Math.min(popupMaxWidth, Math.max(900, available));
-        return Math.min(available, Math.max(popupMinWidth, preferred));
-    }
-    height: {
-        if (!parent)
-            return popupMaxHeight;
-        const available = Math.max(0, parent.height - 48);
-        const preferred = Math.min(popupMaxHeight, Math.max(560, available));
-        return Math.min(available, Math.max(popupMinHeight, preferred));
-    }
-
-    background: Rectangle {
-        color: theme.vmPanel
-        radius: 10
-        border.color: theme.vmBorder
-        border.width: 1
+    Theme {
+        id: theme
     }
 
     function buildEdgeCaseGraph() {
@@ -140,10 +76,6 @@ Popup {
         }
 
         return graph;
-    }
-
-    Theme {
-        id: theme
     }
 
     property var versionGraph: []
@@ -258,7 +190,28 @@ Popup {
         root.backend.manageProjectVersions(index);
         refreshVersionGraph(true);
         projectNoteEdit.text = root.backend.selectedProjectNote;
+        syncPrimaryFileCombo();
         open();
+    }
+
+    function syncPrimaryFileCombo() {
+        if (!root.hasBackend) {
+            primaryFileCombo.model = [];
+            primaryFileCombo.currentIndex = -1;
+            return;
+        }
+
+        const files = root.backend.selectedProjectFiles;
+        primaryFileCombo.model = files;
+        const currentFile = root.backend.selectedProjectPrimaryFile;
+        let index = -1;
+        for (let i = 0; i < files.length; ++i) {
+            if (files[i] === currentFile) {
+                index = i;
+                break;
+            }
+        }
+        primaryFileCombo.currentIndex = index >= 0 ? index : (files.length > 0 ? 0 : -1);
     }
 
     Component.onCompleted: {
@@ -279,51 +232,27 @@ Popup {
                 projectNoteEdit.text = root.backend.selectedProjectNote;
             }
         }
+        function onSelectedProjectFilesChanged() {
+            if (root.opened && root.hasBackend) {
+                root.syncPrimaryFileCombo();
+            }
+        }
+        function onSelectedProjectPrimaryFileChanged() {
+            if (root.opened && root.hasBackend) {
+                root.syncPrimaryFileCombo();
+            }
+        }
     }
 
-    Dialog {
+    ThemedConfirmDialog {
         id: deleteConfirmDialog
-        anchors.centerIn: parent
-        modal: true
+        z: 40
         title: "Delete Version"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        transformOrigin: Item.Center
-
-        enter: Transition {
-            ParallelAnimation {
-                NumberAnimation {
-                    property: "opacity"
-                    from: 0.0
-                    to: 1.0
-                    duration: 180
-                    easing.type: Easing.OutCubic
-                }
-                NumberAnimation {
-                    property: "scale"
-                    from: 0.98
-                    to: 1.0
-                    duration: 180
-                    easing.type: Easing.OutCubic
-                }
-            }
-        }
-
-        exit: Transition {
-            NumberAnimation {
-                property: "opacity"
-                from: 1.0
-                to: 0.0
-                duration: 120
-                easing.type: Easing.InCubic
-            }
-        }
-
-        Label {
-            text: "Delete version v" + root.selectedVersionId + "?\n\nThis removes its snapshot from .musit and cannot be undone."
-            wrapMode: Text.WordWrap
-        }
-
-        onAccepted: {
+        message: "Delete version v" + root.selectedVersionId
+                 + "?\n\nThis removes its snapshot from .musit and cannot be undone."
+        confirmText: "Delete"
+        danger: true
+        onConfirmed: {
             if (root.backend.deleteVersionById(root.selectedVersionId)) {
                 root.refreshVersionGraph(false);
             }
@@ -499,6 +428,37 @@ Popup {
                             text: "Project Note"
                             color: theme.vmTextPrimary
                             font.bold: true
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            visible: root.hasBackend && root.backend.selectedProjectFiles.length > 1
+
+                            Label {
+                                text: "Main project file"
+                                color: theme.vmTextPrimary
+                                font.bold: true
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Choose which file Immersion opens and versions when several project files share this folder."
+                                wrapMode: Text.WordWrap
+                                color: theme.vmTextMeta
+                                font.pixelSize: 12
+                                lineHeight: 1.35
+                            }
+
+                            ThemedComboBox {
+                                id: primaryFileCombo
+                                Layout.fillWidth: true
+                                enabled: root.hasBackend
+                                onActivated: function (index) {
+                                    if (root.hasBackend && index >= 0)
+                                        root.backend.selectedProjectPrimaryFile = primaryFileCombo.textAt(index);
+                                }
+                            }
                         }
 
                         ThemedTextArea {

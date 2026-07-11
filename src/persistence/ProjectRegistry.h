@@ -2,6 +2,7 @@
 
 #include <QString>
 
+#include "../core/BackupTemplate.h"
 #include "../core/ProjectDiscovery.h"
 
 struct AppSettings {
@@ -9,7 +10,7 @@ struct AppSettings {
     bool launchAtStartup {false};
     QString sortMode;
     QString logLevel;
-    int snapshotRetention {5};
+    int snapshotRetention {BackupTemplates::kUncompressedRecentVersions};
     bool notificationsEnabled {true};
     QString colorSchemeMode;
 };
@@ -21,6 +22,8 @@ public:
     QString loadProjectsFolder() const;
     QString loadProjectNote(const QString& rootPath) const;
     bool saveProjectNote(const QString& rootPath, const QString& note);
+    QString loadProjectPrimaryFile(const QString& rootPath) const;
+    bool saveProjectPrimaryFile(const QString& rootPath, const QString& primaryFile);
     QString dataFilePath() const;
 
     AppSettings loadAppSettings() const;

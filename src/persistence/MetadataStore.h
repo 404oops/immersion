@@ -32,6 +32,7 @@ public:
     // recently appended versions of a path; used to compact old versions
     // down to their compressed objects.
     QStringList stagedPathsBeyondNewest(const QString& relativePath, int keepCount) const;
+    QStringList snapshotPaths() const;
 
     // Artifact recorded on a log line, with fallback for legacy lines that
     // predate the artifact field (they were always single-file versions).

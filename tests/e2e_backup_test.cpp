@@ -19,6 +19,7 @@
 #include <QGuiApplication>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -28,6 +29,7 @@
 #include <functional>
 
 #include "../src/core/BackupTemplate.h"
+#include "../src/persistence/ObjectStore.h"
 #include "../src/ui/QmlBackend.h"
 
 namespace {
@@ -162,6 +164,40 @@ int main(int argc, char** argv) {
     check(BackupTemplates::artifactForPath("My Set.als") == QStringLiteral("My Set.als"),
           "template: single-file path is its own artifact");
 
+    // ---- Compressed object integrity ----
+    QTemporaryDir objectStoreDir;
+    const QString objectSource = objectStoreDir.filePath(QStringLiteral("source.bin"));
+    const QString objectRestore = objectStoreDir.filePath(QStringLiteral("restored.bin"));
+    ObjectStore objectStore(objectStoreDir.filePath(QStringLiteral(".musit")));
+    check(objectStore.init() && writeFile(objectSource, "object contents"),
+          "object store: fixture initialized");
+    const QString objectHash = objectStore.storeFile(objectSource);
+    check(!objectHash.isEmpty(), "object store: compressed object created");
+    check(writeFile(objectStore.objectPathForHash(objectHash), "corrupt"),
+          "object store: compressed object corrupted for recovery test");
+    check(objectStore.storeFile(objectSource) == objectHash,
+          "object store: corrupt existing object repaired");
+    check(objectStore.extractObject(objectHash, objectRestore)
+              && readFile(objectRestore) == QByteArray("object contents"),
+          "object store: repaired object restores correctly");
+
+    // ---- Loose-files layout discovery ----
+    QTemporaryDir looseProjectsDir;
+    const QString nestedFlp = QDir(looseProjectsDir.path()).filePath(
+        QStringLiteral("Nested Song/Nested Song.flp"));
+    const QString ignoredLogicBundleFile = QDir(looseProjectsDir.path()).filePath(
+        QStringLiteral("Bundled Song.logicx/Alternatives/000/ProjectData"));
+    check(writeFile(nestedFlp, "fake flp")
+              && writeFile(ignoredLogicBundleFile, "fake bundled project"),
+          "files layout: loose and bundled fixtures created");
+
+    const QList<DiscoveredProject> looseProjects = ProjectDiscovery().discoverAll(
+        looseProjectsDir.path(), {}, {}, {}, 20, ProjectsFolderLayout::Files);
+    check(looseProjects.size() == 1,
+          "files layout: recursively finds only naked project files");
+    check(looseProjects.value(0).primaryProjectFile == QStringLiteral("Nested Song.flp"),
+          "files layout: project entry uses matching file extension");
+
     // ---- Fake Logic project ----
     QTemporaryDir projectsDir;
     if (!projectsDir.isValid()) {
@@ -196,6 +232,41 @@ int main(int argc, char** argv) {
 
     const QVariantList projects = backend.projects();
     check(projects.size() == 1, "discovery: exactly one project found (bundle dir, not its contents)");
+
+    backend.confirmProjectsFolder(projectsDir.path(), QStringLiteral("Files"));
+    check(waitFor([&]() {
+        return !backend.property("isScanningProjects").toBool();
+    }, 20000), "layout: Files scan completed");
+    check(!backend.hasDiscoveredProjects(), "layout: bundle hidden in Files mode");
+
+    backend.confirmProjectsFolder(projectsDir.path(), QStringLiteral("Bundles"));
+    const bool bundlesRescanReady = waitFor([&]() {
+        return backend.hasDiscoveredProjects() && !backend.property("isScanningProjects").toBool();
+    }, 20000);
+    check(bundlesRescanReady, "layout: Bundles rescan completed with projects");
+    check(backend.projects().size() == 1, "layout: bundle project restored after rescan");
+
+    backend.confirmProjectsFolder(projectsDir.path(), QStringLiteral("Files"));
+    backend.confirmProjectsFolder(projectsDir.path(), QStringLiteral("Bundles"));
+    const bool rapidRescanReady = waitFor([&]() {
+        return backend.hasDiscoveredProjects() && !backend.property("isScanningProjects").toBool();
+    }, 20000);
+    check(rapidRescanReady, "layout: rapid switch back to Bundles still discovers projects");
+
+    const QString fileUrl = QUrl::fromLocalFile(projectsDir.path()).toString();
+    backend.confirmProjectsFolder(fileUrl, QStringLiteral("Files"));
+    backend.confirmProjectsFolder(fileUrl, QStringLiteral("Bundles"));
+    const bool urlRescanReady = waitFor([&]() {
+        return backend.hasDiscoveredProjects() && !backend.property("isScanningProjects").toBool();
+    }, 20000);
+    check(urlRescanReady, "layout: file URL rescan still discovers projects");
+
+    backend.reselectProjectsFolderLayout(QStringLiteral("Files"));
+    backend.reselectProjectsFolderLayout(QStringLiteral("Bundles"));
+    const bool reselectReady = waitFor([&]() {
+        return backend.hasDiscoveredProjects() && !backend.property("isScanningProjects").toBool();
+    }, 20000);
+    check(reselectReady, "layout: reselectProjectsFolderLayout restores bundle projects");
 
     const bool monitoringReady = waitFor([&]() {
         const QVariantList versions = backend.getProjectVersions(0);
@@ -284,6 +355,12 @@ int main(int argc, char** argv) {
         }
         check(!files.isEmpty() && !anyStagedLeft, "compaction: v1 staged copies deleted");
     }
+
+    backend.setSnapshotRetention(2);
+    check(countStagedFilesNamed(projectRoot, QStringLiteral("ProjectData")) == 2,
+          "retention change: existing ProjectData copies compact immediately");
+    check(countStagedFilesNamed(projectRoot, QStringLiteral("Metadata.plist")) == 2,
+          "retention change: existing plist copies compact immediately");
 
     // ---- Restore of a compacted version (object-store path) ----
     backend.setSelectedProjectIndex(0);

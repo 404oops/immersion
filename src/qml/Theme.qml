@@ -111,27 +111,38 @@ QtObject {
     readonly property color rowEven: isDarkMode ? pastel(0.31, 0.025, -2.0) : pastel(0.90, 0.018, -2.0)
     readonly property color rowOdd: isDarkMode ? pastel(0.28, 0.025, -2.0) : pastel(0.87, 0.018, -2.0)
 
-    readonly property color border: isDarkMode ? pastel(0.38, 0.022, 0.0) : pastel(0.78, 0.020, 0.0)
+    readonly property color border: isDarkMode ? pastel(0.33, 0.016, 0.0) : pastel(0.86, 0.014, 0.0)
     readonly property color inputSurface: isDarkMode ? pastel(0.20, 0.014, -2.0) : "#ffffff"
     readonly property color inputFill: isDarkMode ? oklchToColor(0.22, 0.045, hue) : pastel(0.96, 0.040, 0.0)
-    readonly property color inputBorder: isDarkMode ? pastel(0.42, 0.020, 0.0) : pastel(0.82, 0.018, 0.0)
-    readonly property color inputBorderAccent: isDarkMode ? oklchToColor(0.52, 0.085, hue) : pastel(0.68, 0.090, 0.0)
+    readonly property color inputBorder: isDarkMode ? pastel(0.35, 0.016, 0.0) : pastel(0.87, 0.014, 0.0)
+    readonly property color inputBorderAccent: isDarkMode ? oklchToColor(0.48, 0.060, hue) : pastel(0.72, 0.065, 0.0)
     readonly property color modalScrim: isDarkMode ? "#80000000" : "#55000000"
-    readonly property color nodeBorder: isDarkMode ? pastel(0.92, 0.015, 0.0) : pastel(0.72, 0.016, 0.0)
-    readonly property color graphLink: isDarkMode ? pastel(0.72, 0.045, 2.0) : pastel(0.58, 0.045, 2.0)
+    readonly property int modalEnterDuration: 220
+    readonly property int modalExitDuration: 160
+    readonly property real modalEnterScale: 0.97
+    readonly property real modalExitScale: 0.985
+    readonly property int modalPanelRadius: 10
+    readonly property int modalEdgePadding: 48
+    readonly property color modalBorder: isDarkMode ? "#2effffff" : "#26000000"
+    readonly property color modalOptionBorder: isDarkMode ? "#3affffff" : "#30000000"
+    readonly property color modalSelectedBorder: isDarkMode
+                                                 ? pastel(0.72, 0.070, 0.0)
+                                                 : pastel(0.64, 0.070, 0.0)
+    readonly property color nodeBorder: isDarkMode ? pastel(0.58, 0.040, 0.0) : pastel(0.76, 0.035, 0.0)
+    readonly property color graphLink: isDarkMode ? pastel(0.76, 0.075, 2.0) : pastel(0.54, 0.065, 2.0)
 
     // Version manager: extra separation in light mode (panels were too same-y grey).
-    readonly property color vmPanel: isDarkMode ? panelSurfaceAlt : "#ffffff"
-    readonly property color vmGraph: isDarkMode ? graphSurface : pastel(0.975, 0.014, -4.0)
-    readonly property color vmSidePanel: isDarkMode ? sidePanelSurface : pastel(0.945, 0.028, 4.0)
-    readonly property color vmBorder: isDarkMode ? border : pastel(0.68, 0.038, 0.0)
+    readonly property color vmPanel: isDarkMode ? pastel(0.29, 0.018, 0.0) : "#ffffff"
+    readonly property color vmGraph: isDarkMode ? pastel(0.26, 0.020, -2.0) : pastel(0.975, 0.014, -4.0)
+    readonly property color vmSidePanel: isDarkMode ? pastel(0.30, 0.022, 2.0) : pastel(0.945, 0.028, 4.0)
+    readonly property color vmBorder: isDarkMode ? border : pastel(0.84, 0.018, 0.0)
     readonly property color vmTextPrimary: isDarkMode ? textPrimary : pastel(0.18, 0.022, 0.0)
-    readonly property color vmTextMeta: isDarkMode ? textMeta : pastel(0.34, 0.020, 0.0)
-    readonly property color vmInputSurface: isDarkMode ? inputSurface : "#ffffff"
-    readonly property color vmGraphLink: isDarkMode ? graphLink : pastel(0.52, 0.058, 2.0)
-    readonly property color vmGraphLinkActive: isDarkMode ? selection : pastel(0.58, 0.095, 0.0)
-    readonly property color vmGraphGrid: isDarkMode ? "#18ffffff" : "#12000000"
-    readonly property color vmNodeFill: isDarkMode ? oklchToColor(0.34, 0.055, hue) : "#ffffff"
+    readonly property color vmTextMeta: isDarkMode ? pastel(0.88, 0.014, 0.0) : pastel(0.34, 0.020, 0.0)
+    readonly property color vmInputSurface: isDarkMode ? pastel(0.26, 0.016, -2.0) : "#ffffff"
+    readonly property color vmGraphLink: isDarkMode ? graphLink : pastel(0.52, 0.070, 2.0)
+    readonly property color vmGraphLinkActive: isDarkMode ? pastel(0.84, 0.130, 8.0) : pastel(0.56, 0.110, 0.0)
+    readonly property color vmGraphGrid: isDarkMode ? "#26ffffff" : "#16000000"
+    readonly property color vmNodeFill: isDarkMode ? oklchToColor(0.40, 0.070, hue) : "#ffffff"
     readonly property color vmNodeSelectedFill: isDarkMode ? selection : pastel(0.66, 0.105, 0.0)
     readonly property color vmNodeCurrentFill: isDarkMode ? success : pastel(0.62, 0.120, 145.0)
     readonly property color vmNodeSelectedBorder: isDarkMode ? pastel(0.92, 0.020, 12.0) : pastel(0.52, 0.100, 0.0)
@@ -142,15 +153,15 @@ QtObject {
     readonly property color buttonSoftFill: isDarkMode ? oklchToColor(0.36, 0.06, hue) : pastel(0.90, 0.048, 0.0)
     readonly property color buttonSoftFillHover: isDarkMode ? oklchToColor(0.44, 0.08, hue + 4.0) : pastel(0.84, 0.058, 0.0)
     readonly property color buttonSoftLabel: isDarkMode ? buttonLabel : pastel(0.26, 0.040, 0.0)
-    readonly property color buttonSoftBorder: isDarkMode ? "transparent" : pastel(0.72, 0.050, 0.0)
+    readonly property color buttonSoftBorder: isDarkMode ? "transparent" : pastel(0.84, 0.026, 0.0)
 
     readonly property color buttonPrimaryFill: isDarkMode ? buttonFill : pastel(0.70, 0.095, 0.0)
     readonly property color buttonPrimaryFillHover: isDarkMode ? buttonFillHover : pastel(0.64, 0.105, 0.0)
     readonly property color buttonPrimaryLabel: isDarkMode ? buttonLabel : "#ffffff"
-    readonly property color buttonPrimaryBorder: isDarkMode ? "transparent" : pastel(0.58, 0.090, 0.0)
+    readonly property color buttonPrimaryBorder: isDarkMode ? "transparent" : pastel(0.70, 0.060, 0.0)
 
     readonly property color buttonDangerFill: isDarkMode ? oklchToColor(0.38, 0.07, 18.0) : pastel(0.91, 0.042, 16.0)
     readonly property color buttonDangerFillHover: isDarkMode ? oklchToColor(0.44, 0.09, 18.0) : pastel(0.86, 0.052, 16.0)
     readonly property color buttonDangerLabel: isDarkMode ? pastel(0.97, 0.006, 0.0) : pastel(0.42, 0.085, 16.0)
-    readonly property color buttonDangerBorder: isDarkMode ? "transparent" : pastel(0.74, 0.055, 16.0)
+    readonly property color buttonDangerBorder: isDarkMode ? "transparent" : pastel(0.84, 0.030, 16.0)
 }

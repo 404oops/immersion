@@ -12,6 +12,8 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 
+#include <algorithm>
+
 namespace {
 
 bool writeJsonAtomically(const QString& filePath, const QJsonObject& root) {
@@ -199,6 +201,58 @@ bool ProjectRegistry::saveProjectNote(const QString& rootPath, const QString& no
     return writeJsonAtomically(dataFilePath(), root);
 }
 
+QString ProjectRegistry::loadProjectPrimaryFile(const QString& rootPath) const {
+    QFile file(dataFilePath());
+    const QJsonArray projects = readProjectsArray(file);
+    for (const QJsonValue& value : projects) {
+        const QJsonObject obj = value.toObject();
+        if (pathEquals(obj.value("root_path").toString(), rootPath)) {
+            return obj.value("primary_project_file").toString();
+        }
+    }
+
+    return {};
+}
+
+bool ProjectRegistry::saveProjectPrimaryFile(const QString& rootPath, const QString& primaryFile) {
+    const QString dirPath = appConfigDirectory();
+    if (dirPath.isEmpty() || !QDir().mkpath(dirPath)) {
+        return false;
+    }
+
+    QFile file(dataFilePath());
+    QJsonArray projects = readProjectsArray(file);
+
+    bool updated = false;
+    QJsonArray rewritten;
+    for (const QJsonValue& value : projects) {
+        QJsonObject obj = value.toObject();
+        if (pathEquals(obj.value("root_path").toString(), rootPath)) {
+            if (primaryFile.trimmed().isEmpty()) {
+                obj.remove("primary_project_file");
+            } else {
+                obj.insert("primary_project_file", primaryFile.trimmed());
+            }
+            updated = true;
+        }
+        rewritten.append(obj);
+    }
+
+    if (!updated) {
+        QJsonObject placeholder;
+        placeholder.insert("root_path", rootPath);
+        if (!primaryFile.trimmed().isEmpty()) {
+            placeholder.insert("primary_project_file", primaryFile.trimmed());
+        }
+        rewritten.append(placeholder);
+    }
+
+    QJsonObject root;
+    root.insert("projects", rewritten);
+
+    return writeJsonAtomically(dataFilePath(), root);
+}
+
 namespace {
 
 QString configFilePathForApp() {
@@ -252,7 +306,10 @@ AppSettings ProjectRegistry::loadAppSettings() const {
         settings.logLevel = root.value(QStringLiteral("log_level")).toString();
     }
     if (root.contains(QStringLiteral("snapshot_retention"))) {
-        settings.snapshotRetention = root.value(QStringLiteral("snapshot_retention")).toInt(settings.snapshotRetention);
+        settings.snapshotRetention = std::clamp(
+            root.value(QStringLiteral("snapshot_retention")).toInt(settings.snapshotRetention),
+            BackupTemplates::kMinUncompressedRecentVersions,
+            BackupTemplates::kMaxUncompressedRecentVersions);
     }
     if (root.contains(QStringLiteral("notifications_enabled"))) {
         settings.notificationsEnabled = root.value(QStringLiteral("notifications_enabled")).toBool(true);

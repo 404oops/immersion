@@ -37,11 +37,20 @@ SnapshotService::SnapshotService(QObject* parent)
     : QObject(parent) {}
 
 void SnapshotService::setUncompressedRecentVersions(const int keepCount) {
-    m_uncompressedRecentVersions = std::max(1, keepCount);
+    m_uncompressedRecentVersions = std::clamp(
+        keepCount,
+        BackupTemplates::kMinUncompressedRecentVersions,
+        BackupTemplates::kMaxUncompressedRecentVersions);
 }
 
 int SnapshotService::uncompressedRecentVersions() const {
     return m_uncompressedRecentVersions;
+}
+
+void SnapshotService::compactAllStagedCopies() {
+    for (const QString& relativePath : m_metadataStore.snapshotPaths()) {
+        compactStagedCopies(relativePath);
+    }
 }
 
 bool SnapshotService::setProjectRoot(const QString& rootPath) {
@@ -134,9 +143,17 @@ bool SnapshotService::createSnapshot(const FileEvent& event, bool isBaseline) {
         emit snapshotError(QString("Failed to stage %1%2").arg(label, event.relativePath));
         return false;
     }
+    const auto discardStagedCopy = [this, &stagedPath]() {
+        if (!QFile::remove(stagedPath)) {
+            return;
+        }
+        const QString stagingRoot = QDir(m_projectConfig.musitPath()).filePath("staging");
+        removeEmptyParentDirs(QFileInfo(stagedPath).dir().absolutePath(), stagingRoot);
+    };
 
     const QString objectHash = m_objectStore.storeFile(event.absolutePath);
     if (objectHash.isEmpty()) {
+        discardStagedCopy();
         emit snapshotError(QString("Failed to store %1object for %2").arg(label, event.relativePath));
         return false;
     }
@@ -179,6 +196,7 @@ bool SnapshotService::createSnapshot(const FileEvent& event, bool isBaseline) {
     const bool appended = m_metadataStore.appendSnapshotEvent(
         event, artifact, objectHash, relativeStagedPath, versionId, parentVersion);
     if (!appended) {
+        discardStagedCopy();
         emit snapshotError(QString("Failed to append %1metadata for %2").arg(label, event.relativePath));
         return false;
     }

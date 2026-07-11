@@ -6,77 +6,19 @@ import QtQuick.Layouts 1.15
 import QtQuick.Dialogs
 import "."
 
-Popup {
+ThemedPopup {
     id: root
     property var backend: null
     readonly property bool hasBackend: backend !== null && backend !== undefined
+    readonly property bool childDialogOpened: folderLayoutDialog.opened
+                                               || resetConfirmDialog.opened
 
-    signal chooseProjectsFolderRequested()
-
-    parent: Overlay.overlay
-    modal: true
-    focus: true
-    padding: 0
-    closePolicy: Popup.CloseOnEscape
-    transformOrigin: Item.Center
-    dim: false
-
-    enter: Transition {
-        ParallelAnimation {
-            NumberAnimation {
-                property: "opacity"
-                from: 0.0
-                to: 1.0
-                duration: 220
-                easing.type: Easing.OutCubic
-            }
-            NumberAnimation {
-                property: "scale"
-                from: 0.97
-                to: 1.0
-                duration: 220
-                easing.type: Easing.OutCubic
-            }
-        }
-    }
-
-    exit: Transition {
-        ParallelAnimation {
-            NumberAnimation {
-                property: "opacity"
-                from: 1.0
-                to: 0.0
-                duration: 160
-                easing.type: Easing.InCubic
-            }
-            NumberAnimation {
-                property: "scale"
-                from: 1.0
-                to: 0.985
-                duration: 160
-                easing.type: Easing.InCubic
-            }
-        }
-    }
-
-    readonly property int popupMinWidth: 560
-    readonly property int popupMinHeight: 480
-    readonly property int popupMaxWidth: 760
-    readonly property int popupMaxHeight: 720
-
-    anchors.centerIn: parent
-    width: {
-        if (!parent)
-            return popupMaxWidth;
-        const available = Math.max(0, parent.width - 48);
-        return Math.min(available, Math.max(popupMinWidth, Math.min(popupMaxWidth, 680)));
-    }
-    height: {
-        if (!parent)
-            return popupMaxHeight;
-        const available = Math.max(0, parent.height - 48);
-        return Math.min(available, Math.max(popupMinHeight, Math.min(popupMaxHeight, 640)));
-    }
+    popupMinWidth: 560
+    popupMinHeight: 480
+    popupMaxWidth: 760
+    popupMaxHeight: 720
+    popupPreferredWidth: 680
+    popupPreferredHeight: 640
 
     Theme {
         id: theme
@@ -84,11 +26,16 @@ Popup {
 
     readonly property int contentPaddingH: 14
 
-    background: Rectangle {
-        color: theme.vmPanel
-        radius: 10
-        border.color: theme.vmBorder
-        border.width: 1
+    FolderDialog {
+        id: projectsFolderDialog
+        title: "Select Projects Folder"
+        onAccepted: folderLayoutDialog.openForFolder(selectedFolder)
+    }
+
+    ProjectsFolderLayoutDialog {
+        id: folderLayoutDialog
+        backend: root.backend
+        z: 40
     }
 
     FileDialog {
@@ -103,19 +50,14 @@ Popup {
         }
     }
 
-    Dialog {
+    ThemedConfirmDialog {
         id: resetConfirmDialog
-        anchors.centerIn: parent
-        modal: true
+        z: 40
         title: "Reset Configuration"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-
-        Label {
-            text: "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted."
-            wrapMode: Text.WordWrap
-        }
-
-        onAccepted: {
+        message: "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted."
+        confirmText: "Reset"
+        danger: true
+        onConfirmed: {
             if (root.hasBackend)
                 root.backend.resetConfig();
         }
@@ -221,7 +163,48 @@ Popup {
                             text: root.hasBackend && root.backend.hasProjectsFolder
                                   ? "Change Projects Folder"
                                   : "Choose Projects Folder"
-                            onClicked: root.chooseProjectsFolderRequested()
+                            onClicked: projectsFolderDialog.open()
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        visible: root.hasBackend && root.backend.hasProjectsFolder
+
+                        Label {
+                            text: "Folder layout"
+                            font.bold: true
+                            font.pixelSize: 13
+                            color: theme.vmTextPrimary
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Stored in this folder as .immersion/settings.json"
+                            wrapMode: Text.Wrap
+                            color: theme.vmTextMeta
+                            font.pixelSize: 12
+                            lineHeight: 1.35
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.hasBackend
+                                  ? ("Current: " + root.backend.projectsFolderLayout)
+                                  : ""
+                            color: theme.vmTextPrimary
+                            font.pixelSize: 12
+                        }
+
+                        PanelButton {
+                            Layout.fillWidth: true
+                            text: "Change Folder Layout"
+                            enabled: root.hasBackend && root.backend.projectsFolderPath.length > 0
+                            onClicked: {
+                                if (root.hasBackend)
+                                    folderLayoutDialog.openForCurrentFolder();
+                            }
                         }
                     }
 
@@ -229,6 +212,7 @@ Popup {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 1
                         color: theme.vmBorder
+                        visible: root.hasBackend && root.backend.hasProjectsFolder
                     }
 
                     RowLayout {

@@ -3,11 +3,29 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QString>
+#include <QUrl>
 
 // Normalizes a filesystem path for stable comparisons across platforms.
 // Always uses '/' separators (Qt convention after cleanPath).
 inline QString normalizeAbsolutePath(const QString& path) {
     return QDir::cleanPath(QDir::fromNativeSeparators(path));
+}
+
+// Decodes file:// URLs and percent-encoded path segments (e.g. %20) from
+// folder pickers before hitting the filesystem.
+inline QString normalizeFolderPath(const QString& urlOrPath) {
+    if (urlOrPath.isEmpty()) {
+        return {};
+    }
+
+    QString path = urlOrPath.trimmed();
+    if (path.startsWith(QStringLiteral("file://"), Qt::CaseInsensitive)) {
+        path = QUrl(path).toLocalFile();
+    } else if (path.contains(QLatin1Char('%'))) {
+        path = QUrl::fromPercentEncoding(path.toUtf8());
+    }
+
+    return normalizeAbsolutePath(path);
 }
 
 // Case-insensitive on Windows and macOS default volumes; exact on Linux.

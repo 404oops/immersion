@@ -27,6 +27,7 @@ public:
 
     void setUncompressedRecentVersions(int keepCount);
     int uncompressedRecentVersions() const;
+    void compactAllStagedCopies();
 
 public slots:
     void onFileEvent(const FileEvent& event);

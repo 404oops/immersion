@@ -128,7 +128,8 @@ void scanDirectory(
     QHash<QString, QHash<ProjectKind, QStringList>>& filesByFolderAndKind,
     QHash<QString, QHash<QString, QFileInfo>>& fileInfosByFolder,
     const ProjectDiscovery::ScanCallback& onDirectoryScanned,
-    const std::shared_ptr<std::atomic<bool>>& cancelled) {
+    const std::shared_ptr<std::atomic<bool>>& cancelled,
+    ProjectsFolderLayout layout) {
     if (cancelled && cancelled->load()) {
         return;
     }
@@ -166,11 +167,16 @@ void scanDirectory(
                 filesByFolderAndKind,
                 fileInfosByFolder,
                 onDirectoryScanned,
-                cancelled);
+                cancelled,
+                layout);
             continue;
         }
 
         if (kind == ProjectKind::Unknown) {
+            continue;
+        }
+
+        if (layout == ProjectsFolderLayout::Files && BackupTemplates::kindIsBundle(kind)) {
             continue;
         }
 
@@ -179,6 +185,81 @@ void scanDirectory(
         filesByFolder[folderPath].append(entry.fileName());
         filesByFolderAndKind[folderPath][kind].append(entry.fileName());
         fileInfosByFolder[folderPath].insert(entry.fileName(), entry);
+    }
+}
+
+void scanLooseProjectFiles(
+    const QString& currentFolder,
+    QList<DiscoveredProject>& projects,
+    const ProjectDiscovery::ScanCallback& onDirectoryScanned,
+    const std::shared_ptr<std::atomic<bool>>& cancelled,
+    const ProjectDiscovery::ProgressCallback& onProgress,
+    int progressInterval,
+    int& directoriesScanned) {
+    if (cancelled && cancelled->load()) {
+        return;
+    }
+
+    if (onDirectoryScanned) {
+        onDirectoryScanned(currentFolder);
+    }
+
+    ++directoriesScanned;
+    QDir dir(currentFolder);
+    const QFileInfoList entries = dir.entryInfoList(
+        QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden,
+        QDir::NoSort);
+
+    for (const QFileInfo& entry : entries) {
+        if (cancelled && cancelled->load()) {
+            return;
+        }
+
+        const ProjectKind kind = classifyPath(entry);
+        if (entry.isDir()) {
+            // Bundle project formats (for example .logicx and .band) are
+            // intentionally excluded from Files mode, including their
+            // internal files.
+            if (kind != ProjectKind::Unknown && BackupTemplates::kindIsBundle(kind)) {
+                continue;
+            }
+            if (ProjectConfig::isIgnoredDirectoryName(entry.fileName())) {
+                continue;
+            }
+            scanLooseProjectFiles(entry.absoluteFilePath(),
+                                  projects,
+                                  onDirectoryScanned,
+                                  cancelled,
+                                  onProgress,
+                                  progressInterval,
+                                  directoriesScanned);
+            continue;
+        }
+
+        // Files mode is extension-driven: only supported regular project
+        // files are accepted, and formats declared as bundles are ignored.
+        if (!entry.isFile()
+            || kind == ProjectKind::Unknown
+            || BackupTemplates::kindIsBundle(kind)) {
+            continue;
+        }
+
+        DiscoveredProject project;
+        project.rootPath = entry.absolutePath();
+        project.name = entry.completeBaseName();
+        if (project.name.isEmpty()) {
+            project.name = entry.fileName();
+        }
+        project.kind = kind;
+        project.typeCounts[kind] = 1;
+        project.projectFiles = {entry.fileName()};
+        project.primaryProjectFile = entry.fileName();
+        project.totalProjectFiles = 1;
+        projects.append(project);
+    }
+
+    if (onProgress && directoriesScanned % progressInterval == 0) {
+        onProgress(projects, directoriesScanned);
     }
 }
 
@@ -244,6 +325,63 @@ QList<DiscoveredProject> buildProjectsFromState(
     });
 
     return projects;
+}
+
+QList<DiscoveredProject> expandLooseFileProjects(const QList<DiscoveredProject>& projects) {
+    QList<DiscoveredProject> expanded;
+    expanded.reserve(projects.size());
+
+    for (const DiscoveredProject& project : projects) {
+        QStringList looseFiles;
+        for (const QString& fileName : project.projectFiles) {
+            const ProjectKind kind = BackupTemplates::kindForFileName(fileName);
+            if (kind != ProjectKind::Unknown && !BackupTemplates::kindIsBundle(kind)) {
+                looseFiles.append(fileName);
+            }
+        }
+
+        if (looseFiles.isEmpty()) {
+            continue;
+        }
+
+        if (looseFiles.size() == 1) {
+            DiscoveredProject single = project;
+            single.projectFiles = looseFiles;
+            single.primaryProjectFile = looseFiles.first();
+            single.totalProjectFiles = 1;
+            single.name = QFileInfo(looseFiles.first()).completeBaseName();
+            if (single.name.isEmpty()) {
+                single.name = looseFiles.first();
+            }
+            expanded.append(single);
+            continue;
+        }
+
+        for (const QString& fileName : looseFiles) {
+            DiscoveredProject single = project;
+            const ProjectKind fileKind = BackupTemplates::kindForFileName(fileName);
+            single.projectFiles = {fileName};
+            single.primaryProjectFile = fileName;
+            single.totalProjectFiles = 1;
+            single.kind = fileKind;
+            single.typeCounts.clear();
+            single.typeCounts[fileKind] = 1;
+            single.name = QFileInfo(fileName).completeBaseName();
+            if (single.name.isEmpty()) {
+                single.name = fileName;
+            }
+            expanded.append(single);
+        }
+    }
+
+    std::sort(expanded.begin(), expanded.end(), [](const DiscoveredProject& left, const DiscoveredProject& right) {
+        if (left.name == right.name) {
+            return left.rootPath < right.rootPath;
+        }
+        return left.name < right.name;
+    });
+
+    return expanded;
 }
 
 QString resolveProjectRootAbsolute(const QString& selectedFolder, const QString& relativePath) {
@@ -349,12 +487,42 @@ QList<DiscoveredProject> ProjectDiscovery::discoverAll(
     const ScanCallback& onDirectoryScanned,
     const std::shared_ptr<std::atomic<bool>>& cancelled,
     const ProgressCallback& onProgress,
-    int progressEveryDirectories) const {
+    int progressEveryDirectories,
+    ProjectsFolderLayout layout) const {
     if (selectedFolder.isEmpty()) {
         return {};
     }
 
     const QString rootFolder = QDir::cleanPath(selectedFolder);
+    if (layout == ProjectsFolderLayout::Files) {
+        QList<DiscoveredProject> projects;
+        int directoriesScanned = 0;
+        scanLooseProjectFiles(rootFolder,
+                              projects,
+                              onDirectoryScanned,
+                              cancelled,
+                              onProgress,
+                              qMax(1, progressEveryDirectories),
+                              directoriesScanned);
+        std::sort(projects.begin(), projects.end(), [](const DiscoveredProject& left,
+                                                       const DiscoveredProject& right) {
+            const int byName = QString::compare(left.name, right.name, Qt::CaseInsensitive);
+            if (byName != 0) {
+                return byName < 0;
+            }
+            const int byRoot = QString::compare(
+                left.rootPath, right.rootPath, Qt::CaseInsensitive);
+            if (byRoot != 0) {
+                return byRoot < 0;
+            }
+            return QString::compare(
+                       left.primaryProjectFile,
+                       right.primaryProjectFile,
+                       Qt::CaseInsensitive)
+                < 0;
+        });
+        return projects;
+    }
 
     QHash<QString, QHash<ProjectKind, int>> countsByFolder;
     QHash<QString, QStringList> filesByFolder;
@@ -385,7 +553,8 @@ QList<DiscoveredProject> ProjectDiscovery::discoverAll(
         filesByFolderAndKind,
         fileInfosByFolder,
         wrappedDirectoryScanned,
-        cancelled);
+        cancelled,
+        layout);
 
     return buildProjectsFromState(countsByFolder,
                                   filesByFolder,
@@ -395,7 +564,8 @@ QList<DiscoveredProject> ProjectDiscovery::discoverAll(
 
 std::optional<DiscoveredProject> ProjectDiscovery::discoverProjectForChangedPath(
     const QString& selectedFolder,
-    const QString& absoluteChangedPath) const {
+    const QString& absoluteChangedPath,
+    ProjectsFolderLayout layout) const {
     const QString cleanFolder = QDir::cleanPath(selectedFolder);
     const QString cleanPath = normalizeAbsolutePath(absoluteChangedPath);
     if (!pathIsUnderRoot(cleanPath, cleanFolder)) {
@@ -413,7 +583,28 @@ std::optional<DiscoveredProject> ProjectDiscovery::discoverProjectForChangedPath
         return {};
     }
 
-    return discoverProjectAt(cleanFolder, projectRoot);
+    const std::optional<DiscoveredProject> discovered = discoverProjectAt(cleanFolder, projectRoot);
+    if (!discovered.has_value()) {
+        return {};
+    }
+
+    if (layout != ProjectsFolderLayout::Files) {
+        return discovered;
+    }
+
+    const QList<DiscoveredProject> expanded = expandLooseFileProjects({*discovered});
+    if (expanded.isEmpty()) {
+        return {};
+    }
+
+    const QString changedName = QFileInfo(cleanPath).fileName();
+    for (const DiscoveredProject& candidate : expanded) {
+        if (candidate.primaryProjectFile == changedName) {
+            return candidate;
+        }
+    }
+
+    return expanded.first();
 }
 
 QString ProjectDiscovery::kindToString(ProjectKind kind) {
