@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -16,6 +17,7 @@ int main(int argc, char *argv[]) {
 
     QApplication app(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
 
     app.setOrganizationName("musit");
     app.setOrganizationDomain("musit.app");

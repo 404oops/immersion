@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(Immersion VERSION 0.1.0 LANGUAGES CXX)
+project(Immersion VERSION 0.1.1 LANGUAGES CXX)
 
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE MinSizeRel CACHE STRING "Build type" FORCE)
@@ -92,6 +92,13 @@ find_package(Threads REQUIRED)
 # their plugins) into every deployed package.
 find_package(Qt6 REQUIRED COMPONENTS Qml Gui OpenGL QuickControls2 Widgets Network)
 
+set(IMMERSION_APP_ICON_SOURCE
+    "${CMAKE_SOURCE_DIR}/icons/iconcomposer-macOS-Default-1024x1024@1x.png")
+set(IMMERSION_ICON_COMPOSER_LAYER_SOURCE
+    "${CMAKE_SOURCE_DIR}/icons/iconcomposer.icon/Assets/app.png")
+set(IMMERSION_MENUBAR_ICON_SOURCE
+    "${CMAKE_SOURCE_DIR}/icons/menubar.png")
+
 add_executable(Immersion
     src/main.cpp
     src/ui/QmlBackend.cpp
@@ -150,6 +157,21 @@ qt_add_resources(Immersion Immersion_qml
         src/qml/VersionGraphNode.qml
 )
 
+set_source_files_properties(
+    "${IMMERSION_APP_ICON_SOURCE}"
+    PROPERTIES QT_RESOURCE_ALIAS "icons/app.png"
+)
+set_source_files_properties(
+    "${IMMERSION_MENUBAR_ICON_SOURCE}"
+    PROPERTIES QT_RESOURCE_ALIAS "icons/menubar.png"
+)
+qt_add_resources(Immersion Immersion_icons
+    PREFIX "/"
+    FILES
+        "${IMMERSION_APP_ICON_SOURCE}"
+        "${IMMERSION_MENUBAR_ICON_SOURCE}"
+)
+
 set_target_properties(Immersion PROPERTIES
     # Only affects Windows; avoids a console window popping up with the GUI.
     WIN32_EXECUTABLE ON
@@ -170,6 +192,80 @@ target_link_libraries(Immersion
 )
 
 if(APPLE)
+    find_program(IMMERSION_ACTOOL_EXECUTABLE
+        NAMES actool
+        HINTS "/Applications/Xcode.app/Contents/Developer/usr/bin"
+        REQUIRED
+    )
+    set(IMMERSION_MAC_ICON_OUTPUT_DIR "${CMAKE_BINARY_DIR}/mac-icon")
+    set(IMMERSION_MAC_ASSETS_CAR
+        "${IMMERSION_MAC_ICON_OUTPUT_DIR}/Assets.car")
+    set(IMMERSION_MAC_FALLBACK_ICON
+        "${IMMERSION_MAC_ICON_OUTPUT_DIR}/iconcomposer.icns")
+    set(IMMERSION_MAC_ICON_INFO
+        "${IMMERSION_MAC_ICON_OUTPUT_DIR}/icon-info.plist")
+
+    add_custom_command(
+        OUTPUT
+            "${IMMERSION_MAC_ASSETS_CAR}"
+            "${IMMERSION_MAC_FALLBACK_ICON}"
+            "${IMMERSION_MAC_ICON_INFO}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+                "${IMMERSION_MAC_ICON_OUTPUT_DIR}"
+        COMMAND "${IMMERSION_ACTOOL_EXECUTABLE}"
+                "${CMAKE_SOURCE_DIR}/icons/iconcomposer.icon"
+                --compile "${IMMERSION_MAC_ICON_OUTPUT_DIR}"
+                --output-format human-readable-text
+                --notices --warnings --errors
+                --output-partial-info-plist "${IMMERSION_MAC_ICON_INFO}"
+                --app-icon iconcomposer
+                --include-all-app-icons
+                --enable-on-demand-resources NO
+                --development-region en
+                --target-device mac
+                --minimum-deployment-target 26.0
+                --platform macosx
+        DEPENDS
+            "${CMAKE_SOURCE_DIR}/icons/iconcomposer.icon/icon.json"
+            "${IMMERSION_ICON_COMPOSER_LAYER_SOURCE}"
+        COMMENT "Compiling Icon Composer Liquid Glass assets"
+        VERBATIM
+    )
+    add_custom_target(ImmersionMacIcons
+        DEPENDS
+            "${IMMERSION_MAC_ASSETS_CAR}"
+            "${IMMERSION_MAC_FALLBACK_ICON}"
+            "${IMMERSION_MAC_ICON_INFO}"
+    )
+    add_dependencies(Immersion ImmersionMacIcons)
+
+    set_source_files_properties(
+        "${IMMERSION_MAC_ASSETS_CAR}"
+        "${IMMERSION_MAC_FALLBACK_ICON}"
+        PROPERTIES
+            GENERATED TRUE
+            MACOSX_PACKAGE_LOCATION Resources
+    )
+    set_source_files_properties(
+        "${IMMERSION_MENUBAR_ICON_SOURCE}"
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources
+    )
+    target_sources(Immersion PRIVATE
+        "${IMMERSION_MAC_ASSETS_CAR}"
+        "${IMMERSION_MAC_FALLBACK_ICON}"
+        "${IMMERSION_MENUBAR_ICON_SOURCE}"
+    )
+
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
+        "${CMAKE_BINARY_DIR}/Immersion-Info.plist"
+        @ONLY
+    )
+    set_target_properties(Immersion PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_BINARY_DIR}/Immersion-Info.plist"
+        MACOSX_BUNDLE_ICON_FILE "iconcomposer.icns"
+    )
+
     target_sources(Immersion PRIVATE
         src/ui/MacStatusBar.h
         src/ui/PlatformAgent_mac.mm
@@ -181,7 +277,17 @@ if(APPLE)
         "-framework ServiceManagement"
     )
 elseif(WIN32)
-    target_sources(Immersion PRIVATE src/ui/PlatformAgent_win.cpp)
+    set(IMMERSION_WINDOWS_ICON_NATIVE
+        "${CMAKE_SOURCE_DIR}/icons/Immersion.ico")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/packaging/windows/Immersion.rc.in"
+        "${CMAKE_BINARY_DIR}/Immersion.rc"
+        @ONLY
+    )
+    target_sources(Immersion PRIVATE
+        src/ui/PlatformAgent_win.cpp
+        "${CMAKE_BINARY_DIR}/Immersion.rc"
+    )
 else()
     target_sources(Immersion PRIVATE src/ui/PlatformAgent.cpp)
 endif()
@@ -252,6 +358,15 @@ install(TARGETS Immersion
     BUNDLE DESTINATION .
     RUNTIME DESTINATION .
 )
+if(UNIX AND NOT APPLE)
+    install(FILES "${IMMERSION_APP_ICON_SOURCE}"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/2048x2048/apps"
+        RENAME immersion.png
+    )
+    install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/immersion.desktop"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
+    )
+endif()
 
 if(Qt6_VERSION_MAJOR EQUAL 6)
     if(WIN32)
@@ -457,6 +572,8 @@ elseif(WIN32)
     )
     if(MAKENSIS_EXECUTABLE)
         set(CPACK_NSIS_EXECUTABLE "${MAKENSIS_EXECUTABLE}")
+        set(CPACK_NSIS_MUI_ICON "${CMAKE_SOURCE_DIR}/icons/Immersion.ico")
+        set(CPACK_NSIS_MUI_UNIICON "${CMAKE_SOURCE_DIR}/icons/Immersion.ico")
         set(CPACK_NSIS_DISPLAY_NAME "Immersion")
         set(CPACK_NSIS_PACKAGE_NAME "Immersion")
         set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")

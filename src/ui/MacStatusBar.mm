@@ -10,6 +10,16 @@ namespace {
 
 NSImage* statusBarIconImage() {
     const CGFloat size = 18.0;
+    NSString* iconPath = [[NSBundle mainBundle] pathForResource:@"menubar" ofType:@"png"];
+    if (iconPath != nil) {
+        NSImage* bundledImage = [[NSImage alloc] initWithContentsOfFile:iconPath];
+        if (bundledImage != nil) {
+            [bundledImage setSize:NSMakeSize(size, size)];
+            [bundledImage setTemplate:YES];
+            return bundledImage;
+        }
+    }
+
     NSImage* image = [[NSImage alloc] initWithSize:NSMakeSize(size, size)];
     [image lockFocus];
 

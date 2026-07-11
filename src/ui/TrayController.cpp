@@ -185,6 +185,11 @@ QObject* TrayController::mainWindowObject() const {
 }
 
 QIcon TrayController::createTrayIcon() {
+    const QIcon resourceIcon(QStringLiteral(":/icons/menubar.png"));
+    if (!resourceIcon.isNull()) {
+        return resourceIcon;
+    }
+
     QPixmap pixmap(64, 64);
     pixmap.fill(Qt::transparent);
 
