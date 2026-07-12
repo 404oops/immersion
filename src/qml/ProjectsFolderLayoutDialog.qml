@@ -13,6 +13,7 @@ ThemedPopup {
     property bool awaitingScan: false
     property string scanError: ""
     property bool scanSucceeded: false
+    property bool scanWhenOpened: false
 
     popupMinWidth: 520
     popupMinHeight: 420
@@ -36,15 +37,12 @@ ThemedPopup {
         root.awaitingScan = false;
         root.scanError = "";
         root.scanSucceeded = false;
+        root.scanWhenOpened = true;
         if (root.hasBackend)
             root.selectedLayout = root.backend.projectsFolderLayoutForPath(root.folderPath);
         else
             root.selectedLayout = "Bundles";
         root.open();
-        Qt.callLater(function () {
-            if (root.opened && !root.awaitingScan)
-                root.confirmSelection();
-        });
     }
 
     function openForCurrentFolder() {
@@ -54,8 +52,16 @@ ThemedPopup {
         root.awaitingScan = false;
         root.scanError = "";
         root.scanSucceeded = false;
+        root.scanWhenOpened = false;
         root.selectedLayout = root.backend.projectsFolderLayout;
         root.open();
+    }
+
+    onOpened: {
+        if (!root.scanWhenOpened || root.awaitingScan)
+            return;
+        root.scanWhenOpened = false;
+        root.confirmSelection();
     }
 
     function confirmSelection() {
