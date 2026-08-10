@@ -195,7 +195,7 @@ private:
                                     int directoriesScanned,
                                     const QString& folderPath,
                                     int scanGeneration);
-    void adoptDiscoveredProject(const DiscoveredProject& project);
+    bool adoptDiscoveredProject(const DiscoveredProject& project);
     bool containsDiscoveredProject(const DiscoveredProject& candidate) const;
     bool tryDiscoverProjectFromEvent(const FileEvent& event);
     bool dispatchFileEvent(const FileEvent& event);

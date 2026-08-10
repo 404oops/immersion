@@ -29,6 +29,7 @@
 #include <functional>
 
 #include "../src/core/BackupTemplate.h"
+#include "../src/core/SnapshotService.h"
 #include "../src/persistence/ObjectStore.h"
 #include "../src/ui/QmlBackend.h"
 
@@ -114,6 +115,20 @@ bool stagingContainsSuffix(const QString& projectRoot, const QString& suffix) {
     return false;
 }
 
+int projectIndexByFile(const QmlBackend& backend, const QString& fileName) {
+    const QVariantList projects = backend.projects();
+    for (int i = 0; i < projects.size(); ++i) {
+        if (projects.at(i).toMap().value(QStringLiteral("file")).toString() == fileName) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool fileContains(const QString& path, const QByteArray& needle) {
+    return readFile(path).contains(needle);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -197,6 +212,104 @@ int main(int argc, char** argv) {
           "files layout: recursively finds only naked project files");
     check(looseProjects.value(0).primaryProjectFile == QStringLiteral("Nested Song.flp"),
           "files layout: project entry uses matching file extension");
+
+    // ---- Nested-project routing, migration, UI refresh, and restart ----
+    QTemporaryDir routingProjectsDir;
+    const QString routingRoot = routingProjectsDir.path();
+    const QString rootProjectFile = QDir(routingRoot).filePath(QStringLiteral("Root.flp"));
+    const QString legacyProjectRoot =
+        QDir(routingRoot).filePath(QStringLiteral("Legacy Project"));
+    const QString legacyProjectFile =
+        QDir(legacyProjectRoot).filePath(QStringLiteral("Legacy Project.flp"));
+    check(writeFile(rootProjectFile, "root project")
+              && writeFile(legacyProjectFile, "legacy v1"),
+          "rediscovery routing: fixtures created");
+
+    // Reproduce history written by the old ancestor-routing bug.
+    SnapshotService ancestorSnapshots;
+    check(ancestorSnapshots.setProjectRoot(routingRoot)
+              && ancestorSnapshots.snapshotPathNow(
+                  legacyProjectFile,
+                  QStringLiteral("Legacy Project/Legacy Project.flp"))
+              && writeFile(legacyProjectFile, "legacy v2")
+              && ancestorSnapshots.snapshotPathNow(
+                  legacyProjectFile,
+                  QStringLiteral("Legacy Project/Legacy Project.flp")),
+          "rediscovery migration: ancestor history fixture created");
+
+    const QString ancestorLog =
+        QDir(routingRoot).filePath(QStringLiteral(".musit/versions/log.jsonl"));
+    check(fileContains(ancestorLog, "Legacy Project/Legacy Project.flp"),
+          "rediscovery migration: history starts under ancestor root");
+
+    {
+        QmlBackend routingBackend;
+        int projectsChangedCount = 0;
+        QObject::connect(&routingBackend, &QmlBackend::projectsChanged,
+                         [&projectsChangedCount]() { ++projectsChangedCount; });
+        routingBackend.confirmProjectsFolder(routingRoot, QStringLiteral("Bundles"));
+
+        check(waitFor([&]() {
+            return !routingBackend.property("isScanningProjects").toBool()
+                && routingBackend.projects().size() == 2
+                && routingBackend.statusMessage().startsWith(QStringLiteral("Monitoring:"));
+        }, 20000), "rediscovery migration: initial monitoring ready");
+
+        const int legacyIndex =
+            projectIndexByFile(routingBackend, QStringLiteral("Legacy Project.flp"));
+        check(legacyIndex >= 0
+                  && routingBackend.getProjectVersions(legacyIndex).size() == 2,
+              "rediscovery migration: ancestor versions moved into project");
+        check(!fileContains(ancestorLog, "Legacy Project/Legacy Project.flp"),
+              "rediscovery migration: ancestor log no longer owns project history");
+
+        const int changesBeforeNewProject = projectsChangedCount;
+        const QString newProjectRoot =
+            QDir(routingRoot).filePath(QStringLiteral("New Project"));
+        const QString newProjectFile =
+            QDir(newProjectRoot).filePath(QStringLiteral("New Project.flp"));
+        check(writeFile(newProjectFile, "new v1"),
+              "rediscovery routing: new nested project created");
+
+        check(waitFor([&]() {
+            return projectIndexByFile(
+                       routingBackend, QStringLiteral("New Project.flp")) >= 0;
+        }, 20000), "rediscovery routing: new project initialized");
+        check(projectsChangedCount > changesBeforeNewProject,
+              "rediscovery UI: main projects model refreshed after initialization");
+
+        int newProjectIndex =
+            projectIndexByFile(routingBackend, QStringLiteral("New Project.flp"));
+        check(newProjectIndex >= 0
+                  && routingBackend.getProjectVersions(newProjectIndex).size() == 1,
+              "rediscovery routing: initialization creates one baseline");
+
+        check(writeFile(newProjectFile, "new v2"),
+              "rediscovery routing: nested project save written");
+        check(waitFor([&]() {
+            newProjectIndex =
+                projectIndexByFile(routingBackend, QStringLiteral("New Project.flp"));
+            return newProjectIndex >= 0
+                && routingBackend.getProjectVersions(newProjectIndex).size() == 2;
+        }, 20000), "rediscovery routing: save recorded in nested project");
+        check(!fileContains(ancestorLog, "New Project/New Project.flp"),
+              "rediscovery routing: ancestor project did not claim nested saves");
+    }
+
+    {
+        QmlBackend restartedBackend;
+        restartedBackend.loadProjectsFromFolder(routingRoot, QStringLiteral("Bundles"));
+        check(waitFor([&]() {
+            return !restartedBackend.property("isScanningProjects").toBool()
+                && restartedBackend.projects().size() == 3;
+        }, 20000), "rediscovery restart: projects loaded");
+        const int restartedIndex =
+            projectIndexByFile(restartedBackend, QStringLiteral("New Project.flp"));
+        check(restartedIndex >= 0
+                  && restartedBackend.getProjectVersions(restartedIndex).size() == 2,
+              "rediscovery restart: nested history persisted without new baseline");
+        restartedBackend.resetConfig();
+    }
 
     // ---- Fake Logic project ----
     QTemporaryDir projectsDir;

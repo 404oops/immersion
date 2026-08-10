@@ -201,6 +201,212 @@ bool writeLinesAtomically(const QString& filePath, const QList<QByteArray>& line
     return file.commit();
 }
 
+QString stripProjectPrefix(const QString& value, const QString& projectPrefix) {
+    const QString normalizedValue = QDir::fromNativeSeparators(value);
+    const QString normalizedPrefix = QDir::fromNativeSeparators(projectPrefix);
+    const QString prefixWithSlash = normalizedPrefix + QLatin1Char('/');
+    if (!normalizedValue.startsWith(prefixWithSlash, pathCompareSensitivity())) {
+        return {};
+    }
+    return normalizedValue.mid(prefixWithSlash.size());
+}
+
+bool artifactSetContains(const QSet<QString>& artifacts, const QString& candidate) {
+    for (const QString& artifact : artifacts) {
+        if (artifactEquals(artifact, candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Older watcher routing could attach a newly-created nested project to an
+// already-known ancestor project. Move those log entries and their storage
+// into the project's own .musit directory before baseline seeding runs.
+int migrateMisroutedHistory(const QString& sourceRoot, const QString& destinationRoot) {
+    if (pathEquals(sourceRoot, destinationRoot)
+        || !pathIsUnderRoot(destinationRoot, sourceRoot)) {
+        return 0;
+    }
+
+    const QString projectPrefix = QDir(sourceRoot).relativeFilePath(destinationRoot);
+    if (projectPrefix.isEmpty() || projectPrefix.startsWith(QStringLiteral(".."))) {
+        return 0;
+    }
+
+    const QString sourceLogPath =
+        QDir(sourceRoot).filePath(AppStrings::MusitVersionLogRelativePath);
+    QFile sourceLog(sourceLogPath);
+    if (!sourceLog.exists() || !sourceLog.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return 0;
+    }
+
+    QList<QByteArray> sourceKeptLines;
+    QList<QByteArray> migratedLines;
+    QList<QJsonObject> migratedObjects;
+    QSet<QString> migratedArtifacts;
+    while (!sourceLog.atEnd()) {
+        const QByteArray rawLine = sourceLog.readLine();
+        const QJsonDocument doc = QJsonDocument::fromJson(rawLine.trimmed());
+        if (!doc.isObject()) {
+            sourceKeptLines.append(rawLine);
+            continue;
+        }
+
+        QJsonObject obj = doc.object();
+        const QString rebasedPath =
+            stripProjectPrefix(obj.value(QStringLiteral("path")).toString(), projectPrefix);
+        if (rebasedPath.isEmpty()) {
+            sourceKeptLines.append(rawLine);
+            continue;
+        }
+
+        obj.insert(QStringLiteral("path"), rebasedPath);
+        if (obj.contains(QStringLiteral("artifact"))) {
+            const QString rebasedArtifact = stripProjectPrefix(
+                obj.value(QStringLiteral("artifact")).toString(), projectPrefix);
+            if (rebasedArtifact.isEmpty()) {
+                sourceKeptLines.append(rawLine);
+                continue;
+            }
+            obj.insert(QStringLiteral("artifact"), rebasedArtifact);
+        }
+
+        const QString artifact = MetadataStore::artifactOfLogLine(obj);
+        migratedArtifacts.insert(artifact);
+        migratedObjects.append(obj);
+        migratedLines.append(QJsonDocument(obj).toJson(QJsonDocument::Compact) + '\n');
+    }
+    sourceLog.close();
+
+    if (migratedLines.isEmpty()) {
+        return 0;
+    }
+
+    const QString destinationLogPath =
+        QDir(destinationRoot).filePath(AppStrings::MusitVersionLogRelativePath);
+    QList<QByteArray> destinationKeptLines;
+    QFile destinationLog(destinationLogPath);
+    if (destinationLog.exists()
+        && destinationLog.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        while (!destinationLog.atEnd()) {
+            const QByteArray rawLine = destinationLog.readLine();
+            const QJsonDocument doc = QJsonDocument::fromJson(rawLine.trimmed());
+            if (!doc.isObject()) {
+                destinationKeptLines.append(rawLine);
+                continue;
+            }
+
+            const QJsonObject obj = doc.object();
+            const QString artifact = MetadataStore::artifactOfLogLine(obj);
+            if (!artifactSetContains(migratedArtifacts, artifact)) {
+                destinationKeptLines.append(rawLine);
+                continue;
+            }
+
+            // A restart may already have seeded v1 in the correct location.
+            // It is safe to replace only that plain seed when its content is
+            // already represented by the history being migrated.
+            bool duplicateSeed = obj.value(QStringLiteral("version")).toString()
+                                     == QStringLiteral("1")
+                && obj.value(QStringLiteral("parent")).toString().isEmpty()
+                && obj.value(QStringLiteral("note")).toString().isEmpty();
+            if (duplicateSeed) {
+                duplicateSeed = false;
+                for (const QJsonObject& migrated : migratedObjects) {
+                    if (artifactEquals(MetadataStore::artifactOfLogLine(migrated), artifact)
+                        && artifactEquals(
+                            migrated.value(QStringLiteral("path")).toString(),
+                            obj.value(QStringLiteral("path")).toString())
+                        && migrated.value(QStringLiteral("object")).toString()
+                            == obj.value(QStringLiteral("object")).toString()) {
+                        duplicateSeed = true;
+                        break;
+                    }
+                }
+            }
+
+            // Do not merge two independent version-number namespaces.
+            if (!duplicateSeed) {
+                return 0;
+            }
+        }
+        destinationLog.close();
+    }
+
+    const QString sourceMusit = QDir(sourceRoot).filePath(QStringLiteral(".musit"));
+    const QString destinationMusit =
+        QDir(destinationRoot).filePath(QStringLiteral(".musit"));
+    ObjectStore sourceObjects(sourceMusit);
+    ObjectStore destinationObjects(destinationMusit);
+    if (!destinationObjects.init()) {
+        return 0;
+    }
+
+    for (int i = 0; i < migratedObjects.size(); ++i) {
+        QJsonObject& obj = migratedObjects[i];
+        const QString objectHash = obj.value(QStringLiteral("object")).toString();
+        if (!objectHash.isEmpty()) {
+            const QString sourceObjectPath = sourceObjects.objectPathForHash(objectHash);
+            const QString destinationObjectPath =
+                destinationObjects.objectPathForHash(objectHash);
+            if (!QFileInfo::exists(sourceObjectPath)) {
+                return 0;
+            }
+            if (!QFileInfo::exists(destinationObjectPath)) {
+                if (!QDir().mkpath(QFileInfo(destinationObjectPath).dir().absolutePath())
+                    || !QFile::copy(sourceObjectPath, destinationObjectPath)) {
+                    return 0;
+                }
+            }
+        }
+
+        const QString storedStagedPath = obj.value(QStringLiteral("staged")).toString();
+        if (storedStagedPath.isEmpty()) {
+            continue;
+        }
+
+        const QString sourceStagedPath = QFileInfo(storedStagedPath).isAbsolute()
+            ? storedStagedPath
+            : QDir(sourceRoot).filePath(storedStagedPath);
+        const QString relativeToSourceStaging =
+            QDir(QDir(sourceMusit).filePath(QStringLiteral("staging")))
+                .relativeFilePath(sourceStagedPath);
+        const QString stamp = relativeToSourceStaging.section(QLatin1Char('/'), 0, 0);
+        const QString destinationRelativeStaged = QStringLiteral(".musit/staging/%1/%2")
+                                                      .arg(stamp,
+                                                           obj.value(QStringLiteral("path"))
+                                                               .toString());
+        const QString destinationStagedPath =
+            QDir(destinationRoot).filePath(destinationRelativeStaged);
+        if (QFileInfo::exists(sourceStagedPath)
+            && !QFileInfo::exists(destinationStagedPath)) {
+            if (!QDir().mkpath(QFileInfo(destinationStagedPath).dir().absolutePath())
+                || !QFile::copy(sourceStagedPath, destinationStagedPath)) {
+                return 0;
+            }
+        }
+        obj.insert(QStringLiteral("staged"), destinationRelativeStaged);
+        migratedLines[i] = QJsonDocument(obj).toJson(QJsonDocument::Compact) + '\n';
+    }
+
+    if (!QDir().mkpath(QFileInfo(destinationLogPath).dir().absolutePath())) {
+        return 0;
+    }
+    destinationKeptLines.append(migratedLines);
+    if (!writeLinesAtomically(destinationLogPath, destinationKeptLines)) {
+        return 0;
+    }
+
+    // Writing the destination first makes a partial failure non-destructive:
+    // at worst the source still has a duplicate copy for a future cleanup.
+    if (!writeLinesAtomically(sourceLogPath, sourceKeptLines)) {
+        return 0;
+    }
+
+    return migratedLines.size();
+}
+
 } // namespace
 
 QmlBackend::QmlBackend(QObject* parent)
@@ -1831,6 +2037,28 @@ void QmlBackend::advanceMonitoringInit() {
 }
 
 bool QmlBackend::initMonitoringForProject(const DiscoveredProject& project) {
+    QStringList ancestorRoots {m_projectsFolderRoot};
+    for (const DiscoveredProject& candidate : m_discoveredProjects) {
+        if (!pathEquals(candidate.rootPath, project.rootPath)
+            && pathIsUnderRoot(project.rootPath, candidate.rootPath)) {
+            ancestorRoots.append(candidate.rootPath);
+        }
+    }
+    ancestorRoots.removeDuplicates();
+    std::sort(ancestorRoots.begin(), ancestorRoots.end(),
+              [](const QString& left, const QString& right) {
+                  return left.size() > right.size();
+              });
+    for (const QString& ancestorRoot : ancestorRoots) {
+        const int migrated = migrateMisroutedHistory(ancestorRoot, project.rootPath);
+        if (migrated > 0) {
+            appendActivity(QStringLiteral("[%1] migrated %2 snapshot entries into %3")
+                               .arg(nowHuman())
+                               .arg(migrated)
+                               .arg(project.rootPath));
+        }
+    }
+
     auto snapshotService = std::make_unique<SnapshotService>();
     if (!snapshotService->setProjectRoot(project.rootPath)) {
         appendDebugActivity(QStringLiteral("[%1] failed to initialize versioning for %2")
@@ -1917,11 +2145,23 @@ void QmlBackend::startFileWatcherIfReady() {
 
     connect(m_fileWatcher.get(), &IFileWatcher::fileEvent,
             this, [this](const FileEvent& event) {
-                if (!dispatchFileEvent(event)) {
-                    if (tryDiscoverProjectFromEvent(event)) {
-                        dispatchFileEvent(event);
+                // Resolve a newly-created nested project before an ancestor
+                // project gets a chance to claim the event.
+                bool ownedByNestedProject = false;
+                for (auto it = m_canonicalRootByKey.constBegin();
+                     it != m_canonicalRootByKey.constEnd();
+                     ++it) {
+                    const QString& projectRoot = it.value();
+                    if (!pathEquals(projectRoot, m_projectsFolderRoot)
+                        && pathIsUnderRoot(event.absolutePath, projectRoot)) {
+                        ownedByNestedProject = true;
+                        break;
                     }
                 }
+                if (!ownedByNestedProject && tryDiscoverProjectFromEvent(event)) {
+                    return;
+                }
+                dispatchFileEvent(event);
             });
 
     if (!m_fileWatcher->startWatching(m_projectsFolderRoot)) {
@@ -1958,22 +2198,32 @@ void QmlBackend::stopMonitoring() {
 
 bool QmlBackend::containsDiscoveredProject(const DiscoveredProject& candidate) const {
     for (const DiscoveredProject& project : m_discoveredProjects) {
-        if (pathEquals(project.rootPath, candidate.rootPath)
-            && project.primaryProjectFile == candidate.primaryProjectFile) {
+        if (!pathEquals(project.rootPath, candidate.rootPath)) {
+            continue;
+        }
+        if (m_projectsFolderLayout == ProjectsFolderLayout::Bundles
+            || artifactEquals(project.primaryProjectFile, candidate.primaryProjectFile)) {
             return true;
         }
     }
     return false;
 }
 
-void QmlBackend::adoptDiscoveredProject(const DiscoveredProject& project) {
+bool QmlBackend::adoptDiscoveredProject(const DiscoveredProject& project) {
     if (containsDiscoveredProject(project)) {
-        return;
+        return false;
     }
 
     QList<DiscoveredProject> adoptedProjects {project};
     applySavedPrimaryFileOverrides(adoptedProjects);
     const DiscoveredProject adopted = adoptedProjects.first();
+
+    // Initialize storage and seed/migrate history first. Publishing the
+    // project afterwards guarantees the main view observes a usable project.
+    if (!m_snapshotServiceByRoot.contains(pathKey(adopted.rootPath))
+        && !initMonitoringForProject(adopted)) {
+        return false;
+    }
 
     m_discoveredProjects.append(adopted);
     m_projectRegistry->saveProject(adopted);
@@ -1983,10 +2233,7 @@ void QmlBackend::adoptDiscoveredProject(const DiscoveredProject& project) {
 
     appendActivity(QString(AppStrings::ActivityProjectRediscoveredFmt)
                        .arg(nowHuman(), adopted.name, adopted.rootPath));
-
-    if (!m_snapshotServiceByRoot.contains(pathKey(adopted.rootPath))) {
-        initMonitoringForProject(adopted);
-    }
+    return true;
 }
 
 bool QmlBackend::tryDiscoverProjectFromEvent(const FileEvent& event) {
@@ -2008,8 +2255,7 @@ bool QmlBackend::tryDiscoverProjectFromEvent(const FileEvent& event) {
         return false;
     }
 
-    adoptDiscoveredProject(*discovered);
-    return true;
+    return adoptDiscoveredProject(*discovered);
 }
 
 bool QmlBackend::dispatchFileEvent(const FileEvent& event) {
