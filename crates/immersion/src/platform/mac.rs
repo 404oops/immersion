@@ -175,9 +175,10 @@ pub fn install_status_item(on_open: Box<dyn Fn()>, on_quit: Box<dyn Fn()>) {
             let target_obj: &AnyObject = &target;
             let _: () = msg_send![&*button, setTarget: target_obj];
             let _: () = msg_send![&*button, setAction: sel!(statusBarButtonClicked:)];
-            // Left + right mouse down (1 << 1 | 1 << 3).
+            // Left + right mouse down (1 << 1 | 1 << 3). Returns the
+            // previous event mask (NSInteger).
             let mask: u64 = (1 << 1) | (1 << 3);
-            let _: () = msg_send![&*button, sendActionOn: mask];
+            let _previous: i64 = msg_send![&*button, sendActionOn: mask];
         }
 
         let menu = NSMenu::new(mtm);
