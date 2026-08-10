@@ -1,0 +1,18 @@
+[package]
+name = "immersion"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+musit-core = { path = "../musit-core" }
+gpui = { git = "https://github.com/zed-industries/zed" }
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+once_cell.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"

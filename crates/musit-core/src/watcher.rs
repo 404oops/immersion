@@ -1,0 +1,444 @@
+//! Hybrid file watcher: OS notifications (via the `notify` crate; FSEvents /
+//! ReadDirectoryChangesW / inotify) marking paths dirty, a 400ms debounce
+//! with size+mtime stabilization, and a 5s full-tree safety scan.
+//!
+//! Behavioral port of `qt-legacy/src/core/FileWatcherFactory.cpp`
+//! (HybridWatchWorker). Files that stabilize in the same debounce tick share
+//! a scan sequence, which SnapshotService uses to group bundle saves.
+
+use crate::file_event::{FileEvent, FileEventType};
+use crate::path_cleanup::{clean_path, join_path, relative_file_path};
+use crate::project_config::{self, ProjectConfig};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, UNIX_EPOCH};
+
+const DEBOUNCE: Duration = Duration::from_millis(400);
+const SAFETY_SCAN: Duration = Duration::from_millis(5000);
+
+/// (scan_kind, root_path, item_count, elapsed_ms)
+pub type ScanLogFn = Box<dyn Fn(&str, &str, usize, u128) + Send>;
+pub type EventFn = Box<dyn Fn(FileEvent) + Send>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileState {
+    size: u64,
+    msecs_since_epoch: i64,
+}
+
+fn state_of(path: &Path) -> Option<FileState> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let msecs = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Some(FileState {
+        size: metadata.len(),
+        msecs_since_epoch: msecs,
+    })
+}
+
+fn scan_tree_state(root: &str, current: &str, out: &mut HashMap<String, FileState>) {
+    let Ok(entries) = fs::read_dir(current) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // NoSymLinks parity: skip symlinks entirely.
+        if file_type.is_symlink() {
+            continue;
+        }
+        let absolute = clean_path(&entry.path().to_string_lossy());
+        if file_type.is_dir() {
+            if project_config::is_ignored_directory_name(&name) {
+                continue;
+            }
+            scan_tree_state(root, &absolute, out);
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let msecs = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let relative = relative_file_path(root, &absolute);
+        out.insert(
+            relative,
+            FileState {
+                size: metadata.len(),
+                msecs_since_epoch: msecs,
+            },
+        );
+    }
+}
+
+enum Msg {
+    Start(String),
+    Stop,
+    Fs(Vec<std::path::PathBuf>),
+    Shutdown,
+}
+
+struct WorkerState {
+    root_path: String,
+    project_config: ProjectConfig,
+    scan_sequence: i64,
+    dirty_relative: HashSet<String>,
+    previous: HashMap<String, FileState>,
+    pending: HashMap<String, FileState>,
+    debounce_deadline: Option<Instant>,
+    safety_deadline: Option<Instant>,
+    on_event: EventFn,
+    log_scan: Option<ScanLogFn>,
+}
+
+impl WorkerState {
+    fn log(&self, kind: &str, item_count: usize, elapsed_ms: u128) {
+        if let Some(log) = &self.log_scan {
+            log(kind, &self.root_path, item_count, elapsed_ms);
+        }
+    }
+
+    fn start(&mut self, root_path: &str) {
+        self.root_path = clean_path(root_path);
+        self.project_config.set_root_path(&self.root_path);
+        self.previous.clear();
+        self.pending.clear();
+        self.dirty_relative.clear();
+        self.scan_sequence = 0;
+
+        let timer = Instant::now();
+        let mut baseline = HashMap::new();
+        scan_tree_state(&self.root_path, &self.root_path, &mut baseline);
+        self.previous = baseline;
+        self.log("baseline", self.previous.len(), timer.elapsed().as_millis());
+
+        self.safety_deadline = Some(Instant::now() + SAFETY_SCAN);
+        self.debounce_deadline = None;
+    }
+
+    fn stop(&mut self) {
+        self.root_path.clear();
+        self.previous.clear();
+        self.pending.clear();
+        self.dirty_relative.clear();
+        self.debounce_deadline = None;
+        self.safety_deadline = None;
+    }
+
+    fn mark_dirty_relative(&mut self, relative_path: String) {
+        if relative_path.is_empty() || relative_path.starts_with("..") {
+            return;
+        }
+        if !self.project_config.should_track(&relative_path) {
+            return;
+        }
+
+        self.dirty_relative.insert(relative_path);
+        self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
+    }
+
+    fn on_fs_paths(&mut self, paths: Vec<std::path::PathBuf>) {
+        if self.root_path.is_empty() {
+            return;
+        }
+        for path in paths {
+            let absolute = clean_path(&path.to_string_lossy());
+            let relative = relative_file_path(&self.root_path, &absolute);
+            if relative.starts_with("..") {
+                continue;
+            }
+
+            if Path::new(&absolute).is_dir() {
+                self.queue_subtree_reconcile(&absolute);
+            } else {
+                self.mark_dirty_relative(relative);
+            }
+        }
+    }
+
+    fn queue_subtree_reconcile(&mut self, dir_path: &str) {
+        let normalized_dir = clean_path(dir_path);
+        let dir_prefix = relative_file_path(&self.root_path, &normalized_dir);
+        if dir_prefix.starts_with("..") {
+            return;
+        }
+
+        let prefix = if dir_prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{dir_prefix}/")
+        };
+
+        let mut current_subtree = HashMap::new();
+        scan_tree_state(&self.root_path, &normalized_dir, &mut current_subtree);
+
+        let keys: Vec<String> = current_subtree.keys().cloned().collect();
+        for key in keys {
+            self.mark_dirty_relative(key);
+        }
+
+        let missing: Vec<String> = self
+            .previous
+            .keys()
+            .filter(|key| prefix.is_empty() || key.starts_with(&prefix))
+            .filter(|key| !current_subtree.contains_key(*key))
+            .cloned()
+            .collect();
+        for key in missing {
+            self.mark_dirty_relative(key);
+        }
+    }
+
+    fn on_safety_scan(&mut self) {
+        let timer = Instant::now();
+        let before_dirty = self.dirty_relative.len();
+        self.queue_full_tree_reconcile();
+        self.log("safety", before_dirty, timer.elapsed().as_millis());
+        self.safety_deadline = Some(Instant::now() + SAFETY_SCAN);
+    }
+
+    fn queue_full_tree_reconcile(&mut self) {
+        if self.root_path.is_empty() {
+            return;
+        }
+
+        let mut current = HashMap::new();
+        scan_tree_state(&self.root_path, &self.root_path, &mut current);
+
+        let changed: Vec<String> = current
+            .iter()
+            .filter(|(path, state)| {
+                self.project_config.should_track(path)
+                    && self.previous.get(*path) != Some(*state)
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        for path in changed {
+            self.mark_dirty_relative(path);
+        }
+
+        let deleted: Vec<String> = self
+            .previous
+            .keys()
+            .filter(|path| !current.contains_key(*path) && self.project_config.should_track(path))
+            .cloned()
+            .collect();
+        for path in deleted {
+            self.mark_dirty_relative(path);
+        }
+    }
+
+    fn process_dirty_batch(&mut self) {
+        self.debounce_deadline = None;
+        if self.root_path.is_empty() || self.dirty_relative.is_empty() {
+            return;
+        }
+
+        let timer = Instant::now();
+
+        self.scan_sequence += 1;
+        let sequence = self.scan_sequence;
+        let batch: Vec<String> = self.dirty_relative.drain().collect();
+        let batch_len = batch.len();
+
+        let mut needs_another_pass = false;
+        for relative_path in batch {
+            if self.observe_path(&relative_path, sequence) {
+                needs_another_pass = true;
+            }
+        }
+
+        self.log("debounce", batch_len, timer.elapsed().as_millis());
+
+        if needs_another_pass {
+            self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
+        }
+    }
+
+    /// Returns true when the path still needs another stabilization pass.
+    fn observe_path(&mut self, relative_path: &str, sequence: i64) -> bool {
+        let absolute_path = join_path(&self.root_path, relative_path);
+        let state = state_of(Path::new(&absolute_path));
+
+        let Some(state) = state else {
+            if self.previous.remove(relative_path).is_some() {
+                self.pending.remove(relative_path);
+                self.emit_change(FileEventType::Deleted, relative_path, sequence);
+            }
+            return false;
+        };
+
+        if self.previous.get(relative_path) == Some(&state) {
+            self.pending.remove(relative_path);
+            return false;
+        }
+
+        if self.pending.get(relative_path) == Some(&state) {
+            let is_new = !self.previous.contains_key(relative_path);
+            self.previous.insert(relative_path.to_string(), state);
+            self.pending.remove(relative_path);
+            self.emit_change(
+                if is_new {
+                    FileEventType::Created
+                } else {
+                    FileEventType::Modified
+                },
+                relative_path,
+                sequence,
+            );
+            return false;
+        }
+
+        self.pending.insert(relative_path.to_string(), state);
+        self.dirty_relative.insert(relative_path.to_string());
+        true
+    }
+
+    fn emit_change(&self, event_type: FileEventType, relative_path: &str, sequence: i64) {
+        let event = FileEvent {
+            event_type,
+            relative_path: relative_path.to_string(),
+            absolute_path: join_path(&self.root_path, relative_path),
+            scan_sequence: sequence,
+        };
+        (self.on_event)(event);
+    }
+}
+
+pub struct HybridFileWatcher {
+    tx: Sender<Msg>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl HybridFileWatcher {
+    pub fn new(on_event: impl Fn(FileEvent) + Send + 'static, log_scan: Option<ScanLogFn>) -> Self {
+        let (tx, rx) = mpsc::channel::<Msg>();
+        let fs_tx = tx.clone();
+
+        let handle = std::thread::Builder::new()
+            .name("musit-watcher".to_string())
+            .spawn(move || {
+                let mut state = WorkerState {
+                    root_path: String::new(),
+                    project_config: ProjectConfig::default(),
+                    scan_sequence: 0,
+                    dirty_relative: HashSet::new(),
+                    previous: HashMap::new(),
+                    pending: HashMap::new(),
+                    debounce_deadline: None,
+                    safety_deadline: None,
+                    on_event: Box::new(on_event),
+                    log_scan,
+                };
+                let mut os_watcher: Option<RecommendedWatcher> = None;
+
+                loop {
+                    let now = Instant::now();
+                    let deadline = [state.debounce_deadline, state.safety_deadline]
+                        .into_iter()
+                        .flatten()
+                        .min();
+                    let timeout = deadline
+                        .map(|d| d.saturating_duration_since(now))
+                        .unwrap_or(Duration::from_secs(3600));
+
+                    match rx.recv_timeout(timeout) {
+                        Ok(Msg::Start(root)) => {
+                            // Replace any prior OS watcher with one for the new root.
+                            drop(os_watcher.take());
+                            state.start(&root);
+                            let event_tx = fs_tx.clone();
+                            let mut created = notify::recommended_watcher(
+                                move |result: Result<notify::Event, notify::Error>| {
+                                    if let Ok(event) = result {
+                                        if !event.paths.is_empty() {
+                                            let _ = event_tx.send(Msg::Fs(event.paths));
+                                        }
+                                    }
+                                },
+                            )
+                            .ok();
+                            if let Some(watcher) = created.as_mut() {
+                                let _ = watcher
+                                    .watch(Path::new(&state.root_path), RecursiveMode::Recursive);
+                            }
+                            os_watcher = created;
+                        }
+                        Ok(Msg::Stop) => {
+                            os_watcher = None;
+                            state.stop();
+                        }
+                        Ok(Msg::Fs(paths)) => {
+                            if !state.root_path.is_empty() {
+                                state.on_fs_paths(paths);
+                            }
+                        }
+                        Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
+                            drop(os_watcher);
+                            break;
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            let now = Instant::now();
+                            if state
+                                .debounce_deadline
+                                .is_some_and(|deadline| deadline <= now)
+                            {
+                                state.process_dirty_batch();
+                            }
+                            if state
+                                .safety_deadline
+                                .is_some_and(|deadline| deadline <= now)
+                            {
+                                state.on_safety_scan();
+                            }
+                        }
+                    }
+                }
+            })
+            .expect("watcher thread spawns");
+
+        Self {
+            tx,
+            handle: Some(handle),
+        }
+    }
+
+    pub fn start_watching(&self, root_path: &str) -> bool {
+        if root_path.is_empty() {
+            return false;
+        }
+        self.tx
+            .send(Msg::Start(clean_path(root_path)))
+            .is_ok()
+    }
+
+    pub fn stop_watching(&self) {
+        let _ = self.tx.send(Msg::Stop);
+    }
+}
+
+impl Drop for HybridFileWatcher {
+    fn drop(&mut self) {
+        let _ = self.tx.send(Msg::Shutdown);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
