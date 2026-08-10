@@ -11,7 +11,12 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSEventModifierFlags, NSEventType, NSImage,
     NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
-use objc2_foundation::{NSBundle, NSObject, NSPoint, NSString};
+use objc2_foundation::{NSBundle, NSData, NSObject, NSPoint, NSString};
+
+/// Menu bar template icon (qt-legacy/icons/menubar.png).
+const MENUBAR_ICON: &[u8] = include_bytes!("../../assets/icons/menubar.png");
+/// App icon for the Dock when running unbundled (qt-legacy/icons/app.png).
+const APP_ICON: &[u8] = include_bytes!("../../assets/icons/app.png");
 
 thread_local! {
     static OPEN_CALLBACK: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
@@ -109,6 +114,11 @@ pub fn set_background_agent_mode(enabled: bool) {
     app.setActivationPolicy(policy);
 }
 
+fn image_from_bytes(bytes: &[u8]) -> Option<Retained<NSImage>> {
+    let data = NSData::with_bytes(bytes);
+    unsafe { msg_send![NSImage::alloc(), initWithData: &*data] }
+}
+
 fn status_bar_icon(mtm: MainThreadMarker) -> Option<Retained<NSImage>> {
     let _ = mtm;
     // Prefer a bundled template icon like the Qt build.
@@ -125,20 +135,32 @@ fn status_bar_icon(mtm: MainThreadMarker) -> Option<Retained<NSImage>> {
                 return Some(image);
             }
         }
+    }
 
-        // Fallback: SF Symbol "m.circle.fill" (the Qt build drew a circled M).
-        let symbol_name = NSString::from_str("m.circle.fill");
-        let image: Option<Retained<NSImage>> = msg_send![
-            objc2::class!(NSImage),
-            imageWithSystemSymbolName: &*symbol_name,
-            accessibilityDescription: std::ptr::null::<NSString>()
-        ];
-        if let Some(image) = image {
-            image.setTemplate(true);
-            return Some(image);
-        }
+    // Embedded copy of the same icon for unbundled (dev) builds.
+    if let Some(image) = image_from_bytes(MENUBAR_ICON) {
+        image.setSize(objc2_foundation::NSSize::new(18.0, 18.0));
+        image.setTemplate(true);
+        return Some(image);
     }
     None
+}
+
+/// Sets the Dock/app-switcher icon when running outside a .app bundle
+/// (bundled builds get it from the asset catalog).
+pub fn set_dock_icon_if_unbundled() {
+    if is_bundled() {
+        return;
+    }
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    if let Some(image) = image_from_bytes(APP_ICON) {
+        let app = NSApplication::sharedApplication(mtm);
+        unsafe {
+            let _: () = msg_send![&*app, setApplicationIconImage: &*image];
+        }
+    }
 }
 
 /// MacStatusBar::install: status item with left-click open and a

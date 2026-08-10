@@ -32,6 +32,7 @@ pub fn action_button(
     let label: SharedString = text.to_string().into();
     div()
         .id(id.into())
+        .size_full()
         .flex()
         .items_center()
         .justify_center()

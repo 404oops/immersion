@@ -353,6 +353,9 @@ impl RootView {
                                             index as u64,
                                         ))
                                         .w_full()
+                                        // Qt Label rows: ~16px line, no ListView spacing.
+                                        .h(px(16.0))
+                                        .line_height(px(16.0))
                                         .truncate()
                                         .child(SharedString::from(
                                             activity.get(index).cloned().unwrap_or_default(),

@@ -58,6 +58,9 @@ fn main() {
     gpui_app.on_reopen(|cx| present_main_window(cx));
 
     gpui_app.run(move |cx: &mut App| {
+        // Dev builds run outside a .app bundle; give the Dock the real icon.
+        platform::set_dock_icon_if_unbundled();
+
         cx.bind_keys([
             // Text editing (context-scoped to text inputs).
             KeyBinding::new("backspace", ti::Backspace, Some("TextInput")),
