@@ -2,14 +2,60 @@
 //! ThemedSwitch.qml, ThemedSlider.qml, ThemedSpinBox.qml, ThemedComboBox.qml,
 //! and the text-field/area chrome around TextInput.
 
+use std::time::{Duration, Instant};
+
 use gpui::{
-    Context, ElementId, Entity, MouseButton, SharedString, Window, canvas, deferred, div,
+    Context, ElementId, Entity, MouseButton, Rgba, SharedString, Window, canvas, deferred, div,
     prelude::*, px,
 };
 
 use crate::app::{ComboId, RootView};
 use crate::text_input::TextInput;
 use crate::theme::Theme;
+
+/// QML Easing.OutCubic.
+pub fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// QML Easing.InCubic (ThemedPopup exit, etc.).
+pub fn ease_in_cubic(t: f32) -> f32 {
+    t * t * t
+}
+
+pub fn lerp_rgba(from: Rgba, to: Rgba, t: f32) -> Rgba {
+    let mix = |a: f32, b: f32| a + (b - a) * t;
+    Rgba {
+        r: mix(from.r, to.r),
+        g: mix(from.g, to.g),
+        b: mix(from.b, to.b),
+        a: mix(from.a, to.a),
+    }
+}
+
+pub fn lerp_f32(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
+}
+
+/// Returns `(opacity, still_animating)` for popup enter/exit fades.
+pub fn modal_opacity(enter_at: Option<Instant>, exit_at: Option<Instant>) -> (f32, bool) {
+    use crate::theme::{MODAL_ENTER_DURATION_MS, MODAL_EXIT_DURATION_MS};
+
+    if let Some(since) = exit_at {
+        let duration = Duration::from_millis(MODAL_EXIT_DURATION_MS);
+        let t = (since.elapsed().as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0);
+        (1.0 - ease_in_cubic(t), t < 1.0)
+    } else if let Some(since) = enter_at {
+        let duration = Duration::from_millis(MODAL_ENTER_DURATION_MS);
+        let t = (since.elapsed().as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0);
+        (ease_out_cubic(t), t < 1.0)
+    } else {
+        (1.0, false)
+    }
+}
+
+/// Instant-driven hover fill helpers were removed: scrolling re-fires hover on
+/// every row and pinned the display link at 60Hz. Buttons use GPUI `.hover()`.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ButtonVariant {
@@ -25,6 +71,7 @@ pub fn action_button(
     id: impl Into<ElementId>,
     text: &str,
     theme: &Theme,
+    _view: &RootView,
     cx: &mut Context<RootView>,
     on_click: impl Fn(&mut RootView, &mut Window, &mut Context<RootView>) + 'static,
 ) -> impl IntoElement {
@@ -33,21 +80,24 @@ pub fn action_button(
     div()
         .id(id.into())
         .size_full()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(4.0))
-        .bg(theme.button_fill)
-        .hover(move |style| style.bg(theme.button_fill_hover))
-        .active(move |style| style.bg(theme.button_fill_hover))
         .cursor_pointer()
-        .text_size(px(13.0))
-        .text_color(theme.button_label)
-        .overflow_hidden()
-        .child(label)
         .on_click(cx.listener(move |this, _event, window, cx| {
             on_click(this, window, cx);
         }))
+        .child(
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.0))
+                .bg(theme.button_fill)
+                .hover(move |style| style.bg(theme.button_fill_hover))
+                .text_size(px(13.0))
+                .text_color(theme.button_label)
+                .overflow_hidden()
+                .child(label),
+        )
 }
 
 /// PanelButton.qml: soft tinted button with default/primary/danger variants.
@@ -57,6 +107,7 @@ pub fn panel_button(
     variant: ButtonVariant,
     enabled: bool,
     theme: &Theme,
+    _view: &RootView,
     cx: &mut Context<RootView>,
     on_click: impl Fn(&mut RootView, &mut Window, &mut Context<RootView>) + 'static,
 ) -> impl IntoElement {
@@ -83,44 +134,66 @@ pub fn panel_button(
     };
     let label: SharedString = text.to_string().into();
     let on_click: ClickHandler = Box::new(on_click);
+
     div()
         .id(id.into())
-        .flex()
-        .items_center()
-        .justify_center()
         .h(px(38.0))
-        .px(px(12.0))
-        .rounded(px(8.0))
-        .bg(fill)
-        .text_size(px(13.0))
-        .text_color(label_color)
-        .overflow_hidden()
-        .when(!theme.is_dark_mode, |el| {
-            el.border_1().border_color(border_color)
-        })
+        .flex()
         .when(!enabled, |el| el.opacity(0.55))
         .when(enabled, move |el| {
-            el.cursor_pointer()
-                .hover(move |style| style.bg(fill_hover))
-                .active(move |style| style.bg(fill_hover))
-                .on_click(cx.listener(move |this, _event, window, cx| {
-                    on_click(this, window, cx);
-                }))
+            el.cursor_pointer().on_click(cx.listener(move |this, _event, window, cx| {
+                on_click(this, window, cx);
+            }))
         })
-        .child(label)
+        .child(
+            div()
+                .h_full()
+                .px(px(12.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(8.0))
+                .bg(fill)
+                .when(enabled, |el| el.hover(move |style| style.bg(fill_hover)))
+                .text_size(px(13.0))
+                .text_color(label_color)
+                .overflow_hidden()
+                .when(!theme.is_dark_mode, |el| {
+                    el.border_1().border_color(border_color)
+                })
+                .child(label),
+        )
 }
 
 /// ThemedSwitch.qml.
+///
+/// QML Behaviors: track `color` and thumb `x` animate over 140ms with
+/// `Easing.OutCubic`. `switch_anim` records the toggle instant so the first
+/// paint (and remounts) stay still — only real toggles slide.
 pub fn themed_switch(
     id: impl Into<ElementId>,
     checked: bool,
     enabled: bool,
     theme: &Theme,
+    view: &RootView,
     cx: &mut Context<RootView>,
     on_toggle: impl Fn(&mut RootView, bool, &mut Window, &mut Context<RootView>) + 'static,
 ) -> impl IntoElement {
+    const SLIDE: Duration = Duration::from_millis(140);
+    const KNOB: f32 = 20.0;
+    const TRACK_W: f32 = 46.0;
+    const PAD: f32 = 3.0;
+    let left_off = PAD;
+    let left_on = TRACK_W - KNOB - PAD;
+
     let theme = *theme;
-    let track_color = if checked { theme.accent } else { theme.input_border };
+    let id: ElementId = id.into();
+    let track_off = theme.input_border;
+    let track_on = theme.accent;
+    let track_target = if checked { track_on } else { track_off };
+    let track_source = if checked { track_off } else { track_on };
+    let left_target = if checked { left_on } else { left_off };
+    let left_source = if checked { left_off } else { left_on };
     let track_opacity = if !enabled {
         0.45
     } else if checked {
@@ -128,16 +201,30 @@ pub fn themed_switch(
     } else {
         1.0
     };
+
+    let t = view
+        .switch_anim
+        .get(&id)
+        .map(|since| (since.elapsed().as_secs_f32() / SLIDE.as_secs_f32()).clamp(0.0, 1.0))
+        .unwrap_or(1.0);
+    let eased = ease_out_cubic(t);
+    let track_color = lerp_rgba(track_source, track_target, eased);
+    let left = lerp_f32(left_source, left_target, eased);
+
+    let anim_key = id.clone();
     div()
-        .id(id.into())
-        .w(px(46.0))
+        .id(id)
+        .w(px(TRACK_W))
         .h(px(26.0))
         .flex_none()
         .relative()
         .when(enabled, |el| {
             el.cursor_pointer()
                 .on_click(cx.listener(move |this, _event, window, cx| {
+                    this.switch_anim
+                        .insert(anim_key.clone(), Instant::now());
                     on_toggle(this, !checked, window, cx);
+                    cx.notify();
                 }))
         })
         .child(
@@ -151,11 +238,10 @@ pub fn themed_switch(
         .child(
             div()
                 .absolute()
-                .top(px(3.0))
-                .when(checked, |el| el.left(px(46.0 - 20.0 - 3.0)))
-                .when(!checked, |el| el.left(px(3.0)))
-                .w(px(20.0))
-                .h(px(20.0))
+                .top(px(PAD))
+                .left(px(left))
+                .w(px(KNOB))
+                .h(px(KNOB))
                 .rounded_full()
                 .bg(theme.input_surface)
                 .border_1()

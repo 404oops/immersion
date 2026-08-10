@@ -7,8 +7,11 @@ use gpui::{
 };
 
 use crate::app::{ComboId, ConfirmAction, ConfirmState, RootView};
-use crate::theme::{MODAL_EDGE_PADDING, MODAL_PANEL_RADIUS};
-use crate::ui::controls::{ButtonVariant, panel_button, themed_spinbox, themed_switch};
+use crate::theme::MODAL_EDGE_PADDING;
+use crate::theme::MODAL_PANEL_RADIUS;
+use crate::ui::controls::{
+    ButtonVariant, modal_opacity, panel_button, themed_spinbox, themed_switch,
+};
 
 /// ThemedPopup width/height rule.
 fn popup_size(window: &Window, min: (f32, f32), max: (f32, f32), pref: (f32, f32)) -> (f32, f32) {
@@ -34,6 +37,19 @@ impl RootView {
             return layers;
         }
 
+        // Topmost visible popup drives scrim opacity.
+        let (scrim_opacity, _) = if self.confirm.is_some() {
+            modal_opacity(self.confirm_enter_at, self.confirm_exit_at)
+        } else if self.layout_dialog.open {
+            modal_opacity(self.layout_enter_at, self.layout_exit_at)
+        } else if self.vm_open {
+            modal_opacity(self.vm_enter_at, self.vm_exit_at)
+        } else if self.settings_open {
+            modal_opacity(self.settings_enter_at, self.settings_exit_at)
+        } else {
+            (1.0, false)
+        };
+
         // Full-window scrim behind modal popups.
         layers.push(
             div()
@@ -41,6 +57,7 @@ impl RootView {
                 .absolute()
                 .inset_0()
                 .bg(theme.modal_scrim)
+                .opacity(scrim_opacity)
                 .occlude()
                 .into_any_element(),
         );
@@ -54,13 +71,18 @@ impl RootView {
 
         // Nested scrim for child dialogs (layout dialog over settings, confirm).
         if self.child_dialog_open() {
+            let (nested_opacity, _) = if self.confirm.is_some() {
+                modal_opacity(self.confirm_enter_at, self.confirm_exit_at)
+            } else {
+                modal_opacity(self.layout_enter_at, self.layout_exit_at)
+            };
             layers.push(
                 div()
                     .id("nested-modal-scrim")
                     .absolute()
                     .inset_0()
                     .bg(theme.modal_scrim)
-                    .opacity(0.72)
+                    .opacity(0.72 * nested_opacity)
                     .occlude()
                     .into_any_element(),
             );
@@ -76,14 +98,18 @@ impl RootView {
         layers
     }
 
-    /// Centers a ThemedPopup panel of the given size.
+    /// Centers a ThemedPopup; opacity fade on enter/exit applied once to the
+    /// whole panel (chrome + content).
     fn popup_frame(
         &self,
         id: &'static str,
         size: (f32, f32),
         content: AnyElement,
+        enter_at: Option<std::time::Instant>,
+        exit_at: Option<std::time::Instant>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        let (opacity, _) = modal_opacity(enter_at, exit_at);
         div()
             .id(ElementId::Name(format!("{id}-host").into()))
             .absolute()
@@ -102,6 +128,7 @@ impl RootView {
                     .border_color(theme.modal_border)
                     .occlude()
                     .overflow_hidden()
+                    .opacity(opacity)
                     .child(content),
             )
     }
@@ -180,11 +207,10 @@ impl RootView {
                         ButtonVariant::Soft,
                         true,
                         &theme,
+                        self,
                         cx,
                         |this, _w, cx| {
-                            this.settings_open = false;
-                            this.open_combo = None;
-                            cx.notify();
+                            this.request_close_settings(cx);
                         },
                     ))),
             )
@@ -233,6 +259,7 @@ impl RootView {
                                                 ButtonVariant::Primary,
                                                 true,
                                                 &theme,
+                                                self,
                                                 cx,
                                                 |this, _window, cx| {
                                                     this.prompt_for_projects_folder(cx);
@@ -264,6 +291,7 @@ impl RootView {
                                                     ButtonVariant::Soft,
                                                     !folder_path.is_empty(),
                                                     &theme,
+                                                    self,
                                                     cx,
                                                     |this, _window, cx| {
                                                         this.open_layout_dialog_for_current_folder();
@@ -296,6 +324,7 @@ impl RootView {
                                                     launch_at_startup,
                                                     true,
                                                     &theme,
+                                                    self,
                                                     cx,
                                                     |this, checked, _w, cx| {
                                                         this.backend.set_launch_at_startup(checked);
@@ -410,6 +439,7 @@ impl RootView {
                                                 notifications,
                                                 true,
                                                 &theme,
+                                                self,
                                                 cx,
                                                 |this, checked, _w, cx| {
                                                     this.backend
@@ -514,6 +544,7 @@ impl RootView {
                                                         ButtonVariant::Soft,
                                                         true,
                                                         &theme,
+                                                        self,
                                                         cx,
                                                         |this, _w, cx| {
                                                             this.prompt_export_activity_log(cx);
@@ -525,8 +556,11 @@ impl RootView {
                                                         ButtonVariant::Danger,
                                                         true,
                                                         &theme,
+                                                        self,
                                                         cx,
                                                         |this, _w, cx| {
+                                                            this.confirm_enter_at = Some(std::time::Instant::now());
+                                                            this.confirm_exit_at = None;
                                                             this.confirm = Some(ConfirmState {
                                                                 title: "Reset Configuration".to_string(),
                                                                 message: "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted.".to_string(),
@@ -543,7 +577,13 @@ impl RootView {
                     ),
             );
 
-        self.popup_frame("settings-popup", size, content.into_any_element())
+        self.popup_frame(
+            "settings-popup",
+            size,
+            content.into_any_element(),
+            self.settings_enter_at,
+            self.settings_exit_at,
+        )
     }
 
     // ---- ProjectsFolderLayoutDialog.qml -------------------------------------
@@ -687,17 +727,23 @@ impl RootView {
                                 ButtonVariant::Soft,
                                 true,
                                 &theme,
+                                self,
                                 cx,
                                 |this, _w, cx| {
-                                    this.layout_dialog.open = false;
-                                    cx.notify();
+                                    this.request_close_layout(cx);
                                 },
                             ),
                         )),
                     ),
             );
 
-        self.popup_frame("layout-dialog", size, content.into_any_element())
+        self.popup_frame(
+            "layout-dialog",
+            size,
+            content.into_any_element(),
+            self.layout_enter_at,
+            self.layout_exit_at,
+        )
     }
 
     // ---- ThemedConfirmDialog.qml --------------------------------------------
@@ -754,10 +800,10 @@ impl RootView {
                         ButtonVariant::Soft,
                         true,
                         &theme,
+                        self,
                         cx,
                         |this, _w, cx| {
-                            this.confirm = None;
-                            cx.notify();
+                            this.request_close_confirm(cx);
                         },
                     )))
                     .child(div().w(px(112.0)).child(panel_button(
@@ -770,6 +816,7 @@ impl RootView {
                         },
                         true,
                         &theme,
+                        self,
                         cx,
                         |this, _w, cx| {
                             this.run_confirm_action(cx);
@@ -777,7 +824,13 @@ impl RootView {
                     ))),
             );
 
-        self.popup_frame("confirm-dialog", size, content.into_any_element())
+        self.popup_frame(
+            "confirm-dialog",
+            size,
+            content.into_any_element(),
+            self.confirm_enter_at,
+            self.confirm_exit_at,
+        )
     }
 
     // ---- File dialogs --------------------------------------------------------

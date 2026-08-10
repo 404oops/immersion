@@ -1,11 +1,12 @@
 //! RootView: owns the AppBackend, the theme, and all window-level UI state.
 //! Mirrors the responsibilities of Main.qml + QmlBackend wiring.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, Context, Entity, FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle, Window,
-    WindowAppearance, div, prelude::*,
+    Bounds, Context, ElementId, Entity, FocusHandle, Pixels, ScrollHandle,
+    UniformListScrollHandle, Window, WindowAppearance, div, prelude::*,
 };
 use musit_core::backend::{
     AppBackend, BackendEvent, ColorSchemeMode, PlatformHooks, VersionGraphNode,
@@ -80,6 +81,20 @@ pub struct RootView {
     pub split_bounds: Option<Bounds<Pixels>>,
     pub split_dragging: bool,
     pub activity_panel_height: f32,
+
+    // Animation state (ports of QML Behavior on color/x).
+    // Switch knob/track slides: element id -> when it was last toggled.
+    pub switch_anim: HashMap<ElementId, Instant>,
+    // ThemedPopup enter/exit (OutCubic / InCubic): Instant-driven opacity so
+    // frame requests stop when the transition finishes (no stuck 60Hz redraw).
+    pub settings_enter_at: Option<Instant>,
+    pub layout_enter_at: Option<Instant>,
+    pub confirm_enter_at: Option<Instant>,
+    pub vm_enter_at: Option<Instant>,
+    pub settings_exit_at: Option<Instant>,
+    pub layout_exit_at: Option<Instant>,
+    pub confirm_exit_at: Option<Instant>,
+    pub vm_exit_at: Option<Instant>,
 
     // Scroll handles.
     pub project_list_scroll: ScrollHandle,
@@ -196,6 +211,15 @@ impl RootView {
             split_bounds: None,
             split_dragging: false,
             activity_panel_height: 150.0,
+            switch_anim: HashMap::new(),
+            settings_enter_at: None,
+            layout_enter_at: None,
+            confirm_enter_at: None,
+            vm_enter_at: None,
+            settings_exit_at: None,
+            layout_exit_at: None,
+            confirm_exit_at: None,
+            vm_exit_at: None,
             project_list_scroll: ScrollHandle::new(),
             activity_scroll: UniformListScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
@@ -270,8 +294,17 @@ impl RootView {
                 }
                 BackendEvent::ConfigReset => {
                     self.settings_open = false;
+                    self.settings_enter_at = None;
+                    self.settings_exit_at = None;
                     self.vm_open = false;
+                    self.vm_enter_at = None;
+                    self.vm_exit_at = None;
+                    self.layout_dialog.open = false;
+                    self.layout_enter_at = None;
+                    self.layout_exit_at = None;
                     self.confirm = None;
+                    self.confirm_enter_at = None;
+                    self.confirm_exit_at = None;
                 }
                 BackendEvent::ProjectSaveRecorded {
                     project_name,
@@ -325,6 +358,86 @@ impl RootView {
 
     // ---- Modal helpers ----------------------------------------------------
 
+    fn schedule_modal_exit(
+        cx: &mut Context<Self>,
+        finish: impl FnOnce(&mut RootView) + 'static,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(crate::theme::MODAL_EXIT_DURATION_MS))
+                .await;
+            this.update(cx, |root, cx| {
+                finish(root);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn request_close_settings(&mut self, cx: &mut Context<Self>) {
+        if !self.settings_open || self.settings_exit_at.is_some() {
+            return;
+        }
+        self.open_combo = None;
+        self.settings_exit_at = Some(Instant::now());
+        cx.notify();
+        Self::schedule_modal_exit(cx, |root| {
+            root.settings_open = false;
+            root.settings_enter_at = None;
+            root.settings_exit_at = None;
+            root.layout_dialog.open = false;
+            root.layout_enter_at = None;
+            root.layout_exit_at = None;
+        });
+    }
+
+    pub fn request_close_layout(&mut self, cx: &mut Context<Self>) {
+        if !self.layout_dialog.open || self.layout_exit_at.is_some() {
+            return;
+        }
+        self.layout_exit_at = Some(Instant::now());
+        cx.notify();
+        Self::schedule_modal_exit(cx, |root| {
+            root.layout_dialog.open = false;
+            root.layout_enter_at = None;
+            root.layout_exit_at = None;
+        });
+    }
+
+    pub fn request_close_confirm(&mut self, cx: &mut Context<Self>) {
+        if self.confirm.is_none() || self.confirm_exit_at.is_some() {
+            return;
+        }
+        self.confirm_exit_at = Some(Instant::now());
+        cx.notify();
+        Self::schedule_modal_exit(cx, |root| {
+            root.confirm = None;
+            root.confirm_enter_at = None;
+            root.confirm_exit_at = None;
+        });
+    }
+
+    pub fn request_close_version_manager(&mut self, cx: &mut Context<Self>) {
+        if !self.vm_open || self.vm_exit_at.is_some() {
+            return;
+        }
+        self.open_combo = None;
+        self.vm_exit_at = Some(Instant::now());
+        cx.notify();
+        Self::schedule_modal_exit(cx, |root| {
+            root.vm_open = false;
+            root.vm_enter_at = None;
+            root.vm_exit_at = None;
+        });
+    }
+
+    pub fn open_settings(&mut self) {
+        self.settings_open = true;
+        self.settings_enter_at = Some(Instant::now());
+        self.settings_exit_at = None;
+    }
+
     pub fn open_layout_dialog_for_folder(&mut self, folder: &str) {
         // ProjectsFolderLayoutDialog.openForFolder + onOpened auto-confirm.
         let local = self.backend.display_local_path(folder);
@@ -337,6 +450,8 @@ impl RootView {
             .projects_folder_layout_for_path(&local)
             .to_string();
         self.layout_dialog.open = true;
+        self.layout_enter_at = Some(Instant::now());
+        self.layout_exit_at = None;
         self.layout_dialog_confirm();
     }
 
@@ -350,6 +465,8 @@ impl RootView {
         self.layout_dialog.scan_succeeded = false;
         self.layout_dialog.selected_layout = self.backend.projects_folder_layout().to_string();
         self.layout_dialog.open = true;
+        self.layout_enter_at = Some(Instant::now());
+        self.layout_exit_at = None;
     }
 
     pub fn layout_dialog_confirm(&mut self) {
@@ -380,6 +497,8 @@ impl RootView {
         self.project_note_input
             .update(cx, |input, cx| input.set_text(&note, cx));
         self.vm_open = true;
+        self.vm_enter_at = Some(Instant::now());
+        self.vm_exit_at = None;
         cx.notify();
     }
 
@@ -480,19 +599,55 @@ impl RootView {
         self.confirm.is_some() || (self.settings_open && self.layout_dialog.open)
     }
 
+    /// True while any Instant-driven UI transition still needs frames.
+    /// Hover uses GPUI `.hover()` (no RAF) so scrolling list rows cannot pin
+    /// the display link at 60Hz.
+    pub fn ui_animating(&self) -> bool {
+        use crate::ui::controls::modal_opacity;
+
+        const SWITCH_MAX: Duration = Duration::from_millis(140);
+
+        if self
+            .switch_anim
+            .values()
+            .any(|since| since.elapsed() < SWITCH_MAX)
+        {
+            return true;
+        }
+        if self.settings_open
+            && modal_opacity(self.settings_enter_at, self.settings_exit_at).1
+        {
+            return true;
+        }
+        if self.vm_open && modal_opacity(self.vm_enter_at, self.vm_exit_at).1 {
+            return true;
+        }
+        if self.layout_dialog.open
+            && modal_opacity(self.layout_enter_at, self.layout_exit_at).1
+        {
+            return true;
+        }
+        if self.confirm.is_some()
+            && modal_opacity(self.confirm_enter_at, self.confirm_exit_at).1
+        {
+            return true;
+        }
+        false
+    }
+
     fn close_modal(&mut self, _: &CloseModal, _window: &mut Window, cx: &mut Context<Self>) {
         if self.open_combo.is_some() {
             self.open_combo = None;
+            cx.notify();
         } else if self.confirm.is_some() {
-            self.confirm = None;
+            self.request_close_confirm(cx);
         } else if self.layout_dialog.open {
-            self.layout_dialog.open = false;
+            self.request_close_layout(cx);
         } else if self.vm_open {
-            self.vm_open = false;
+            self.request_close_version_manager(cx);
         } else if self.settings_open {
-            self.settings_open = false;
+            self.request_close_settings(cx);
         }
-        cx.notify();
     }
 
     pub fn run_confirm_action(&mut self, cx: &mut Context<Self>) {
@@ -526,6 +681,10 @@ impl Render for RootView {
 
         let theme = self.theme;
         let onboarding = !self.backend.has_projects_folder();
+
+        if self.ui_animating() {
+            window.request_animation_frame();
+        }
 
         div()
             .id("root")

@@ -55,11 +55,10 @@ impl RootView {
                         ButtonVariant::Soft,
                         true,
                         &theme,
+                        self,
                         cx,
                         |this, _w, cx| {
-                            this.vm_open = false;
-                            this.open_combo = None;
-                            cx.notify();
+                            this.request_close_version_manager(cx);
                         },
                     )),
             )
@@ -78,7 +77,10 @@ impl RootView {
     }
 
     fn popup_frame_vm(&self, size: (f32, f32), content: AnyElement) -> impl IntoElement {
+        use crate::ui::controls::modal_opacity;
+
         let theme = self.theme;
+        let (opacity, _) = modal_opacity(self.vm_enter_at, self.vm_exit_at);
         div()
             .id("vm-popup-host")
             .absolute()
@@ -97,6 +99,7 @@ impl RootView {
                     .border_color(theme.modal_border)
                     .occlude()
                     .overflow_hidden()
+                    .opacity(opacity)
                     .child(content),
             )
     }
@@ -531,6 +534,7 @@ impl RootView {
                                 ButtonVariant::Primary,
                                 true,
                                 &theme,
+                                self,
                                 cx,
                                 |this, _w, cx| {
                                     let note = this.project_note_input.read(cx).text();
@@ -573,6 +577,7 @@ impl RootView {
                                 ButtonVariant::Primary,
                                 has_selection,
                                 &theme,
+                                self,
                                 cx,
                                 |this, _w, cx| {
                                     let note = this.version_note_input.read(cx).text();
@@ -593,14 +598,16 @@ impl RootView {
                                         ButtonVariant::Primary,
                                         has_selection,
                                         &theme,
+                                        self,
                                         cx,
                                         |this, _w, cx| {
                                             let version_id = this.vm_selected_id.clone();
                                             if this.backend.restore_version_by_id(&version_id) {
                                                 this.refresh_version_graph(true, cx);
-                                                this.vm_open = false;
+                                                this.request_close_version_manager(cx);
+                                            } else {
+                                                cx.notify();
                                             }
-                                            cx.notify();
                                         },
                                     )))
                                     .child(div().flex_1().child(panel_button(
@@ -609,8 +616,11 @@ impl RootView {
                                         ButtonVariant::Danger,
                                         has_selection,
                                         &theme,
+                                        self,
                                         cx,
                                         |this, _w, cx| {
+                                            this.confirm_enter_at = Some(std::time::Instant::now());
+                                            this.confirm_exit_at = None;
                                             this.confirm = Some(delete_version_confirm(
                                                 &this.vm_selected_id,
                                             ));

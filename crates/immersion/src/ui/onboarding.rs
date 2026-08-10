@@ -60,7 +60,7 @@ impl RootView {
                             .text_color(theme.button_label)
                             .child("Open Settings")
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.settings_open = true;
+                                this.open_settings();
                                 cx.notify();
                             })),
                     ),

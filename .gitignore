@@ -1,9 +1,4 @@
 .DS_Store
 .cache/
 target/
-qt-legacy/build/
-build/
-*.qtds
-*.qt
 *.vscode
-.qtcreator/

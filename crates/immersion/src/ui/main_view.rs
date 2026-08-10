@@ -40,8 +40,8 @@ impl RootView {
                     )
                     .child(
                         div().w(px(120.0)).h(px(36.0)).flex_none().child(
-                            action_button("settings-button", "Settings", &theme, cx, |this, _w, cx| {
-                                this.settings_open = true;
+                            action_button("settings-button", "Settings", &theme, self, cx, |this, _w, cx| {
+                                this.open_settings();
                                 cx.notify();
                             }),
                         ),
@@ -60,7 +60,11 @@ impl RootView {
                         canvas(
                             move |bounds, _window, cx| {
                                 if let Some(root) = weak.upgrade() {
-                                    root.update(cx, |root, _| root.split_bounds = Some(bounds));
+                                    root.update(cx, |root, _| {
+                                        if root.split_bounds != Some(bounds) {
+                                            root.split_bounds = Some(bounds);
+                                        }
+                                    });
                                 }
                             },
                             |_, _, _, _| {},
@@ -273,6 +277,7 @@ impl RootView {
                                                     ),
                                                     "Open",
                                                     &theme,
+                                                    self,
                                                     cx,
                                                     move |this, _w, cx| {
                                                         this.backend.open_project(index as i32);
@@ -288,6 +293,7 @@ impl RootView {
                                                     ),
                                                     "Manage",
                                                     &theme,
+                                                    self,
                                                     cx,
                                                     move |this, _w, cx| {
                                                         this.open_version_manager(index as i32, cx);

@@ -92,15 +92,9 @@ const TRANSPARENT: Rgba = Rgba {
     a: 0.0,
 };
 
-/// Modal animation constants from Theme.qml (kept for the animation pass).
-#[allow(dead_code)]
+/// Modal animation — opacity fade only (GPUI has no transform scale).
 pub const MODAL_ENTER_DURATION_MS: u64 = 220;
-#[allow(dead_code)]
 pub const MODAL_EXIT_DURATION_MS: u64 = 160;
-#[allow(dead_code)]
-pub const MODAL_ENTER_SCALE: f32 = 0.97;
-#[allow(dead_code)]
-pub const MODAL_EXIT_SCALE: f32 = 0.985;
 pub const MODAL_PANEL_RADIUS: f32 = 10.0;
 pub const MODAL_EDGE_PADDING: f32 = 48.0;
 
