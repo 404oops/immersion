@@ -14,6 +14,7 @@ fn clamp(v: f64, min_v: f64, max_v: f64) -> f64 {
     v.clamp(min_v, max_v)
 }
 
+#[allow(dead_code)]
 pub fn srgb_to_linear(v: f64) -> f64 {
     if v <= 0.04045 {
         v / 12.92
@@ -31,6 +32,7 @@ pub fn linear_to_srgb(v: f64) -> f64 {
     }
 }
 
+#[allow(dead_code)]
 pub fn relative_luminance(color: Rgba) -> f64 {
     let r = srgb_to_linear(color.r as f64);
     let g = srgb_to_linear(color.g as f64);
@@ -90,10 +92,14 @@ const TRANSPARENT: Rgba = Rgba {
     a: 0.0,
 };
 
-/// Modal animation constants from Theme.qml.
+/// Modal animation constants from Theme.qml (kept for the animation pass).
+#[allow(dead_code)]
 pub const MODAL_ENTER_DURATION_MS: u64 = 220;
+#[allow(dead_code)]
 pub const MODAL_EXIT_DURATION_MS: u64 = 160;
+#[allow(dead_code)]
 pub const MODAL_ENTER_SCALE: f32 = 0.97;
+#[allow(dead_code)]
 pub const MODAL_EXIT_SCALE: f32 = 0.985;
 pub const MODAL_PANEL_RADIUS: f32 = 10.0;
 pub const MODAL_EDGE_PADDING: f32 = 48.0;

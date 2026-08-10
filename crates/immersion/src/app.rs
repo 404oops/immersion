@@ -92,7 +92,12 @@ pub struct RootView {
 
 impl RootView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let backend = AppBackend::with_platform(PlatformHooks::default());
+        let platform_hooks = PlatformHooks {
+            launch_at_startup_supported: crate::platform::is_launch_at_startup_supported(),
+            set_launch_at_startup: Box::new(crate::platform::set_launch_at_startup),
+            ..PlatformHooks::default()
+        };
+        let backend = AppBackend::with_platform(platform_hooks);
 
         let system_dark = matches!(
             window.appearance(),
@@ -268,8 +273,23 @@ impl RootView {
                     self.vm_open = false;
                     self.confirm = None;
                 }
-                BackendEvent::ProjectSaveRecorded { .. } => {
-                    // OS notifications are wired up in the platform layer.
+                BackendEvent::ProjectSaveRecorded {
+                    project_name,
+                    version_label,
+                    relative_path,
+                } => {
+                    // TrayController::onProjectSaveRecorded.
+                    if self.backend.notifications_enabled() {
+                        let artifact_path =
+                            musit_core::backup_template::artifact_for_path(&relative_path);
+                        let artifact_name = musit_core::path_cleanup::file_name(&artifact_path);
+                        let body = if artifact_name.is_empty() {
+                            format!("{project_name} saved {version_label}")
+                        } else {
+                            format!("{project_name} \u{2014} {artifact_name} saved {version_label}")
+                        };
+                        crate::platform::show_notification("Snapshot saved", &body);
+                    }
                 }
                 _ => {}
             }

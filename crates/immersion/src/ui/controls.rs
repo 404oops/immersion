@@ -3,8 +3,8 @@
 //! and the text-field/area chrome around TextInput.
 
 use gpui::{
-    Context, ElementId, Entity, FocusHandle, MouseButton, SharedString, Window, canvas, deferred,
-    div, prelude::*, px,
+    Context, ElementId, Entity, MouseButton, SharedString, Window, canvas, deferred, div,
+    prelude::*, px,
 };
 
 use crate::app::{ComboId, RootView};
