@@ -1,0 +1,51 @@
+[package]
+name = "immersion"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+musit-core = { path = "../musit-core" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "4bd1993783703e92affb781503916d1f152f599f" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "4bd1993783703e92affb781503916d1f152f599f", features = ["font-kit", "runtime_shaders"] }
+unicode-segmentation = "1"
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+once_cell.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSResponder",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSStatusBarButton",
+    "NSButton",
+    "NSControl",
+    "NSView",
+    "NSMenu",
+    "NSMenuItem",
+    "NSImage",
+    "NSEvent",
+    "NSCell",
+    "NSRunningApplication",
+] }
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSBundle",
+    "NSData",
+    "NSError",
+    "NSGeometry",
+    "NSObject",
+] }
+objc2-user-notifications = { version = "0.3", features = [
+    "UNUserNotificationCenter",
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNNotificationSound",
+    "block2",
+] }
+objc2-service-management = { version = "0.3", features = ["SMAppService"] }
+block2 = "0.6"
