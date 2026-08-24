@@ -855,8 +855,6 @@ pub fn should_track_path(relative_path: &str) -> bool {
 /// inside a directory bundle (e.g. "Song.logicx/…" -> "Song.logicx"),
 /// otherwise the path itself.
 pub fn artifact_for_path(relative_path: &str) -> String {
-    let normalized = normalize_lower(relative_path);
-
     let mut bundle_suffixes: Vec<String> = Vec::new();
     for tpl in all() {
         if tpl.project_file_is_bundle {
@@ -866,13 +864,16 @@ pub fn artifact_for_path(relative_path: &str) -> String {
         }
     }
 
-    let bytes = normalized.as_bytes();
+    // Walk segments of the original string and lowercase per segment:
+    // lowercasing can change byte length (e.g. 'İ' 2->3 bytes), so indices
+    // computed on a lowercased copy must never be applied to the original.
+    let bytes = relative_path.as_bytes();
     let mut segment_start = 0usize;
     for i in 0..=bytes.len() {
-        if i != bytes.len() && bytes[i] != b'/' {
+        if i != bytes.len() && bytes[i] != b'/' && bytes[i] != b'\\' {
             continue;
         }
-        let segment = &normalized[segment_start..i];
+        let segment = relative_path[segment_start..i].to_lowercase();
         for suffix in &bundle_suffixes {
             if segment.ends_with(suffix.as_str()) {
                 return relative_path[..i].to_string();
@@ -916,6 +917,15 @@ mod tests {
         assert_eq!(artifact_for_path("Song.logicx/projectdata"), "Song.logicx");
         assert_eq!(artifact_for_path("dir/Song.logicx/a/b"), "dir/Song.logicx");
         assert_eq!(artifact_for_path("track.als"), "track.als");
+    }
+
+    #[test]
+    fn artifacts_with_length_changing_lowercase() {
+        // 'İ' (U+0130) grows from 2 to 3 bytes when lowercased; indices from
+        // a lowercased copy must never be applied to the original.
+        assert_eq!(artifact_for_path("İİ.logicx/Şarkı.wav"), "İİ.logicx");
+        assert_eq!(artifact_for_path("İstanbul/Song.logicx/a"), "İstanbul/Song.logicx");
+        assert_eq!(artifact_for_path("İ.als"), "İ.als");
     }
 
     #[test]

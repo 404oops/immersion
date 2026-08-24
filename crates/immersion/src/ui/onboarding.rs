@@ -59,8 +59,8 @@ impl RootView {
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.button_label)
                             .child("Open Settings")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.open_settings();
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.open_settings(window, cx);
                                 cx.notify();
                             })),
                     ),

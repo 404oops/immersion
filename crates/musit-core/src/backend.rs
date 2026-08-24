@@ -330,7 +330,7 @@ fn resolve_staged_path(project_root: &str, staged_path: &str) -> String {
     if staged_path.is_empty() {
         return String::new();
     }
-    if staged_path.starts_with('/') || staged_path.chars().nth(1) == Some(':') {
+    if staged_path.starts_with('/') || (cfg!(windows) && staged_path.chars().nth(1) == Some(':')) {
         return staged_path.to_string();
     }
     join_path(project_root, staged_path)
@@ -348,17 +348,40 @@ fn strip_project_prefix(value: &str, project_prefix: &str) -> String {
     let normalized_value = value.replace('\\', "/");
     let normalized_prefix = project_prefix.replace('\\', "/");
     let prefix_with_slash = format!("{normalized_prefix}/");
-    let matches = if path_compare_case_insensitive() {
-        normalized_value
-            .to_lowercase()
-            .starts_with(&prefix_with_slash.to_lowercase())
-    } else {
-        normalized_value.starts_with(&prefix_with_slash)
-    };
-    if !matches {
-        return String::new();
+    if path_compare_case_insensitive() {
+        return strip_prefix_case_insensitive(&normalized_value, &prefix_with_slash)
+            .map(str::to_string)
+            .unwrap_or_default();
     }
-    normalized_value[prefix_with_slash.len()..].to_string()
+    match normalized_value.strip_prefix(&prefix_with_slash) {
+        Some(rest) => rest.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Case-insensitive prefix strip that never slices `value` off a char
+/// boundary: lowercasing can change byte length, so `prefix.len()` is not a
+/// valid index into `value`. Returns `None` when the prefix doesn't match or
+/// when it ends inside one value char's lowercase expansion.
+fn strip_prefix_case_insensitive<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let mut prefix_lower = prefix.chars().flat_map(char::to_lowercase);
+    let mut value_indices = value.char_indices();
+    loop {
+        let Some(expected) = prefix_lower.next() else {
+            let rest_start = value_indices.next().map_or(value.len(), |(i, _)| i);
+            return Some(&value[rest_start..]);
+        };
+        let (_, value_char) = value_indices.next()?;
+        let mut value_lower = value_char.to_lowercase();
+        if value_lower.next() != Some(expected) {
+            return None;
+        }
+        for unit in value_lower {
+            if prefix_lower.next() != Some(unit) {
+                return None;
+            }
+        }
+    }
 }
 
 fn artifact_set_contains(artifacts: &HashSet<String>, candidate: &str) -> bool {
@@ -540,7 +563,7 @@ fn migrate_misrouted_history(source_root: &str, destination_root: &str) -> usize
         }
 
         let source_staged_path = if stored_staged_path.starts_with('/')
-            || stored_staged_path.chars().nth(1) == Some(':')
+            || (cfg!(windows) && stored_staged_path.chars().nth(1) == Some(':'))
         {
             stored_staged_path.clone()
         } else {
@@ -630,6 +653,11 @@ pub struct AppBackend {
     active_scan_folder: String,
     active_scan_generation: i32,
     file_watcher: Option<HybridFileWatcher>,
+    // Projects awaiting monitoring init, advanced a time-sliced batch per
+    // pump so first-time seeding of a large folder doesn't freeze the UI
+    // (the Qt build used one QTimer::singleShot(0) per project).
+    monitoring_init_queue: std::collections::VecDeque<DiscoveredProject>,
+    monitoring_init_total: usize,
     snapshot_service_by_root: HashMap<String, SnapshotService>,
     // pathKey(root) -> root as discovered (hash keys may be lowercased).
     canonical_root_by_key: HashMap<String, String>,
@@ -684,6 +712,8 @@ impl AppBackend {
             active_scan_folder: String::new(),
             active_scan_generation: 0,
             file_watcher: None,
+            monitoring_init_queue: std::collections::VecDeque::new(),
+            monitoring_init_total: 0,
             snapshot_service_by_root: HashMap::new(),
             canonical_root_by_key: HashMap::new(),
             platform,
@@ -766,6 +796,16 @@ impl AppBackend {
             self.persist_app_settings();
             let hue = self.theme_hue;
             self.log_config_change(&format!("theme hue set to {hue:.0}"));
+        }
+
+        self.advance_monitoring_init();
+    }
+
+    /// Persists any debounced settings immediately; call on app shutdown
+    /// (the ~QmlBackend flush) since the debounce timer won't fire again.
+    pub fn flush_pending_persist(&mut self) {
+        if self.theme_hue_persist_deadline.take().is_some() {
+            self.persist_app_settings();
         }
     }
 
@@ -2619,7 +2659,8 @@ impl AppBackend {
 
     // ---- Monitoring ------------------------------------------------------------
 
-    /// startMonitoringDeferred + advanceMonitoringInit, run synchronously.
+    /// startMonitoringDeferred: queues per-project init, advanced in
+    /// time-sliced batches from `process_pending` (advanceMonitoringInit).
     fn start_monitoring(&mut self) {
         if self.projects_folder_root.is_empty() || self.discovered_projects.is_empty() {
             return;
@@ -2631,14 +2672,32 @@ impl AppBackend {
         self.snapshot_service_by_root.clear();
         self.canonical_root_by_key.clear();
 
-        let projects = self.discovered_projects.clone();
-        let total = projects.len();
-        for (i, project) in projects.iter().enumerate() {
-            self.status_message = format!("Initializing versioning ({}/{})...", i + 1, total);
-            self.push_event(BackendEvent::StatusMessageChanged);
-            self.init_monitoring_for_project(project);
-        }
+        self.monitoring_init_queue = self.discovered_projects.iter().cloned().collect();
+        self.monitoring_init_total = self.monitoring_init_queue.len();
+        self.advance_monitoring_init();
+    }
 
+    /// Initializes queued projects for up to ~30ms, then yields so the UI
+    /// stays responsive and the progress status actually renders.
+    fn advance_monitoring_init(&mut self) {
+        if self.monitoring_init_queue.is_empty() {
+            return;
+        }
+        let budget = Duration::from_millis(30);
+        let started = Instant::now();
+        while let Some(project) = self.monitoring_init_queue.pop_front() {
+            let done = self.monitoring_init_total - self.monitoring_init_queue.len();
+            self.status_message = format!(
+                "Initializing versioning ({}/{})...",
+                done, self.monitoring_init_total
+            );
+            self.push_event(BackendEvent::StatusMessageChanged);
+            self.init_monitoring_for_project(&project);
+            if started.elapsed() >= budget && !self.monitoring_init_queue.is_empty() {
+                return;
+            }
+        }
+        self.monitoring_init_total = 0;
         self.start_file_watcher_if_ready();
     }
 
@@ -2771,6 +2830,8 @@ impl AppBackend {
             watcher.stop_watching();
         }
 
+        self.monitoring_init_queue.clear();
+        self.monitoring_init_total = 0;
         self.snapshot_service_by_root.clear();
         self.canonical_root_by_key.clear();
         self.append_activity(&format!(

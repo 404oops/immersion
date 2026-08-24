@@ -347,7 +347,7 @@ impl SnapshotService {
 
         for staged_path in old_staged_paths {
             let absolute_staged_path = if staged_path.starts_with('/')
-                || staged_path.chars().nth(1) == Some(':')
+                || (cfg!(windows) && staged_path.chars().nth(1) == Some(':'))
             {
                 staged_path.clone()
             } else {
@@ -511,9 +511,17 @@ fn walk_files(dir: &str) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             let path_str = path.to_string_lossy().replace('\\', "/");
-            if path.is_dir() {
+            // Never follow symlinks (QDirIterator without FollowSymlinks):
+            // a symlinked dir inside a bundle could form a cycle and hang.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 stack.push(path_str);
-            } else if path.is_file() {
+            } else if file_type.is_file() {
                 out.push(path_str);
             }
         }

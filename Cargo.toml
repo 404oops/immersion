@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 version = "0.2.0"
-edition = "2026"
+edition = "2024"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -20,3 +20,11 @@ tempfile = "3"
 
 [profile.release]
 lto = "thin"
+
+# Distribution builds: scripts/package-macos.sh --production and
+# scripts/package-windows.ps1 -Production build with this profile.
+[profile.production]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

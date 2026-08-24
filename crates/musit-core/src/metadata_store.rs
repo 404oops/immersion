@@ -79,11 +79,15 @@ impl MetadataStore {
         if !Path::new(&log_path).exists() {
             return Vec::new();
         }
-        let Ok(contents) = fs::read_to_string(&log_path) else {
+        // Read as bytes and decode per line: one torn append with invalid
+        // UTF-8 must lose only that line, not silently empty the whole log
+        // (which would restart version numbering and corrupt the graph).
+        let Ok(contents) = fs::read(&log_path) else {
             return Vec::new();
         };
         contents
-            .lines()
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| std::str::from_utf8(line).ok())
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())

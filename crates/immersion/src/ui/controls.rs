@@ -5,13 +5,177 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Context, ElementId, Entity, MouseButton, Rgba, SharedString, Window, canvas, deferred, div,
-    prelude::*, px,
+    Context, ElementId, Entity, MouseButton, Rgba, ScrollHandle, SharedString, Window, canvas,
+    deferred, div, point, prelude::*, px,
 };
 
 use crate::app::{ComboId, RootView};
 use crate::text_input::TextInput;
 use crate::theme::Theme;
+
+// ---- Overlay scrollbars -----------------------------------------------------
+
+pub const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScrollAxis {
+    Vertical,
+    Horizontal,
+}
+
+/// An in-flight scrollbar thumb drag; lives on RootView so the root-level
+/// mouse handlers can keep tracking outside the thumb.
+pub struct ScrollDrag {
+    pub handle: ScrollHandle,
+    pub axis: ScrollAxis,
+    /// Pointer offset within the thumb at drag start, px.
+    pub grab: f32,
+}
+
+struct ScrollbarGeometry {
+    track_start: f32,
+    track_len: f32,
+    thumb_len: f32,
+    thumb_pos: f32,
+    max_offset: f32,
+}
+
+fn scrollbar_geometry(handle: &ScrollHandle, axis: ScrollAxis) -> Option<ScrollbarGeometry> {
+    let bounds = handle.bounds();
+    let (track_start, track_len, max_offset, offset) = match axis {
+        ScrollAxis::Vertical => (
+            f32::from(bounds.top()),
+            f32::from(bounds.size.height),
+            f32::from(handle.max_offset().y),
+            f32::from(handle.offset().y),
+        ),
+        ScrollAxis::Horizontal => (
+            f32::from(bounds.left()),
+            f32::from(bounds.size.width),
+            f32::from(handle.max_offset().x),
+            f32::from(handle.offset().x),
+        ),
+    };
+    if max_offset <= 0.5 || track_len <= 0.0 {
+        return None;
+    }
+    let content_len = track_len + max_offset;
+    let thumb_len = (track_len * track_len / content_len).max(SCROLLBAR_MIN_THUMB);
+    let usable = (track_len - thumb_len).max(0.0);
+    let fraction = (-offset / max_offset).clamp(0.0, 1.0);
+    Some(ScrollbarGeometry {
+        track_start,
+        track_len,
+        thumb_len,
+        thumb_pos: fraction * usable,
+        max_offset,
+    })
+}
+
+/// Applies a drag position (window coords along the axis) to the handle.
+pub fn apply_scroll_drag(drag: &ScrollDrag, position: f32) {
+    let Some(geometry) = scrollbar_geometry(&drag.handle, drag.axis) else {
+        return;
+    };
+    let usable = (geometry.track_len - geometry.thumb_len).max(1.0);
+    let thumb_pos = (position - geometry.track_start - drag.grab).clamp(0.0, usable);
+    let fraction = thumb_pos / usable;
+    let target = -fraction * geometry.max_offset;
+    let current = drag.handle.offset();
+    match drag.axis {
+        ScrollAxis::Vertical => drag.handle.set_offset(point(current.x, px(target))),
+        ScrollAxis::Horizontal => drag.handle.set_offset(point(px(target), current.y)),
+    }
+}
+
+/// Interactive overlay scrollbar (ScrollBar.qml): draggable thumb, click on
+/// the track jumps. Add inside a `.relative()` wrapper around the scroll
+/// container; renders nothing while the content fits.
+pub fn scrollbar(
+    id: &'static str,
+    handle: &ScrollHandle,
+    axis: ScrollAxis,
+    theme: &Theme,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let Some(geometry) = scrollbar_geometry(handle, axis) else {
+        return div().absolute().into_any_element();
+    };
+    let mut thumb_color: gpui::Hsla = gpui::Rgba::from(theme.text_secondary).into();
+    thumb_color.a = 0.35;
+
+    let drag_handle = handle.clone();
+    let track = div()
+        .id(ElementId::Name(format!("scrollbar-{id}").into()))
+        .absolute()
+        .occlude()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                let Some(geometry) = scrollbar_geometry(&drag_handle, axis) else {
+                    return;
+                };
+                let position = match axis {
+                    ScrollAxis::Vertical => f32::from(event.position.y),
+                    ScrollAxis::Horizontal => f32::from(event.position.x),
+                };
+                let within = position - geometry.track_start - geometry.thumb_pos;
+                let grab = if (0.0..=geometry.thumb_len).contains(&within) {
+                    within
+                } else {
+                    // Track click: center the thumb on the pointer.
+                    geometry.thumb_len / 2.0
+                };
+                let drag = ScrollDrag {
+                    handle: drag_handle.clone(),
+                    axis,
+                    grab,
+                };
+                apply_scroll_drag(&drag, position);
+                this.scroll_drag = Some(drag);
+                cx.notify();
+            }),
+        );
+
+    let thumb = div()
+        .absolute()
+        .rounded_full()
+        .bg(thumb_color)
+        .hover(move |style| {
+            let mut hovered = thumb_color;
+            hovered.a = 0.55;
+            style.bg(hovered)
+        });
+
+    match axis {
+        ScrollAxis::Vertical => track
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(10.0))
+            .child(
+                thumb
+                    .top(px(geometry.thumb_pos))
+                    .right(px(2.0))
+                    .w(px(6.0))
+                    .h(px(geometry.thumb_len)),
+            )
+            .into_any_element(),
+        ScrollAxis::Horizontal => track
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(10.0))
+            .child(
+                thumb
+                    .left(px(geometry.thumb_pos))
+                    .bottom(px(2.0))
+                    .h(px(6.0))
+                    .w(px(geometry.thumb_len)),
+            )
+            .into_any_element(),
+    }
+}
 
 /// QML Easing.OutCubic.
 pub fn ease_out_cubic(t: f32) -> f32 {
@@ -249,13 +413,14 @@ pub fn themed_switch(
         )
 }
 
-/// ThemedSpinBox.qml (value display + increment/decrement buttons).
+/// ThemedSpinBox.qml (editable value field + increment/decrement buttons).
 pub fn themed_spinbox(
     id_prefix: &'static str,
     value: i32,
     min: i32,
     max: i32,
     enabled: bool,
+    edit_input: &Entity<TextInput>,
     theme: &Theme,
     cx: &mut Context<RootView>,
     on_change: impl Fn(&mut RootView, i32, &mut Window, &mut Context<RootView>) + Clone + 'static,
@@ -313,12 +478,13 @@ pub fn themed_spinbox(
             }),
         ))
         .child(
+            // Direct entry, like Qt's `editable: true` spinbox.
             div()
                 .flex_1()
+                .px(px(4.0))
                 .text_size(px(12.0))
                 .text_color(theme.text_primary)
-                .text_center()
-                .child(value.to_string()),
+                .child(edit_input.clone()),
         )
         .child(step_button(
             ElementId::Name(format!("{id_prefix}-inc").into()),
@@ -340,6 +506,7 @@ pub fn text_field(
 ) -> impl IntoElement {
     let focused = input.read(cx).focus_handle.is_focused(window);
     let theme = *theme;
+    let click_input = input.clone();
     div()
         .h(px(30.0))
         .w_full()
@@ -355,6 +522,14 @@ pub fn text_field(
             el.border_1().border_color(theme.input_border_accent)
         })
         .overflow_hidden()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |_root, event: &gpui::MouseDownEvent, window, cx| {
+                click_input.update(cx, |input, cx| {
+                    input.handle_chrome_click(event.position, window, cx)
+                });
+            }),
+        )
         .child(input.clone())
 }
 
@@ -369,6 +544,7 @@ pub fn text_area(
 ) -> impl IntoElement {
     let focused = input.read(cx).focus_handle.is_focused(window);
     let theme = *theme;
+    let click_input = input.clone();
     div()
         .id(ElementId::Name(
             format!("text-area-{}", input.entity_id()).into(),
@@ -385,6 +561,16 @@ pub fn text_area(
         .when(!focused, |el| el.border_1().border_color(theme.vm_border))
         .when(!enabled, |el| el.opacity(0.55))
         .overflow_y_scroll()
+        .when(enabled, |el| {
+            el.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_root, event: &gpui::MouseDownEvent, window, cx| {
+                    click_input.update(cx, |input, cx| {
+                        input.handle_chrome_click(event.position, window, cx)
+                    });
+                }),
+            )
+        })
         .child(input.clone())
 }
 

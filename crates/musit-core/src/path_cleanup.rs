@@ -18,6 +18,9 @@ pub fn clean_path(path: &str) -> String {
     }
 
     let absolute = path.starts_with('/');
+    // A UNC root ("//server/share") keeps its double slash, like
+    // QDir::cleanPath on Windows; three or more slashes collapse.
+    let unc = path.starts_with("//") && !path.starts_with("///");
     // Windows drive prefix ("C:") survives as the first component.
     let mut parts: Vec<&str> = Vec::new();
     for segment in path.split('/') {
@@ -39,7 +42,9 @@ pub fn clean_path(path: &str) -> String {
     }
 
     let joined = parts.join("/");
-    if absolute {
+    if unc {
+        format!("//{joined}")
+    } else if absolute {
         format!("/{joined}")
     } else if joined.is_empty() {
         ".".to_string()
@@ -69,12 +74,27 @@ pub fn normalize_folder_path(url_or_path: &str) -> String {
     let mut path = url_or_path.trim().to_string();
     let lower = path.to_lowercase();
     if lower.starts_with("file://") {
-        // file:///Users/x -> /Users/x ; file://host/share stays UNC-ish.
         let rest = &path["file://".len()..];
-        path = percent_decode(rest);
-        if !path.starts_with('/') {
-            path = format!("//{path}");
-        }
+        let decoded = percent_decode(rest);
+        path = if let Some(after_slash) = decoded.strip_prefix('/') {
+            // file:///path form. A Windows drive ("C:/...") drops the
+            // leading slash, matching QUrl::toLocalFile.
+            let bytes = after_slash.as_bytes();
+            if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+                after_slash.to_string()
+            } else {
+                decoded.clone()
+            }
+        } else {
+            // file://host/share: "localhost" means the local machine,
+            // any other host forms a UNC path (as QUrl::toLocalFile).
+            match decoded.split_once('/') {
+                Some((host, tail)) if host.eq_ignore_ascii_case("localhost") => {
+                    format!("/{tail}")
+                }
+                _ => format!("//{decoded}"),
+            }
+        };
     } else if path.contains('%') {
         path = percent_decode(&path);
     }
@@ -153,8 +173,10 @@ pub fn artifact_equals(a: &str, b: &str) -> bool {
 }
 
 /// `QDir(dir).filePath(name)`: joins unless `name` is already absolute.
+/// A drive prefix ("X:") makes a path absolute only on Windows — on POSIX
+/// a ':' is an ordinary filename character.
 pub fn join_path(dir: &str, name: &str) -> String {
-    if name.starts_with('/') || name.chars().nth(1) == Some(':') {
+    if name.starts_with('/') || (cfg!(windows) && name.chars().nth(1) == Some(':')) {
         return name.replace('\\', "/");
     }
     if dir.is_empty() {
@@ -285,6 +307,32 @@ mod tests {
         assert_eq!(clean_path("a/b/.."), "a");
         assert_eq!(clean_path("/"), "/");
         assert_eq!(clean_path("C:\\Users\\x\\..\\y"), "C:/Users/y");
+    }
+
+    #[test]
+    fn clean_path_preserves_unc_roots() {
+        assert_eq!(clean_path("\\\\NAS\\Music"), "//NAS/Music");
+        assert_eq!(clean_path("//server/share/x/../y"), "//server/share/y");
+        // Three or more slashes are not UNC; they collapse.
+        assert_eq!(clean_path("///a/b"), "/a/b");
+    }
+
+    #[test]
+    fn colon_is_a_filename_char_on_posix() {
+        if cfg!(windows) {
+            assert_eq!(join_path("/root", "C:/abs"), "C:/abs");
+        } else {
+            // Finder renders '/' in file names as ':' on disk.
+            assert_eq!(join_path("/root", "5: Mix.als"), "/root/5: Mix.als");
+        }
+    }
+
+    #[test]
+    fn folder_url_normalization() {
+        assert_eq!(normalize_folder_path("file:///Users/x/My%20Music"), "/Users/x/My Music");
+        assert_eq!(normalize_folder_path("file://localhost/Users/x"), "/Users/x");
+        assert_eq!(normalize_folder_path("file://nas/share"), "//nas/share");
+        assert_eq!(normalize_folder_path("file:///C:/Users/x"), "C:/Users/x");
     }
 
     #[test]

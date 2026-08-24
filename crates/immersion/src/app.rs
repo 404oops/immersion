@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, Context, ElementId, Entity, FocusHandle, Pixels, ScrollHandle,
+    App, Bounds, Context, ElementId, Entity, FocusHandle, Pixels, ScrollHandle,
     UniformListScrollHandle, Window, WindowAppearance, div, prelude::*,
 };
 use musit_core::backend::{
@@ -62,6 +62,7 @@ pub struct RootView {
     pub search_input: Entity<TextInput>,
     pub project_note_input: Entity<TextInput>,
     pub version_note_input: Entity<TextInput>,
+    pub retention_input: Entity<TextInput>,
 
     // Modals.
     pub settings_open: bool,
@@ -103,6 +104,7 @@ pub struct RootView {
     pub vm_side_scroll: ScrollHandle,
     pub graph_scroll: ScrollHandle,
     pub layout_dialog_scroll: ScrollHandle,
+    pub scroll_drag: Option<crate::ui::controls::ScrollDrag>,
 }
 
 impl RootView {
@@ -140,6 +142,29 @@ impl RootView {
                 area_style(&theme),
             )
         });
+        let retention_input = cx.new(|cx| {
+            let mut input = TextInput::new(cx, "", false, field_style(&theme));
+            input.set_text(&backend.snapshot_retention().to_string(), cx);
+            input
+        });
+
+        // Retention spinbox direct entry: commit values within range.
+        {
+            let weak = cx.entity().downgrade();
+            retention_input.update(cx, |input, _| {
+                input.on_change = Some(Box::new(move |text, cx| {
+                    let Ok(value) = text.trim().parse::<i32>() else {
+                        return;
+                    };
+                    if !(1..=50).contains(&value) {
+                        return;
+                    }
+                    if let Some(root) = weak.upgrade() {
+                        root.update(cx, |root, _| root.backend.set_snapshot_retention(value));
+                    }
+                }));
+            });
+        }
 
         // Search field pushes straight into the backend (onTextEdited).
         {
@@ -198,6 +223,7 @@ impl RootView {
             search_input,
             project_note_input,
             version_note_input,
+            retention_input,
             settings_open: false,
             vm_open: false,
             layout_dialog: LayoutDialogState::default(),
@@ -226,6 +252,7 @@ impl RootView {
             vm_side_scroll: ScrollHandle::new(),
             graph_scroll: ScrollHandle::new(),
             layout_dialog_scroll: ScrollHandle::new(),
+            scroll_drag: None,
         };
 
         // Component.onCompleted: pending folder setup opens the layout dialog.
@@ -239,6 +266,11 @@ impl RootView {
 
     // ---- Backend event pump ---------------------------------------------
 
+    /// ~QmlBackend: persist debounced settings before the process exits.
+    pub fn flush_before_quit(&mut self) {
+        self.backend.flush_pending_persist();
+    }
+
     fn pump(&mut self, cx: &mut Context<Self>) {
         self.backend.process_pending();
         if !self.backend.has_pending_events() {
@@ -247,12 +279,30 @@ impl RootView {
         let events = self.backend.take_events();
         for event in events {
             match event {
+                BackendEvent::SearchTextChanged => {
+                    // Keep the search box in sync when the backend clears the
+                    // filter (folder change, reset) — QML bound text both ways.
+                    let text = self.backend.search_text().to_string();
+                    self.search_input.update(cx, |input, cx| {
+                        if input.text() != text {
+                            input.set_text(&text, cx);
+                        }
+                    });
+                }
                 BackendEvent::ActivityChanged => {
                     // Main.qml scrolls the activity list to the bottom.
                     let count = self.backend.activity().len();
                     if count > 0 {
                         self.activity_scroll.scroll_to_bottom();
                     }
+                }
+                BackendEvent::SnapshotRetentionChanged => {
+                    let text = self.backend.snapshot_retention().to_string();
+                    self.retention_input.update(cx, |input, cx| {
+                        if input.text().trim().parse::<i32>() != text.parse::<i32>() {
+                            input.set_text(&text, cx);
+                        }
+                    });
                 }
                 BackendEvent::PendingProjectsFolderSetupChanged => {
                     let pending = self.backend.pending_projects_folder_setup().to_string();
@@ -353,6 +403,10 @@ impl RootView {
             input.style = area;
             cx.notify();
         });
+        self.retention_input.update(cx, |input, cx| {
+            input.style = field;
+            cx.notify();
+        });
         cx.notify();
     }
 
@@ -383,6 +437,11 @@ impl RootView {
         self.settings_exit_at = Some(Instant::now());
         cx.notify();
         Self::schedule_modal_exit(cx, |root| {
+            // A reopen during the exit animation cleared exit_at; this close
+            // is stale then and must not shut the fresh modal.
+            if root.settings_exit_at.is_none() {
+                return;
+            }
             root.settings_open = false;
             root.settings_enter_at = None;
             root.settings_exit_at = None;
@@ -399,6 +458,9 @@ impl RootView {
         self.layout_exit_at = Some(Instant::now());
         cx.notify();
         Self::schedule_modal_exit(cx, |root| {
+            if root.layout_exit_at.is_none() {
+                return;
+            }
             root.layout_dialog.open = false;
             root.layout_enter_at = None;
             root.layout_exit_at = None;
@@ -412,6 +474,9 @@ impl RootView {
         self.confirm_exit_at = Some(Instant::now());
         cx.notify();
         Self::schedule_modal_exit(cx, |root| {
+            if root.confirm_exit_at.is_none() {
+                return;
+            }
             root.confirm = None;
             root.confirm_enter_at = None;
             root.confirm_exit_at = None;
@@ -426,13 +491,28 @@ impl RootView {
         self.vm_exit_at = Some(Instant::now());
         cx.notify();
         Self::schedule_modal_exit(cx, |root| {
+            if root.vm_exit_at.is_none() {
+                return;
+            }
             root.vm_open = false;
             root.vm_enter_at = None;
             root.vm_exit_at = None;
         });
     }
 
-    pub fn open_settings(&mut self) {
+    /// Moves keyboard focus off any text input onto the root view, so keys
+    /// typed while a modal is up don't edit fields behind the scrim
+    /// (ThemedPopup was `modal: true; focus: true`).
+    pub fn take_modal_focus(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.focus_handle, cx);
+    }
+
+    pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.take_modal_focus(window, cx);
+        // Discard any half-typed retention value from a previous visit.
+        let retention = self.backend.snapshot_retention().to_string();
+        self.retention_input
+            .update(cx, |input, cx| input.set_text(&retention, cx));
         self.settings_open = true;
         self.settings_enter_at = Some(Instant::now());
         self.settings_exit_at = None;
@@ -455,10 +535,15 @@ impl RootView {
         self.layout_dialog_confirm();
     }
 
-    pub fn open_layout_dialog_for_current_folder(&mut self) {
+    pub fn open_layout_dialog_for_current_folder(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.backend.projects_folder_path().is_empty() {
             return;
         }
+        self.take_modal_focus(window, cx);
         self.layout_dialog.folder_path = self.backend.projects_folder_path().to_string();
         self.layout_dialog.awaiting_scan = false;
         self.layout_dialog.scan_error = String::new();
@@ -490,7 +575,13 @@ impl RootView {
         self.layout_dialog_confirm();
     }
 
-    pub fn open_version_manager(&mut self, visible_index: i32, cx: &mut Context<Self>) {
+    pub fn open_version_manager(
+        &mut self,
+        visible_index: i32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.take_modal_focus(window, cx);
         self.backend.manage_project_versions(visible_index);
         self.refresh_version_graph(true, cx);
         let note = self.backend.selected_project_note().to_string();
@@ -508,8 +599,11 @@ impl RootView {
         // applyVersionSelection
         if self.vm_graph.is_empty() {
             self.vm_selected_id = String::new();
-            self.version_note_input
-                .update(cx, |input, cx| input.set_text("", cx));
+            self.version_note_input.update(cx, |input, cx| {
+                input.set_text("", cx);
+                // VersionManagerWindow.qml: `enabled: selectedVersionId != ""`.
+                input.disabled = true;
+            });
         } else {
             let exists = self
                 .vm_graph
@@ -522,8 +616,11 @@ impl RootView {
                 .node_by_id(&self.vm_selected_id)
                 .map(|node| node.version.note.clone())
                 .unwrap_or_default();
-            self.version_note_input
-                .update(cx, |input, cx| input.set_text(&note, cx));
+            let has_selection = !self.vm_selected_id.is_empty();
+            self.version_note_input.update(cx, |input, cx| {
+                input.set_text(&note, cx);
+                input.disabled = !has_selection;
+            });
         }
 
         // Graph extent (VersionManagerWindow.refreshVersionGraph).
@@ -704,6 +801,15 @@ impl Render for RootView {
                     this.update_split_from_mouse(event.position);
                     dirty = true;
                 }
+                if let Some(drag) = &this.scroll_drag {
+                    use crate::ui::controls::{ScrollAxis, apply_scroll_drag};
+                    let position = match drag.axis {
+                        ScrollAxis::Vertical => f32::from(event.position.y),
+                        ScrollAxis::Horizontal => f32::from(event.position.x),
+                    };
+                    apply_scroll_drag(drag, position);
+                    dirty = true;
+                }
                 if dirty {
                     cx.notify();
                 }
@@ -718,6 +824,9 @@ impl Render for RootView {
                     }
                     if this.split_dragging {
                         this.split_dragging = false;
+                        cx.notify();
+                    }
+                    if this.scroll_drag.take().is_some() {
                         cx.notify();
                     }
                 }),

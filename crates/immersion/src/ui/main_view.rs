@@ -7,7 +7,7 @@ use gpui::{
 };
 
 use crate::app::{ComboId, RootView};
-use crate::ui::controls::{action_button, text_field};
+use crate::ui::controls::{ScrollAxis, action_button, scrollbar, text_field};
 
 impl RootView {
     pub fn render_main_view(
@@ -40,8 +40,8 @@ impl RootView {
                     )
                     .child(
                         div().w(px(120.0)).h(px(36.0)).flex_none().child(
-                            action_button("settings-button", "Settings", &theme, self, cx, |this, _w, cx| {
-                                this.open_settings();
+                            action_button("settings-button", "Settings", &theme, self, cx, |this, w, cx| {
+                                this.open_settings(w, cx);
                                 cx.notify();
                             }),
                         ),
@@ -295,14 +295,21 @@ impl RootView {
                                                     &theme,
                                                     self,
                                                     cx,
-                                                    move |this, _w, cx| {
-                                                        this.open_version_manager(index as i32, cx);
+                                                    move |this, w, cx| {
+                                                        this.open_version_manager(index as i32, w, cx);
                                                     },
                                                 )),
                                             ),
                                     )
                             })),
                     )
+                    .child(scrollbar(
+                        "project-list",
+                        &self.project_list_scroll.clone(),
+                        ScrollAxis::Vertical,
+                        &theme,
+                        cx,
+                    ))
                     .when(!has_projects, |el| {
                         el.child(
                             div()
@@ -346,7 +353,7 @@ impl RootView {
                     .child("Activity"),
             )
             .child(
-                div().flex_1().min_h_0().child(
+                div().flex_1().min_h_0().relative().child(
                     uniform_list(
                         "activity-list",
                         count,
@@ -374,7 +381,14 @@ impl RootView {
                     .text_size(px(13.0))
                     .text_color(theme.text_activity)
                     .track_scroll(&self.activity_scroll),
-                ),
+                )
+                .child(scrollbar(
+                    "activity",
+                    &self.activity_scroll.0.borrow().base_handle.clone(),
+                    ScrollAxis::Vertical,
+                    &theme,
+                    cx,
+                )),
             )
     }
 }

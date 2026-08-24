@@ -93,6 +93,14 @@ fn migrate_legacy_config_if_needed(canonical_dir: &str) {
     }
     #[cfg(target_os = "windows")]
     {
+        // The oldest hand-rolled builds used GenericConfigLocation, which is
+        // %LOCALAPPDATA% on Windows.
+        let local = std::env::var("LOCALAPPDATA")
+            .unwrap_or_default()
+            .replace('\\', "/");
+        if !local.is_empty() {
+            legacy_dirs.push(join_path(&local, "musit"));
+        }
         let roaming = std::env::var("APPDATA").unwrap_or_default().replace('\\', "/");
         if !roaming.is_empty() {
             legacy_dirs.push(join_path(&roaming, "musit"));

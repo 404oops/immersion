@@ -6,7 +6,7 @@ mod text_input;
 mod theme;
 mod ui;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
 use gpui::{
@@ -22,11 +22,14 @@ actions!(immersion, [Quit, CloseModal]);
 
 thread_local! {
     static MAIN_WINDOW: RefCell<Option<WindowHandle<app::RootView>>> = const { RefCell::new(None) };
+    // Whether the app is hidden in the menu bar (window closed / agent mode).
+    static APP_HIDDEN: Cell<bool> = const { Cell::new(false) };
 }
 
 /// TrayController::showMainWindow + PlatformAgent::presentMainWindow.
 fn present_main_window(cx: &mut App) {
     platform::set_background_agent_mode(false);
+    APP_HIDDEN.with(|hidden| hidden.set(false));
     MAIN_WINDOW.with(|window| {
         if let Some(handle) = window.borrow().as_ref() {
             handle
@@ -47,10 +50,13 @@ fn main() {
     };
 
     // Qt starts hidden in background-agent mode when a projects folder is
-    // already configured (TrayController::attach).
+    // already configured (TrayController::attach). Only on macOS: other
+    // platforms have no status item yet, so a hidden window would be
+    // unreachable.
     let saved_folder = musit_core::project_registry::ProjectRegistry.load_projects_folder();
-    let start_hidden =
-        !saved_folder.is_empty() && musit_core::folder_settings::has_layout_setting(&saved_folder);
+    let start_hidden = cfg!(target_os = "macos")
+        && !saved_folder.is_empty()
+        && musit_core::folder_settings::has_layout_setting(&saved_folder);
 
     let gpui_app = application();
 
@@ -65,18 +71,36 @@ fn main() {
             // Text editing (context-scoped to text inputs).
             KeyBinding::new("backspace", ti::Backspace, Some("TextInput")),
             KeyBinding::new("delete", ti::Delete, Some("TextInput")),
+            KeyBinding::new("alt-backspace", ti::DeleteWordLeft, Some("TextInput")),
+            KeyBinding::new("cmd-backspace", ti::DeleteToLineStart, Some("TextInput")),
             KeyBinding::new("left", ti::Left, Some("TextInput")),
             KeyBinding::new("right", ti::Right, Some("TextInput")),
             KeyBinding::new("up", ti::Up, Some("TextInput")),
             KeyBinding::new("down", ti::Down, Some("TextInput")),
             KeyBinding::new("shift-left", ti::SelectLeft, Some("TextInput")),
             KeyBinding::new("shift-right", ti::SelectRight, Some("TextInput")),
+            KeyBinding::new("shift-up", ti::SelectUp, Some("TextInput")),
+            KeyBinding::new("shift-down", ti::SelectDown, Some("TextInput")),
+            KeyBinding::new("alt-left", ti::WordLeft, Some("TextInput")),
+            KeyBinding::new("alt-right", ti::WordRight, Some("TextInput")),
+            KeyBinding::new("alt-shift-left", ti::SelectWordLeft, Some("TextInput")),
+            KeyBinding::new("alt-shift-right", ti::SelectWordRight, Some("TextInput")),
+            KeyBinding::new("cmd-left", ti::Home, Some("TextInput")),
+            KeyBinding::new("cmd-right", ti::End, Some("TextInput")),
+            KeyBinding::new("cmd-shift-left", ti::SelectToHome, Some("TextInput")),
+            KeyBinding::new("cmd-shift-right", ti::SelectToEnd, Some("TextInput")),
+            KeyBinding::new("cmd-up", ti::DocumentStart, Some("TextInput")),
+            KeyBinding::new("cmd-down", ti::DocumentEnd, Some("TextInput")),
             KeyBinding::new("cmd-a", ti::SelectAll, Some("TextInput")),
             KeyBinding::new("cmd-v", ti::Paste, Some("TextInput")),
             KeyBinding::new("cmd-c", ti::Copy, Some("TextInput")),
             KeyBinding::new("cmd-x", ti::Cut, Some("TextInput")),
+            KeyBinding::new("cmd-z", ti::Undo, Some("TextInput")),
+            KeyBinding::new("cmd-shift-z", ti::Redo, Some("TextInput")),
             KeyBinding::new("home", ti::Home, Some("TextInput")),
             KeyBinding::new("end", ti::End, Some("TextInput")),
+            KeyBinding::new("shift-home", ti::SelectToHome, Some("TextInput")),
+            KeyBinding::new("shift-end", ti::SelectToEnd, Some("TextInput")),
             KeyBinding::new("enter", ti::Enter, Some("TextInput")),
             KeyBinding::new("ctrl-cmd-space", ti::ShowCharacterPalette, Some("TextInput")),
             // App-level.
@@ -84,6 +108,20 @@ fn main() {
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+
+        // gpui's quit path never returns from run(), so shutdown work has to
+        // hang off the quit hook: flush debounced settings and remove the
+        // single-instance endpoint.
+        cx.on_app_quit(|cx| {
+            MAIN_WINDOW.with(|window| {
+                if let Some(handle) = window.borrow().as_ref() {
+                    let _ = handle.update(cx, |view, _win, _cx| view.flush_before_quit());
+                }
+            });
+            single_instance::cleanup();
+            async {}
+        })
+        .detach();
 
         let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
         let window = cx
@@ -104,13 +142,21 @@ fn main() {
 
         MAIN_WINDOW.with(|slot| *slot.borrow_mut() = Some(window));
 
-        // Closing the window hides the app into the status bar (tray app).
+        // Closing the window hides the app into the status bar (tray app) on
+        // macOS. On other platforms gpui's hide() is a no-op and there is no
+        // status item, so closing quits instead of stranding the process.
         window
             .update(cx, |_view, win, cx| {
                 win.on_window_should_close(cx, |_win, cx| {
-                    cx.hide();
-                    platform::set_background_agent_mode(true);
-                    false
+                    if cfg!(target_os = "macos") {
+                        cx.hide();
+                        platform::set_background_agent_mode(true);
+                        APP_HIDDEN.with(|hidden| hidden.set(true));
+                        false
+                    } else {
+                        cx.quit();
+                        true
+                    }
                 });
             })
             .ok();
@@ -131,6 +177,20 @@ fn main() {
             );
         }
 
+        // Spotlight/Dock can activate the running process without triggering
+        // applicationShouldHandleReopen; reveal the window on activation
+        // while it's hidden (PlatformAgent_mac parity).
+        {
+            let async_activate: RefCell<AsyncApp> = RefCell::new(cx.to_async());
+            platform::install_activation_observer(Box::new(move || {
+                if !APP_HIDDEN.with(|hidden| hidden.get()) {
+                    return;
+                }
+                let cx = async_activate.borrow_mut();
+                let _ = cx.update(|cx| present_main_window(cx));
+            }));
+        }
+
         // Raise requests from secondary instances.
         cx.spawn(async move |cx| {
             loop {
@@ -146,10 +206,12 @@ fn main() {
 
         if start_hidden {
             platform::set_background_agent_mode(true);
+            APP_HIDDEN.with(|hidden| hidden.set(true));
         } else {
             cx.activate(true);
         }
     });
 
+    // Reached only if run() ever returns (quit is handled in on_app_quit).
     single_instance::cleanup();
 }

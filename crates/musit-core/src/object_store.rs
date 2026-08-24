@@ -6,6 +6,7 @@ use crate::path_cleanup::{clean_path, join_path, parent_path};
 use crate::qcompress::{q_compress, q_uncompress};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,19 +16,44 @@ pub fn write_atomically(file_path: &str, bytes: &[u8]) -> bool {
     if parent.is_empty() {
         return false;
     }
-    let temp_path = format!(
-        "{file_path}.tmp{}",
-        std::process::id() as u64 ^ SystemTime::now()
+    // Exclusive-create a unique temp file next to the target so we never
+    // truncate or follow a pre-existing path.
+    let mut temp = None;
+    for attempt in 0..16u32 {
+        let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as u64)
-            .unwrap_or(0)
-    );
-    if fs::write(&temp_path, bytes).is_err() {
-        return false;
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let candidate = format!("{file_path}.tmp{}-{nanos}-{attempt}", std::process::id());
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                temp = Some((candidate, file));
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(_) => return false,
+        }
     }
-    if fs::rename(&temp_path, file_path).is_err() {
+    let Some((temp_path, mut file)) = temp else {
+        return false;
+    };
+    // Data must reach disk before the rename makes the file visible, or a
+    // crash can leave a visible-but-truncated object (QSaveFile::commit gave
+    // the same guarantee).
+    let written = file.write_all(bytes).is_ok() && file.sync_all().is_ok();
+    drop(file);
+    if !written || fs::rename(&temp_path, file_path).is_err() {
         let _ = fs::remove_file(&temp_path);
         return false;
+    }
+    // Best-effort: persist the rename itself.
+    #[cfg(unix)]
+    if let Ok(dir) = fs::File::open(&parent) {
+        let _ = dir.sync_all();
     }
     true
 }
@@ -81,11 +107,13 @@ impl ObjectStore {
         // The relative path is used to build a path inside the staging area;
         // refuse anything that could escape it.
         let normalized_relative = clean_path(relative_path);
+        // `X:` is a drive prefix only on Windows; on POSIX a ':' is a legal
+        // filename character (Finder renders '/' in names as ':').
         if normalized_relative.is_empty()
             || normalized_relative.starts_with("..")
             || normalized_relative.contains("/../")
             || normalized_relative.starts_with('/')
-            || normalized_relative.chars().nth(1) == Some(':')
+            || (cfg!(windows) && normalized_relative.chars().nth(1) == Some(':'))
         {
             return None;
         }
@@ -113,7 +141,13 @@ impl ObjectStore {
     }
 
     pub fn object_path_for_hash(&self, object_hash: &str) -> Option<String> {
-        if self.musit_root.is_empty() || object_hash.len() <= 2 {
+        // The hash is read from log.jsonl and is untrusted: require ASCII hex
+        // so the slices below stay on char boundaries (a multi-byte char
+        // would panic) and the path can't be steered elsewhere.
+        if self.musit_root.is_empty()
+            || object_hash.len() <= 2
+            || !object_hash.bytes().all(|b| b.is_ascii_hexdigit())
+        {
             return None;
         }
         Some(join_path(

@@ -8,7 +8,7 @@ use gpui::{
 
 use crate::app::{ComboId, RootView};
 use crate::theme::MODAL_PANEL_RADIUS;
-use crate::ui::controls::{ButtonVariant, panel_button, text_area};
+use crate::ui::controls::{ButtonVariant, ScrollAxis, panel_button, scrollbar, text_area};
 use crate::ui::modals::delete_version_confirm;
 
 const NODE_HALF_W: f32 = 38.0;
@@ -257,6 +257,20 @@ impl RootView {
                                 )),
                         ),
                 )
+                .child(scrollbar(
+                    "graph-v",
+                    &self.graph_scroll.clone(),
+                    ScrollAxis::Vertical,
+                    &theme,
+                    cx,
+                ))
+                .child(scrollbar(
+                    "graph-h",
+                    &self.graph_scroll.clone(),
+                    ScrollAxis::Horizontal,
+                    &theme,
+                    cx,
+                ))
             })
     }
 
@@ -265,7 +279,7 @@ impl RootView {
         index: usize,
         node: musit_core::backend::VersionGraphNode,
         cx: &mut Context<RootView>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let theme = self.theme;
         let selected = self.vm_selected_id == node.version.id;
         let current = node.version.is_current;
@@ -392,8 +406,10 @@ impl RootView {
                 cx.listener(move |this, _event, _window, cx| {
                     this.vm_selected_id = version_id.clone();
                     let note = note.clone();
-                    this.version_note_input
-                        .update(cx, |input, cx| input.set_text(&note, cx));
+                    this.version_note_input.update(cx, |input, cx| {
+                        input.set_text(&note, cx);
+                        input.disabled = false;
+                    });
                     cx.notify();
                 }),
             )
@@ -460,6 +476,7 @@ impl RootView {
             .border_1()
             .border_color(theme.vm_border)
             .overflow_hidden()
+            .relative()
             .child(
                 div()
                     .id("vm-side-scroll")
@@ -618,7 +635,8 @@ impl RootView {
                                         &theme,
                                         self,
                                         cx,
-                                        |this, _w, cx| {
+                                        |this, w, cx| {
+                                            this.take_modal_focus(w, cx);
                                             this.confirm_enter_at = Some(std::time::Instant::now());
                                             this.confirm_exit_at = None;
                                             this.confirm = Some(delete_version_confirm(
@@ -630,5 +648,12 @@ impl RootView {
                             ),
                     ),
             )
+            .child(scrollbar(
+                "vm-side",
+                &self.vm_side_scroll.clone(),
+                ScrollAxis::Vertical,
+                &theme,
+                cx,
+            ))
     }
 }

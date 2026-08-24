@@ -7,7 +7,7 @@
 //! a scan sequence, which SnapshotService uses to group bundle saves.
 
 use crate::file_event::{FileEvent, FileEventType};
-use crate::path_cleanup::{clean_path, join_path, relative_file_path};
+use crate::path_cleanup::{clean_path, join_path, path_equals, relative_file_path};
 use crate::project_config::{self, ProjectConfig};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{HashMap, HashSet};
@@ -97,6 +97,10 @@ enum Msg {
 
 struct WorkerState {
     root_path: String,
+    /// Symlink-resolved form of `root_path` when they differ ("" otherwise).
+    /// FSEvents reports resolved paths, so events for a root behind a
+    /// symlinked prefix (/tmp -> /private/tmp) arrive in this domain.
+    canonical_root: String,
     project_config: ProjectConfig,
     scan_sequence: i64,
     dirty_relative: HashSet<String>,
@@ -117,6 +121,11 @@ impl WorkerState {
 
     fn start(&mut self, root_path: &str) {
         self.root_path = clean_path(root_path);
+        self.canonical_root = fs::canonicalize(&self.root_path)
+            .map(|p| clean_path(&p.to_string_lossy()))
+            .ok()
+            .filter(|canonical| !path_equals(canonical, &self.root_path))
+            .unwrap_or_default();
         self.project_config.set_root_path(&self.root_path);
         self.previous.clear();
         self.pending.clear();
@@ -135,6 +144,7 @@ impl WorkerState {
 
     fn stop(&mut self) {
         self.root_path.clear();
+        self.canonical_root.clear();
         self.previous.clear();
         self.pending.clear();
         self.dirty_relative.clear();
@@ -154,18 +164,49 @@ impl WorkerState {
         self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
     }
 
+    /// Remaps a symlink-resolved event path back into the configured root's
+    /// path domain, so lexical prefix matching downstream keeps working.
+    fn to_root_domain(&self, absolute: &str) -> String {
+        if self.canonical_root.is_empty()
+            || !relative_file_path(&self.root_path, absolute).starts_with("..")
+        {
+            return absolute.to_string();
+        }
+        let canonical_relative = relative_file_path(&self.canonical_root, absolute);
+        if canonical_relative.starts_with("..") {
+            return absolute.to_string();
+        }
+        if canonical_relative.is_empty() {
+            return self.root_path.clone();
+        }
+        join_path(&self.root_path, &canonical_relative)
+    }
+
+    fn has_previous_under(&self, relative_dir: &str) -> bool {
+        if relative_dir.is_empty() {
+            return false;
+        }
+        let prefix = format!("{relative_dir}/");
+        self.previous.keys().any(|key| key.starts_with(&prefix))
+    }
+
     fn on_fs_paths(&mut self, paths: Vec<std::path::PathBuf>) {
         if self.root_path.is_empty() {
             return;
         }
         for path in paths {
-            let absolute = clean_path(&path.to_string_lossy());
+            let absolute = self.to_root_domain(&clean_path(&path.to_string_lossy()));
             let relative = relative_file_path(&self.root_path, &absolute);
             if relative.starts_with("..") {
                 continue;
             }
 
             if Path::new(&absolute).is_dir() {
+                self.queue_subtree_reconcile(&absolute);
+            } else if !Path::new(&absolute).exists() && self.has_previous_under(&relative) {
+                // A directory vanished (moved/deleted): reconcile its subtree
+                // now so the deletions are recorded immediately instead of on
+                // the next safety scan.
                 self.queue_subtree_reconcile(&absolute);
             } else {
                 self.mark_dirty_relative(relative);
@@ -337,6 +378,7 @@ impl HybridFileWatcher {
             .spawn(move || {
                 let mut state = WorkerState {
                     root_path: String::new(),
+                    canonical_root: String::new(),
                     project_config: ProjectConfig::default(),
                     scan_sequence: 0,
                     dirty_relative: HashSet::new(),

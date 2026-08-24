@@ -10,7 +10,8 @@ use crate::app::{ComboId, ConfirmAction, ConfirmState, RootView};
 use crate::theme::MODAL_EDGE_PADDING;
 use crate::theme::MODAL_PANEL_RADIUS;
 use crate::ui::controls::{
-    ButtonVariant, modal_opacity, panel_button, themed_spinbox, themed_switch,
+    ButtonVariant, ScrollAxis, modal_opacity, panel_button, scrollbar, themed_spinbox,
+    themed_switch,
 };
 
 /// ThemedPopup width/height rule.
@@ -163,6 +164,7 @@ impl RootView {
             _ => 0,
         };
         let retention = self.backend.snapshot_retention();
+        let retention_edit = self.retention_input.clone();
         let notifications = self.backend.notifications_enabled();
         let hue_value = self.backend.theme_hue();
 
@@ -224,6 +226,7 @@ impl RootView {
                     .border_1()
                     .border_color(theme.vm_border)
                     .overflow_hidden()
+                    .relative()
                     .child(
                         div()
                             .id("settings-scroll")
@@ -293,8 +296,8 @@ impl RootView {
                                                     &theme,
                                                     self,
                                                     cx,
-                                                    |this, _window, cx| {
-                                                        this.open_layout_dialog_for_current_folder();
+                                                    |this, window, cx| {
+                                                        this.open_layout_dialog_for_current_folder(window, cx);
                                                         cx.notify();
                                                     },
                                                 )),
@@ -405,6 +408,7 @@ impl RootView {
                                                         1,
                                                         50,
                                                         true,
+                                                        &retention_edit,
                                                         &theme,
                                                         cx,
                                                         |this, value, _w, cx| {
@@ -558,7 +562,8 @@ impl RootView {
                                                         &theme,
                                                         self,
                                                         cx,
-                                                        |this, _w, cx| {
+                                                        |this, w, cx| {
+                                                            this.take_modal_focus(w, cx);
                                                             this.confirm_enter_at = Some(std::time::Instant::now());
                                                             this.confirm_exit_at = None;
                                                             this.confirm = Some(ConfirmState {
@@ -574,7 +579,14 @@ impl RootView {
                                             ),
                                     ),
                             ),
-                    ),
+                    )
+                    .child(scrollbar(
+                        "settings",
+                        &self.settings_scroll.clone(),
+                        ScrollAxis::Vertical,
+                        &theme,
+                        cx,
+                    )),
             );
 
         self.popup_frame(
@@ -650,7 +662,7 @@ impl RootView {
                 )
         };
 
-        let content = div()
+        let scroll_content = div()
             .id("layout-dialog-scroll")
             .size_full()
             .overflow_y_scroll()
@@ -736,6 +748,18 @@ impl RootView {
                         )),
                     ),
             );
+
+        let content = div()
+            .size_full()
+            .relative()
+            .child(scroll_content)
+            .child(scrollbar(
+                "layout-dialog",
+                &self.layout_dialog_scroll.clone(),
+                ScrollAxis::Vertical,
+                &theme,
+                cx,
+            ));
 
         self.popup_frame(
             "layout-dialog",

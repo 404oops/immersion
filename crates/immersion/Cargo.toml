@@ -2,11 +2,17 @@
 name = "immersion"
 version.workspace = true
 edition.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+# Embeds the exe icon + version info on Windows targets (Immersion.rc.in
+# equivalent); a no-op on other targets.
+winresource = "0.1"
 
 [dependencies]
 musit-core = { path = "../musit-core" }
-gpui = { git = "https://github.com/zed-industries/zed", rev = "4bd1993783703e92affb781503916d1f152f599f" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "4bd1993783703e92affb781503916d1f152f599f", features = ["font-kit", "runtime_shaders"] }
+gpui = { git = "https://github.com/zed-industries/zed", branch = "main" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", branch = "main", features = ["font-kit", "runtime_shaders"] }
 unicode-segmentation = "1"
 serde.workspace = true
 serde_json.workspace = true
@@ -39,11 +45,16 @@ objc2-foundation = { version = "0.3", features = [
     "NSError",
     "NSGeometry",
     "NSObject",
+    "NSNotification",
+    "NSOperation",
+    "block2",
 ] }
 objc2-user-notifications = { version = "0.3", features = [
     "UNUserNotificationCenter",
+    "UNNotification",
     "UNNotificationContent",
     "UNNotificationRequest",
+    "UNNotificationSettings",
     "UNNotificationSound",
     "block2",
 ] }

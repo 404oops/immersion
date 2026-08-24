@@ -2,16 +2,24 @@
 //! (PlatformAgent_mac.mm), SMAppService launch-at-login, and
 //! UNUserNotificationCenter save notifications.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
+use objc2::runtime::{AnyObject, Bool, NSObjectProtocol, ProtocolObject};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSEventModifierFlags, NSEventType, NSImage,
-    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDidBecomeActiveNotification,
+    NSEventModifierFlags, NSEventType, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSVariableStatusItemLength,
 };
-use objc2_foundation::{NSBundle, NSData, NSObject, NSPoint, NSString};
+use objc2_foundation::{
+    NSBundle, NSData, NSNotification, NSNotificationCenter, NSObject, NSPoint, NSString,
+};
+use objc2_user_notifications::{
+    UNNotification, UNNotificationPresentationOptions, UNUserNotificationCenter,
+    UNUserNotificationCenterDelegate,
+};
 
 /// Menu bar template icon (qt-legacy/icons/menubar.png).
 const MENUBAR_ICON: &[u8] = include_bytes!("../../assets/icons/menubar.png");
@@ -24,6 +32,26 @@ thread_local! {
     static STATUS_ITEM: RefCell<Option<Retained<NSStatusItem>>> = const { RefCell::new(None) };
     static STATUS_MENU: RefCell<Option<Retained<NSMenu>>> = const { RefCell::new(None) };
     static STATUS_TARGET: RefCell<Option<Retained<StatusTarget>>> = const { RefCell::new(None) };
+    // UNUserNotificationCenter.delegate is weak; keep the strong reference.
+    static NOTIFICATION_DELEGATE: RefCell<Option<Retained<NotificationDelegate>>> =
+        const { RefCell::new(None) };
+    static ACTIVATION_CALLBACK: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+    static ACTIVATION_OBSERVER: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
+        const { RefCell::new(None) };
+    static ACTIVATION_SUPPRESSED_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Skips the next activation-driven window reveal for a moment; used around
+/// status-item interactions so opening the tray menu doesn't pop the window
+/// (PlatformAgent_mac's suppressNextActivationReveal).
+fn suppress_activation_reveal() {
+    ACTIVATION_SUPPRESSED_UNTIL.with(|cell| cell.set(Some(Instant::now() + Duration::from_secs(1))));
+}
+
+fn activation_reveal_suppressed() -> bool {
+    ACTIVATION_SUPPRESSED_UNTIL
+        .with(|cell| cell.get())
+        .is_some_and(|until| Instant::now() < until)
 }
 
 define_class!(
@@ -38,6 +66,9 @@ define_class!(
             let Some(mtm) = MainThreadMarker::new() else {
                 return;
             };
+            // Status-item clicks activate the app; don't let the activation
+            // observer treat that as a Spotlight-style reveal request.
+            suppress_activation_reveal();
             let app = NSApplication::sharedApplication(mtm);
             let is_right_click = app.currentEvent().is_some_and(|event| {
                 event.r#type() == NSEventType::RightMouseDown
@@ -55,7 +86,9 @@ define_class!(
                             let location =
                                 NSPoint::new(0.0, bounds.size.height + 4.0);
                             let view: &AnyObject = sender;
-                            let _: () = msg_send![
+                            // Returns BOOL; declaring () would fail objc2's
+                            // debug-build encoding verification.
+                            let _: Bool = msg_send![
                                 &**menu,
                                 popUpMenuPositioningItem: std::ptr::null::<AnyObject>(),
                                 atLocation: location,
@@ -85,6 +118,7 @@ define_class!(
 
         #[unsafe(method(quitFromMenu:))]
         fn quit_from_menu(&self, _sender: &AnyObject) {
+            suppress_activation_reveal();
             QUIT_CALLBACK.with(|callback| {
                 if let Some(callback) = callback.borrow().as_ref() {
                     callback();
@@ -93,6 +127,67 @@ define_class!(
         }
     }
 );
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "MusitNotificationDelegate"]
+    struct NotificationDelegate;
+
+    unsafe impl NSObjectProtocol for NotificationDelegate {}
+
+    unsafe impl UNUserNotificationCenterDelegate for NotificationDelegate {
+        // MacStatusBar.mm's delegate: present banner + sound + list even
+        // while Immersion is the frontmost app (macOS default suppresses
+        // notifications from the active app).
+        #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+        fn will_present_notification(
+            &self,
+            _center: &UNUserNotificationCenter,
+            _notification: &UNNotification,
+            completion_handler: &block2::Block<dyn Fn(UNNotificationPresentationOptions)>,
+        ) {
+            let options = UNNotificationPresentationOptions::Banner
+                | UNNotificationPresentationOptions::Sound
+                | UNNotificationPresentationOptions::List;
+            completion_handler.call((options,));
+        }
+    }
+);
+
+/// Reveals the window when the app is activated without going through
+/// applicationShouldHandleReopen — Spotlight and Dock often activate an
+/// already-running process directly (PlatformAgent_mac.mm's
+/// applicationDidBecomeActive handler).
+pub fn install_activation_observer(on_activate: Box<dyn Fn()>) {
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    ACTIVATION_CALLBACK.with(|cell| *cell.borrow_mut() = Some(on_activate));
+    let already_installed = ACTIVATION_OBSERVER.with(|cell| cell.borrow().is_some());
+    if already_installed {
+        return;
+    }
+    unsafe {
+        let center = NSNotificationCenter::defaultCenter();
+        let block = block2::RcBlock::new(|_notification: std::ptr::NonNull<NSNotification>| {
+            if activation_reveal_suppressed() {
+                return;
+            }
+            ACTIVATION_CALLBACK.with(|cell| {
+                if let Some(callback) = cell.borrow().as_ref() {
+                    callback();
+                }
+            });
+        });
+        let token = center.addObserverForName_object_queue_usingBlock(
+            Some(NSApplicationDidBecomeActiveNotification),
+            None,
+            None,
+            &block,
+        );
+        ACTIVATION_OBSERVER.with(|cell| *cell.borrow_mut() = Some(token));
+    }
+}
 
 /// Whether we are running from a .app bundle (needed for SMAppService and
 /// user notifications).
@@ -257,8 +352,14 @@ fn request_notification_authorization_once() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
+        use objc2_user_notifications::UNAuthorizationOptions;
         let center = UNUserNotificationCenter::currentNotificationCenter();
+        // Install the foreground-presentation delegate (weak property, so
+        // the strong reference lives in NOTIFICATION_DELEGATE).
+        let delegate: Retained<NotificationDelegate> =
+            unsafe { msg_send![NotificationDelegate::alloc(), init] };
+        center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        NOTIFICATION_DELEGATE.with(|cell| *cell.borrow_mut() = Some(delegate));
         let options = UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound;
         let handler = block2::StackBlock::new(
             |_granted: objc2::runtime::Bool, _error: *mut objc2_foundation::NSError| {},
