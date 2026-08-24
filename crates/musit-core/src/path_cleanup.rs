@@ -27,7 +27,8 @@ pub fn clean_path(path: &str) -> String {
         match segment {
             "" | "." => continue,
             ".." => {
-                let can_pop = matches!(parts.last(), Some(&last) if last != ".." && !is_drive(last));
+                let can_pop =
+                    matches!(parts.last(), Some(&last) if last != ".." && !is_drive(last));
                 if can_pop {
                     parts.pop();
                 } else if !absolute && parts.last() != Some(&"..") {
@@ -56,7 +57,10 @@ pub fn clean_path(path: &str) -> String {
 fn is_drive(component: &str) -> bool {
     component.len() == 2
         && component.ends_with(':')
-        && component.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && component
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
 }
 
 /// Normalizes a filesystem path for stable comparisons across platforms.
@@ -329,8 +333,14 @@ mod tests {
 
     #[test]
     fn folder_url_normalization() {
-        assert_eq!(normalize_folder_path("file:///Users/x/My%20Music"), "/Users/x/My Music");
-        assert_eq!(normalize_folder_path("file://localhost/Users/x"), "/Users/x");
+        assert_eq!(
+            normalize_folder_path("file:///Users/x/My%20Music"),
+            "/Users/x/My Music"
+        );
+        assert_eq!(
+            normalize_folder_path("file://localhost/Users/x"),
+            "/Users/x"
+        );
         assert_eq!(normalize_folder_path("file://nas/share"), "//nas/share");
         assert_eq!(normalize_folder_path("file:///C:/Users/x"), "C:/Users/x");
     }

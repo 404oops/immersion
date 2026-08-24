@@ -5,6 +5,14 @@ Studio, Reaper, Logic, ...). Rust + [GPUI](https://www.gpui.rs/) rewrite of
 the original Qt/QML app; on-disk data (`.musit` folders, config, registry)
 is fully compatible with the 0.1.x Qt builds.
 
+The main window shows your projects folders as tabs (all of them watched and
+versioned simultaneously; discovery scans run on a worker thread, one folder
+at a time). Each tab splits into the project list (left, click to select,
+double-click to open) and the version graph (right), with a draggable
+details panel below holding project info, notes, and version actions. The
+activity log lives in Settings. First run walks through a wizard: pick a
+folder, choose its layout, then optionally add more folders.
+
 ## Workspace
 
 - `crates/musit-core` — engine: project discovery, file watching, snapshot

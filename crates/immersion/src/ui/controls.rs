@@ -16,11 +16,24 @@ use crate::theme::Theme;
 // ---- Overlay scrollbars -----------------------------------------------------
 
 pub const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+/// Width of the vertical track / height of the horizontal one.
+const SCROLLBAR_THICKNESS: f32 = 10.0;
+/// The visible bar inside that track.
+const THUMB_THICKNESS: f32 = 4.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScrollAxis {
     Vertical,
     Horizontal,
+}
+
+impl ScrollAxis {
+    fn other(self) -> Self {
+        match self {
+            ScrollAxis::Vertical => ScrollAxis::Horizontal,
+            ScrollAxis::Horizontal => ScrollAxis::Vertical,
+        }
+    }
 }
 
 /// An in-flight scrollbar thumb drag; lives on RootView so the root-level
@@ -34,15 +47,19 @@ pub struct ScrollDrag {
 
 struct ScrollbarGeometry {
     track_start: f32,
+    /// Length of the usable track: the viewport minus the corner reserved for
+    /// the other axis's bar.
     track_len: f32,
+    track_end_inset: f32,
     thumb_len: f32,
     thumb_pos: f32,
     max_offset: f32,
 }
 
-fn scrollbar_geometry(handle: &ScrollHandle, axis: ScrollAxis) -> Option<ScrollbarGeometry> {
+/// (track start, viewport length, max offset, current offset) along `axis`.
+fn axis_metrics(handle: &ScrollHandle, axis: ScrollAxis) -> (f32, f32, f32, f32) {
     let bounds = handle.bounds();
-    let (track_start, track_len, max_offset, offset) = match axis {
+    match axis {
         ScrollAxis::Vertical => (
             f32::from(bounds.top()),
             f32::from(bounds.size.height),
@@ -55,17 +72,38 @@ fn scrollbar_geometry(handle: &ScrollHandle, axis: ScrollAxis) -> Option<Scrollb
             f32::from(handle.max_offset().x),
             f32::from(handle.offset().x),
         ),
-    };
-    if max_offset <= 0.5 || track_len <= 0.0 {
+    }
+}
+
+fn axis_scrollable(handle: &ScrollHandle, axis: ScrollAxis) -> bool {
+    let (_, viewport_len, max_offset, _) = axis_metrics(handle, axis);
+    max_offset > 0.5 && viewport_len > 0.0
+}
+
+fn scrollbar_geometry(handle: &ScrollHandle, axis: ScrollAxis) -> Option<ScrollbarGeometry> {
+    let (track_start, viewport_len, max_offset, offset) = axis_metrics(handle, axis);
+    if max_offset <= 0.5 || viewport_len <= 0.0 {
         return None;
     }
-    let content_len = track_len + max_offset;
-    let thumb_len = (track_len * track_len / content_len).max(SCROLLBAR_MIN_THUMB);
+    // When both bars are on screen, stop each one short of the shared corner —
+    // otherwise the two tracks overlap there and the one painted last swallows
+    // the other's drags.
+    let track_end_inset = if axis_scrollable(handle, axis.other()) {
+        SCROLLBAR_THICKNESS
+    } else {
+        0.0
+    };
+    let track_len = (viewport_len - track_end_inset).max(1.0);
+    let content_len = viewport_len + max_offset;
+    let thumb_len = (track_len * viewport_len / content_len)
+        .max(SCROLLBAR_MIN_THUMB)
+        .min(track_len);
     let usable = (track_len - thumb_len).max(0.0);
     let fraction = (-offset / max_offset).clamp(0.0, 1.0);
     Some(ScrollbarGeometry {
         track_start,
         track_len,
+        track_end_inset,
         thumb_len,
         thumb_pos: fraction * usable,
         max_offset,
@@ -101,14 +139,18 @@ pub fn scrollbar(
     let Some(geometry) = scrollbar_geometry(handle, axis) else {
         return div().absolute().into_any_element();
     };
+    // Faint by default: an overlay bar is a hint about position, not a
+    // control competing with the content. It firms up under the pointer.
     let mut thumb_color: gpui::Hsla = gpui::Rgba::from(theme.text_secondary).into();
-    thumb_color.a = 0.35;
+    thumb_color.a = 0.24;
 
     let drag_handle = handle.clone();
     let track = div()
         .id(ElementId::Name(format!("scrollbar-{id}").into()))
         .absolute()
-        .occlude()
+        // Block clicks/hover from bleeding into rows under the track, but let
+        // wheel deltas pass through so the strip isn't a scroll dead zone.
+        .block_mouse_except_scroll()
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
@@ -135,6 +177,21 @@ pub fn scrollbar(
                 this.scroll_drag = Some(drag);
                 cx.notify();
             }),
+        )
+        // Blocking the mouse also truncates hover at this strip: while the
+        // pointer stays inside it the root is not hovered, so the root's
+        // drag tracking sees neither the moves nor the release. Forward both
+        // the way the occluding modal surfaces do.
+        .on_mouse_move(
+            cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
+                this.global_mouse_move(event, cx);
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, cx| {
+                this.global_mouse_up(cx);
+            }),
         );
 
     let thumb = div()
@@ -143,34 +200,34 @@ pub fn scrollbar(
         .bg(thumb_color)
         .hover(move |style| {
             let mut hovered = thumb_color;
-            hovered.a = 0.55;
+            hovered.a = 0.50;
             style.bg(hovered)
         });
 
     match axis {
         ScrollAxis::Vertical => track
             .top_0()
-            .bottom_0()
+            .bottom(px(geometry.track_end_inset))
             .right_0()
-            .w(px(10.0))
+            .w(px(SCROLLBAR_THICKNESS))
             .child(
                 thumb
                     .top(px(geometry.thumb_pos))
-                    .right(px(2.0))
-                    .w(px(6.0))
+                    .right(px(3.0))
+                    .w(px(THUMB_THICKNESS))
                     .h(px(geometry.thumb_len)),
             )
             .into_any_element(),
         ScrollAxis::Horizontal => track
             .left_0()
-            .right_0()
+            .right(px(geometry.track_end_inset))
             .bottom_0()
-            .h(px(10.0))
+            .h(px(SCROLLBAR_THICKNESS))
             .child(
                 thumb
                     .left(px(geometry.thumb_pos))
-                    .bottom(px(2.0))
-                    .h(px(6.0))
+                    .bottom(px(3.0))
+                    .h(px(THUMB_THICKNESS))
                     .w(px(geometry.thumb_len)),
             )
             .into_any_element(),
@@ -254,7 +311,9 @@ pub fn action_button(
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(4.0))
+                // Same corner as the folder tabs and the add button it sits
+                // beside in the header.
+                .rounded(px(6.0))
                 .bg(theme.button_fill)
                 .hover(move |style| style.bg(theme.button_fill_hover))
                 .text_size(px(13.0))
@@ -305,13 +364,15 @@ pub fn panel_button(
         .flex()
         .when(!enabled, |el| el.opacity(0.55))
         .when(enabled, move |el| {
-            el.cursor_pointer().on_click(cx.listener(move |this, _event, window, cx| {
-                on_click(this, window, cx);
-            }))
+            el.cursor_pointer()
+                .on_click(cx.listener(move |this, _event, window, cx| {
+                    on_click(this, window, cx);
+                }))
         })
         .child(
             div()
                 .h_full()
+                .w_full()
                 .px(px(12.0))
                 .flex()
                 .items_center()
@@ -385,8 +446,7 @@ pub fn themed_switch(
         .when(enabled, |el| {
             el.cursor_pointer()
                 .on_click(cx.listener(move |this, _event, window, cx| {
-                    this.switch_anim
-                        .insert(anim_key.clone(), Instant::now());
+                    this.switch_anim.insert(anim_key.clone(), Instant::now());
                     on_toggle(this, !checked, window, cx);
                     cx.notify();
                 }))
@@ -515,9 +575,7 @@ pub fn text_field(
         .items_center()
         .rounded(px(5.0))
         .bg(theme.input_fill)
-        .when(focused, |el| {
-            el.border_2().border_color(theme.accent)
-        })
+        .when(focused, |el| el.border_2().border_color(theme.accent))
         .when(!focused, |el| {
             el.border_1().border_color(theme.input_border_accent)
         })
@@ -534,9 +592,11 @@ pub fn text_field(
 }
 
 /// ThemedTextArea.qml chrome around a multi-line TextInput entity.
+/// `height: None` makes the area fill its flex slot (min 40px) so the
+/// details panel scales with the divider instead of clipping.
 pub fn text_area(
     input: &Entity<TextInput>,
-    height: f32,
+    height: Option<f32>,
     enabled: bool,
     theme: &Theme,
     window: &Window,
@@ -549,7 +609,9 @@ pub fn text_area(
         .id(ElementId::Name(
             format!("text-area-{}", input.entity_id()).into(),
         ))
-        .h(px(height))
+        .when_some(height, |el, h| el.h(px(h)))
+        .when(height.is_none(), |el| el.flex_1().min_h(px(40.0)))
+        .line_height(px(16.0))
         .w_full()
         .px(px(10.0))
         .py(px(8.0))
@@ -630,6 +692,14 @@ impl RootView {
                             .child("\u{25be}"),
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
+                        // The popup's mouse_down_out already closed the combo
+                        // for this same click (the toggle is outside the
+                        // popup); don't immediately reopen it.
+                        if this.combo_dismissed.take() == Some(combo) {
+                            cx.notify();
+                            return;
+                        }
+                        this.combo_dismissed = None;
                         this.open_combo = if this.open_combo == Some(combo) {
                             None
                         } else {
@@ -639,56 +709,63 @@ impl RootView {
                     })),
             )
             .when(is_open, |el| {
-                el.child(deferred(
-                    div()
-                        .id(ElementId::Name(format!("{id}-popup").into()))
-                        .absolute()
-                        .top(px(32.0))
-                        .left_0()
-                        .w_full()
-                        .max_h(px(220.0))
-                        .p(px(3.0))
-                        .rounded(px(5.0))
-                        .bg(theme.input_fill)
-                        .border_1()
-                        .border_color(theme.input_border_accent)
-                        .overflow_y_scroll()
-                        .occlude()
-                        .on_mouse_down_out(cx.listener(|this, _event, _window, cx| {
-                            this.open_combo = None;
-                            cx.notify();
-                        }))
-                        .children(options_owned.into_iter().enumerate().map(|(index, option)| {
-                            let on_select = on_select.clone();
-                            let highlighted = index == current_index;
-                            div()
-                                .id(ElementId::NamedInteger(
-                                    format!("{id}-option").into(),
-                                    index as u64,
-                                ))
-                                .h(px(28.0))
-                                .w_full()
-                                .pl(px(8.0))
-                                .flex()
-                                .items_center()
-                                .rounded(px(4.0))
-                                .text_size(px(12.0))
-                                .text_color(theme.text_primary)
-                                .when(highlighted, |elem| elem.bg(theme.selection))
-                                .when(!highlighted, |elem| {
-                                    elem.hover(move |style| style.bg(theme.row_even))
-                                })
-                                .cursor_pointer()
-                                .overflow_hidden()
-                                .child(SharedString::from(option))
-                                .on_click(cx.listener(move |this, _event, window, cx| {
-                                    this.open_combo = None;
-                                    on_select(this, index, window, cx);
-                                    cx.notify();
-                                }))
-                        })),
+                el.child(
+                    deferred(
+                        div()
+                            .id(ElementId::Name(format!("{id}-popup").into()))
+                            .absolute()
+                            .top(px(32.0))
+                            .left_0()
+                            .w_full()
+                            .max_h(px(220.0))
+                            .p(px(3.0))
+                            .rounded(px(5.0))
+                            .bg(theme.input_fill)
+                            .border_1()
+                            .border_color(theme.input_border_accent)
+                            .overflow_y_scroll()
+                            .occlude()
+                            .on_mouse_down_out(cx.listener(move |this, _event, _window, cx| {
+                                this.open_combo = None;
+                                // Remember which combo this mouse-down dismissed
+                                // so its own toggle's click doesn't reopen it.
+                                this.combo_dismissed = Some(combo);
+                                cx.notify();
+                            }))
+                            .children(options_owned.into_iter().enumerate().map(
+                                |(index, option)| {
+                                    let on_select = on_select.clone();
+                                    let highlighted = index == current_index;
+                                    div()
+                                        .id(ElementId::NamedInteger(
+                                            format!("{id}-option").into(),
+                                            index as u64,
+                                        ))
+                                        .h(px(28.0))
+                                        .w_full()
+                                        .pl(px(8.0))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(4.0))
+                                        .text_size(px(12.0))
+                                        .text_color(theme.text_primary)
+                                        .when(highlighted, |elem| elem.bg(theme.selection))
+                                        .when(!highlighted, |elem| {
+                                            elem.hover(move |style| style.bg(theme.row_even))
+                                        })
+                                        .cursor_pointer()
+                                        .overflow_hidden()
+                                        .child(SharedString::from(option))
+                                        .on_click(cx.listener(move |this, _event, window, cx| {
+                                            this.open_combo = None;
+                                            on_select(this, index, window, cx);
+                                            cx.notify();
+                                        }))
+                                },
+                            )),
+                    )
+                    .with_priority(100),
                 )
-                .with_priority(100))
             })
     }
 
@@ -767,5 +844,4 @@ impl RootView {
                     ),
             )
     }
-
 }

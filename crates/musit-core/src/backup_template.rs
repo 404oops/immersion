@@ -234,8 +234,24 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             ["**Ableton Project Info/**", "**/Ableton Project Info/**"],
             ["**/Backup/**", "**/Samples/**"]
         ),
-        tpl!(K::Bitwig, C::DawElectronic, ["bwproject"], NONE, false, NONE, NONE),
-        tpl!(K::FLStudio, C::DawElectronic, ["flp"], NONE, false, NONE, NONE),
+        tpl!(
+            K::Bitwig,
+            C::DawElectronic,
+            ["bwproject"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
+        tpl!(
+            K::FLStudio,
+            C::DawElectronic,
+            ["flp"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
         tpl!(
             K::Reason,
             C::DawElectronic,
@@ -243,12 +259,48 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             NONE,
             true,
             ["**.reason/**", "**.rsn/**"],
-            ["**.reason/Cache/**", "**.reason/Samples/**", "**.rsn/Cache/**"]
+            [
+                "**.reason/Cache/**",
+                "**.reason/Samples/**",
+                "**.rsn/Cache/**"
+            ]
         ),
-        tpl!(K::Renoise, C::DawElectronic, ["xrns"], NONE, false, NONE, NONE),
-        tpl!(K::Lmms, C::DawElectronic, ["mmp", "mmpz"], NONE, false, NONE, NONE),
-        tpl!(K::SunVox, C::DawElectronic, ["sunvox"], NONE, false, NONE, NONE),
-        tpl!(K::MuLab, C::DawElectronic, ["muprj"], NONE, false, NONE, NONE),
+        tpl!(
+            K::Renoise,
+            C::DawElectronic,
+            ["xrns"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
+        tpl!(
+            K::Lmms,
+            C::DawElectronic,
+            ["mmp", "mmpz"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
+        tpl!(
+            K::SunVox,
+            C::DawElectronic,
+            ["sunvox"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
+        tpl!(
+            K::MuLab,
+            C::DawElectronic,
+            ["muprj"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
         // ── DawTraditional ───────────────────────────────────────────────
         tpl!(
             K::Logic,
@@ -271,7 +323,11 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             NONE,
             true,
             ["**.band/**"],
-            ["**.band/Media/**", "**.band/Output/**", "**.band/Freeze Files/**"]
+            [
+                "**.band/Media/**",
+                "**.band/Output/**",
+                "**.band/Freeze Files/**"
+            ]
         ),
         tpl!(
             K::Cubase,
@@ -362,7 +418,12 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             NONE,
             false,
             ["**/*.drp", "**/Resolve Project Backups/**"],
-            ["**/CacheClip/**", "**/Render Cache/**", "**/Proxy/**", "**/Gallery/**"]
+            [
+                "**/CacheClip/**",
+                "**/Render Cache/**",
+                "**/Proxy/**",
+                "**/Gallery/**"
+            ]
         ),
         tpl!(
             K::FinalCutPro,
@@ -429,8 +490,15 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             ["aep", "aepx"],
             NONE,
             false,
-            ["**/*.aep", "**/*.aepx", "**/Adobe After Effects Auto-Save/**"],
-            ["**/Adobe After Effects Auto-Save/Peak Files/**", "**/Media Cache/**"]
+            [
+                "**/*.aep",
+                "**/*.aepx",
+                "**/Adobe After Effects Auto-Save/**"
+            ],
+            [
+                "**/Adobe After Effects Auto-Save/Peak Files/**",
+                "**/Media Cache/**"
+            ]
         ),
         tpl!(
             K::Nuke,
@@ -475,7 +543,13 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             ["hip", "hiplc", "hipnc", "hipsc"],
             NONE,
             false,
-            ["**/*.hip", "**/*.hiplc", "**/*.hipnc", "**/*.hipsc", "**/backup/**"],
+            [
+                "**/*.hip",
+                "**/*.hiplc",
+                "**/*.hipnc",
+                "**/*.hipsc",
+                "**/backup/**"
+            ],
             ["**/render/**", "**/geo/**/cache/**", "**/sim/**/cache/**"]
         ),
         tpl!(
@@ -484,8 +558,17 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             ["ma", "mb"],
             NONE,
             false,
-            ["**/*.ma", "**/*.mb", "**/incrementalSave/**", "**/scenes/**"],
-            ["**/renderData/**", "**/cache/**", "**/sourceimages/**/proxy/**"]
+            [
+                "**/*.ma",
+                "**/*.mb",
+                "**/incrementalSave/**",
+                "**/scenes/**"
+            ],
+            [
+                "**/renderData/**",
+                "**/cache/**",
+                "**/sourceimages/**/proxy/**"
+            ]
         ),
         tpl!(
             K::Lightwave,
@@ -497,9 +580,25 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             ["**/Render/**", "**/Cache/**"]
         ),
         // ── Photo ────────────────────────────────────────────────────────
-        tpl!(K::Photoshop, C::Photo, ["psd", "psb"], NONE, false, NONE, NONE),
+        tpl!(
+            K::Photoshop,
+            C::Photo,
+            ["psd", "psb"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
         tpl!(K::Gimp, C::Photo, ["xcf"], NONE, false, NONE, NONE),
-        tpl!(K::Krita, C::Photo, ["kra", "krz"], NONE, false, NONE, ["**/Thumbnails/**"]),
+        tpl!(
+            K::Krita,
+            C::Photo,
+            ["kra", "krz"],
+            NONE,
+            false,
+            NONE,
+            ["**/Thumbnails/**"]
+        ),
         tpl!(
             K::AffinityPhoto,
             C::Photo,
@@ -525,10 +624,23 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             NONE,
             true,
             ["**.cocatalog/**", "**.cosession/**"],
-            ["**/Cache/**", "**/Previews/**", "**/Proxies/**", "**/Trash/**"]
+            [
+                "**/Cache/**",
+                "**/Previews/**",
+                "**/Proxies/**",
+                "**/Trash/**"
+            ]
         ),
         // ── VectorIllustration ───────────────────────────────────────────
-        tpl!(K::Illustrator, C::VectorIllustration, ["ai"], NONE, false, NONE, NONE),
+        tpl!(
+            K::Illustrator,
+            C::VectorIllustration,
+            ["ai"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
         tpl!(
             K::AffinityDesigner,
             C::VectorIllustration,
@@ -538,7 +650,15 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             ["**.afdesign/**", "**.afdesign~/**"],
             ["**/Cache/**", "**/Previews/**"]
         ),
-        tpl!(K::Inkscape, C::VectorIllustration, ["svg"], NONE, false, NONE, NONE),
+        tpl!(
+            K::Inkscape,
+            C::VectorIllustration,
+            ["svg"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
         tpl!(
             K::CorelDraw,
             C::VectorIllustration,
@@ -555,7 +675,12 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             ["indd", "indt", "idml"],
             NONE,
             false,
-            ["**/*.indd", "**/*.indt", "**/*.idml", "**/Document fonts/**"],
+            [
+                "**/*.indd",
+                "**/*.indt",
+                "**/*.idml",
+                "**/Document fonts/**"
+            ],
             ["**/Links/**", "**/Media/**"]
         ),
         tpl!(
@@ -633,7 +758,11 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
                 "**/*.gdshader",
                 "**/export_presets.cfg"
             ],
-            ["**/.import/**", "**/.godot/**/cache/**", "**/.godot/**/shader_cache/**"]
+            [
+                "**/.import/**",
+                "**/.godot/**/cache/**",
+                "**/.godot/**/shader_cache/**"
+            ]
         ),
         tpl!(
             K::Unity,
@@ -671,8 +800,7 @@ static GLOBALLY_EXCLUDED_EXTENSIONS: Lazy<HashSet<&'static str>> = Lazy::new(|| 
         "asd", // Ableton analysis cache
         // Video
         "mp4", "mov", "m4v", "avi", "mkv", "webm", "mxf", "r3d", "braw", "mts", "m2ts", "mpg",
-        "mpeg", "wmv", "prores",
-        // Sidecar / cache
+        "mpeg", "wmv", "prores", // Sidecar / cache
         "cfa", "pek", "xmp", "tmp", "lock", "swp",
     ]
     .into_iter()
@@ -924,14 +1052,20 @@ mod tests {
         // 'İ' (U+0130) grows from 2 to 3 bytes when lowercased; indices from
         // a lowercased copy must never be applied to the original.
         assert_eq!(artifact_for_path("İİ.logicx/Şarkı.wav"), "İİ.logicx");
-        assert_eq!(artifact_for_path("İstanbul/Song.logicx/a"), "İstanbul/Song.logicx");
+        assert_eq!(
+            artifact_for_path("İstanbul/Song.logicx/a"),
+            "İstanbul/Song.logicx"
+        );
         assert_eq!(artifact_for_path("İ.als"), "İ.als");
     }
 
     #[test]
     fn marker_root() {
         assert_eq!(
-            project_root_for_marker("ProjectSettings/ProjectVersion.txt", "/x/Game/ProjectSettings/ProjectVersion.txt"),
+            project_root_for_marker(
+                "ProjectSettings/ProjectVersion.txt",
+                "/x/Game/ProjectSettings/ProjectVersion.txt"
+            ),
             "/x/Game"
         );
         assert_eq!(

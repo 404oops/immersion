@@ -266,8 +266,7 @@ impl WorkerState {
         let changed: Vec<String> = current
             .iter()
             .filter(|(path, state)| {
-                self.project_config.should_track(path)
-                    && self.previous.get(*path) != Some(*state)
+                self.project_config.should_track(path) && self.previous.get(*path) != Some(*state)
             })
             .map(|(path, _)| path.clone())
             .collect();
@@ -466,9 +465,7 @@ impl HybridFileWatcher {
         if root_path.is_empty() {
             return false;
         }
-        self.tx
-            .send(Msg::Start(clean_path(root_path)))
-            .is_ok()
+        self.tx.send(Msg::Start(clean_path(root_path))).is_ok()
     }
 
     pub fn stop_watching(&self) {

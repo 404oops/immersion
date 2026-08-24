@@ -80,12 +80,19 @@ pub struct TextInput {
     undo_stack: Vec<(SharedString, Range<usize>)>,
     redo_stack: Vec<(SharedString, Range<usize>)>,
     pub on_change: Option<Box<dyn Fn(&str, &mut App) + 'static>>,
+    /// Enter in a single-line field commits through this (e.g. tab rename).
+    pub on_submit: Option<Box<dyn Fn(&str, &mut App) + 'static>>,
 }
 
 const UNDO_LIMIT: usize = 200;
 
 impl TextInput {
-    pub fn new(cx: &mut Context<Self>, placeholder: &str, multi_line: bool, style: InputStyle) -> Self {
+    pub fn new(
+        cx: &mut Context<Self>,
+        placeholder: &str,
+        multi_line: bool,
+        style: InputStyle,
+    ) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
             content: "".into(),
@@ -104,6 +111,7 @@ impl TextInput {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             on_change: None,
+            on_submit: None,
         }
     }
 
@@ -315,7 +323,12 @@ impl TextInput {
         self.select_to(self.next_word_boundary(self.cursor_offset()), cx);
     }
 
-    fn delete_word_left(&mut self, _: &DeleteWordLeft, window: &mut Window, cx: &mut Context<Self>) {
+    fn delete_word_left(
+        &mut self,
+        _: &DeleteWordLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.selected_range.is_empty() {
             let boundary = self.previous_word_boundary(self.cursor_offset());
             if boundary == self.cursor_offset() {
@@ -397,6 +410,10 @@ impl TextInput {
     fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
         if self.multi_line {
             self.replace_text_in_range(None, "\n", window, cx);
+        } else if let Some(on_submit) = self.on_submit.take() {
+            let text = self.content.to_string();
+            on_submit(&text, cx);
+            self.on_submit = Some(on_submit);
         }
     }
 
@@ -422,7 +439,12 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.disabled {
             return;
         }
@@ -549,7 +571,11 @@ impl TextInput {
             y_offset += height;
             start += line.text.len() + 1;
         }
-        if position.y < px(0.0) { Some(0) } else { Some(self.content.len()) }
+        if position.y < px(0.0) {
+            Some(0)
+        } else {
+            Some(self.content.len())
+        }
     }
 
     fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
@@ -668,7 +694,11 @@ impl EntityInputHandler for TextInput {
         })
     }
 
-    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
         self.marked_range
             .as_ref()
             .map(|range| self.range_to_utf16(range))
@@ -915,7 +945,9 @@ impl Element for TextElement {
                         gpui::AvailableSpace::Definite(width) => Some(width),
                         _ => None,
                     });
-                    let element = TextElement { input: input.clone() };
+                    let element = TextElement {
+                        input: input.clone(),
+                    };
                     let (lines, line_height) = element.shape(width, window, cx);
                     let height: Pixels = lines
                         .iter()
@@ -962,7 +994,8 @@ impl Element for TextElement {
             for line in &lines {
                 let end = start + line.text.len();
                 if cursor_offset <= end {
-                    if let Some(local) = line.position_for_index(cursor_offset - start, line_height) {
+                    if let Some(local) = line.position_for_index(cursor_offset - start, line_height)
+                    {
                         pos = Some(point(local.x, local.y + y_offset));
                     }
                     break;
@@ -988,7 +1021,8 @@ impl Element for TextElement {
             }
             scroll_offset = scroll_offset.max(px(0.0));
         }
-        self.input.update(cx, |input, _| input.scroll_offset = scroll_offset);
+        self.input
+            .update(cx, |input, _| input.scroll_offset = scroll_offset);
 
         let mut cursor = None;
         if selected_range.is_empty() {
@@ -1033,8 +1067,14 @@ impl Element for TextElement {
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
             let mut origin = point(bounds.origin.x - scroll_offset, bounds.origin.y);
             for line in &prepaint.lines {
-                let _ =
-                    line.paint_background(origin, line_height, gpui::TextAlign::Left, None, window, cx);
+                let _ = line.paint_background(
+                    origin,
+                    line_height,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
                 let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
                 origin.y += line.size(line_height).height;
             }

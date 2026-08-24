@@ -8,7 +8,7 @@ use crate::backup_template::{
 };
 use crate::file_event::{FileEvent, FileEventType};
 use crate::metadata_store::MetadataStore;
-use crate::object_store::{write_atomically, ObjectStore};
+use crate::object_store::{ObjectStore, write_atomically};
 use crate::path_cleanup::{join_path, parent_path, relative_file_path, remove_empty_parent_dirs};
 use crate::project_config::ProjectConfig;
 use serde_json::{Map, Value};
@@ -99,8 +99,10 @@ impl SnapshotService {
     }
 
     pub fn set_uncompressed_recent_versions(&mut self, keep_count: i32) {
-        self.uncompressed_recent_versions = keep_count
-            .clamp(MIN_UNCOMPRESSED_RECENT_VERSIONS, MAX_UNCOMPRESSED_RECENT_VERSIONS);
+        self.uncompressed_recent_versions = keep_count.clamp(
+            MIN_UNCOMPRESSED_RECENT_VERSIONS,
+            MAX_UNCOMPRESSED_RECENT_VERSIONS,
+        );
     }
 
     pub fn uncompressed_recent_versions(&self) -> i32 {
@@ -136,8 +138,10 @@ impl SnapshotService {
             return false;
         }
 
-        self.object_store.set_musit_root(&self.project_config.musit_path());
-        self.metadata_store.set_musit_root(&self.project_config.musit_path());
+        self.object_store
+            .set_musit_root(&self.project_config.musit_path());
+        self.metadata_store
+            .set_musit_root(&self.project_config.musit_path());
 
         if !self.object_store.init() || !self.metadata_store.init() {
             return false;
@@ -151,7 +155,10 @@ impl SnapshotService {
         if !self.project_config.is_ready() {
             return String::new();
         }
-        join_path(&self.project_config.musit_path(), "versions/branch-state.json")
+        join_path(
+            &self.project_config.musit_path(),
+            "versions/branch-state.json",
+        )
     }
 
     fn load_branch_state(&mut self) {
@@ -188,10 +195,12 @@ impl SnapshotService {
         }
 
         let mut root = Map::new();
-        root.insert("branch_base_by_path".to_string(), Value::Object(by_artifact));
+        root.insert(
+            "branch_base_by_path".to_string(),
+            Value::Object(by_artifact),
+        );
 
-        let encoded =
-            serde_json::to_string(&Value::Object(root)).expect("branch state serializes");
+        let encoded = serde_json::to_string(&Value::Object(root)).expect("branch state serializes");
         write_atomically(&file_path, encoded.as_bytes());
     }
 
@@ -270,8 +279,9 @@ impl SnapshotService {
                 .get(&artifact)
                 .cloned()
                 .unwrap_or_default();
-            let latest_staged_version =
-                self.metadata_store.latest_staged_version_for_artifact(&artifact);
+            let latest_staged_version = self
+                .metadata_store
+                .latest_staged_version_for_artifact(&artifact);
             let branch_base_version =
                 resolve_branch_base_version(&explicit_branch_base, &latest_staged_version);
             if !explicit_branch_base.is_empty() && explicit_branch_base == latest_staged_version {
@@ -323,7 +333,11 @@ impl SnapshotService {
 
         self.emit(SnapshotNotice::Created(format!(
             "{} {} -> {} (v{})",
-            if is_baseline { "Baseline snapshot" } else { "Snapshot" },
+            if is_baseline {
+                "Baseline snapshot"
+            } else {
+                "Snapshot"
+            },
             event.relative_path,
             &object_hash[..12.min(object_hash.len())],
             version_id

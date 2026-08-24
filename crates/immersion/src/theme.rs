@@ -140,6 +140,9 @@ pub struct Theme {
     pub modal_scrim: Rgba,
     pub modal_border: Rgba,
     pub modal_option_border: Rgba,
+    pub modal_option_fill: Rgba,
+    pub modal_option_fill_hover: Rgba,
+    pub modal_option_selected_fill: Rgba,
     pub modal_selected_border: Rgba,
     pub node_border: Rgba,
     pub graph_link: Rgba,
@@ -181,11 +184,16 @@ impl Theme {
     pub fn compute(hue: f64, dark: bool) -> Self {
         // Pastel helper: keeps chroma in a soft range (Theme.qml `pastel`).
         let pastel = |l: f64, c: f64, dh: f64| oklch_to_color(l, clamp(c, 0.0, 0.16), hue + dh);
-        let pick = |dark_color: Rgba, light_color: Rgba| if dark { dark_color } else { light_color };
+        let pick =
+            |dark_color: Rgba, light_color: Rgba| if dark { dark_color } else { light_color };
 
         let accent = pick(pastel(0.78, 0.105, 0.0), pastel(0.62, 0.105, 0.0));
         let selection = pick(pastel(0.84, 0.125, 12.0), pastel(0.68, 0.125, 12.0));
-        let button_fill = if dark { oklch_to_color(0.36, 0.06, hue) } else { accent };
+        let button_fill = if dark {
+            oklch_to_color(0.36, 0.06, hue)
+        } else {
+            accent
+        };
         let button_fill_hover = if dark {
             oklch_to_color(0.44, 0.08, hue + 4.0)
         } else {
@@ -242,6 +250,14 @@ impl Theme {
             modal_scrim: pick(argb(0x8000_0000), argb(0x5500_0000)),
             modal_border: pick(argb(0x2eff_ffff), argb(0x2600_0000)),
             modal_option_border: pick(argb(0x3aff_ffff), argb(0x3000_0000)),
+            modal_option_fill: pick(argb(0x12ff_ffff), argb(0x0a00_0000)),
+            modal_option_fill_hover: pick(argb(0x1eff_ffff), argb(0x1400_0000)),
+            // Accent wash so the picked option reads at a glance, not just by
+            // its border.
+            modal_option_selected_fill: pick(
+                Rgba { a: 0.13, ..accent },
+                Rgba { a: 0.11, ..accent },
+            ),
             modal_selected_border: pick(pastel(0.72, 0.070, 0.0), pastel(0.64, 0.070, 0.0)),
             node_border: pick(pastel(0.58, 0.040, 0.0), pastel(0.76, 0.035, 0.0)),
             graph_link,
@@ -286,6 +302,110 @@ impl Theme {
     }
 }
 
+
+/// Blends two colours in linear-light sRGB (matching the OKLCH pipeline's
+/// working space more closely than a raw sRGB mix).
+fn mix(from: Rgba, to: Rgba, t: f32) -> Rgba {
+    let channel = |a: f32, b: f32| {
+        let a = srgb_to_linear(a as f64);
+        let b = srgb_to_linear(b as f64);
+        linear_to_srgb(a + (b - a) * t as f64) as f32
+    };
+    Rgba {
+        r: channel(from.r, to.r),
+        g: channel(from.g, to.g),
+        b: channel(from.b, to.b),
+        a: from.a + (to.a - from.a) * t,
+    }
+}
+
+impl Theme {
+    /// Cross-fades two palettes. Sweeping the hue instead would travel around
+    /// the colour wheel and paint every hue in between — going from orange to
+    /// blue would pass through green, which reads as the theme changing to
+    /// something else mid-transition rather than settling.
+    pub fn lerp(from: &Theme, to: &Theme, t: f32) -> Theme {
+        let t = t.clamp(0.0, 1.0);
+        Theme {
+            // Bookkeeping only: the colours below are mixed, not derived from
+            // this. Kept on the short arc so a switch mid-fade starts here.
+            hue: {
+                let delta = (to.hue - from.hue + 540.0).rem_euclid(360.0) - 180.0;
+                (from.hue + delta * t as f64).rem_euclid(360.0)
+            },
+            is_dark_mode: if t < 0.5 {
+                from.is_dark_mode
+            } else {
+                to.is_dark_mode
+            },
+            app_background: mix(from.app_background, to.app_background, t),
+            panel_surface: mix(from.panel_surface, to.panel_surface, t),
+            panel_surface_alt: mix(from.panel_surface_alt, to.panel_surface_alt, t),
+            graph_surface: mix(from.graph_surface, to.graph_surface, t),
+            side_panel_surface: mix(from.side_panel_surface, to.side_panel_surface, t),
+            text_primary: mix(from.text_primary, to.text_primary, t),
+            text_secondary: mix(from.text_secondary, to.text_secondary, t),
+            text_muted: mix(from.text_muted, to.text_muted, t),
+            text_status: mix(from.text_status, to.text_status, t),
+            text_activity: mix(from.text_activity, to.text_activity, t),
+            text_meta: mix(from.text_meta, to.text_meta, t),
+            accent: mix(from.accent, to.accent, t),
+            selection: mix(from.selection, to.selection, t),
+            button_fill: mix(from.button_fill, to.button_fill, t),
+            button_fill_hover: mix(from.button_fill_hover, to.button_fill_hover, t),
+            button_label: mix(from.button_label, to.button_label, t),
+            button_icon: mix(from.button_icon, to.button_icon, t),
+            success: mix(from.success, to.success, t),
+            success_strong: mix(from.success_strong, to.success_strong, t),
+            success_border: mix(from.success_border, to.success_border, t),
+            row_even: mix(from.row_even, to.row_even, t),
+            row_odd: mix(from.row_odd, to.row_odd, t),
+            border: mix(from.border, to.border, t),
+            input_surface: mix(from.input_surface, to.input_surface, t),
+            input_fill: mix(from.input_fill, to.input_fill, t),
+            input_border: mix(from.input_border, to.input_border, t),
+            input_border_accent: mix(from.input_border_accent, to.input_border_accent, t),
+            modal_scrim: mix(from.modal_scrim, to.modal_scrim, t),
+            modal_border: mix(from.modal_border, to.modal_border, t),
+            modal_option_border: mix(from.modal_option_border, to.modal_option_border, t),
+            modal_option_fill: mix(from.modal_option_fill, to.modal_option_fill, t),
+            modal_option_fill_hover: mix(from.modal_option_fill_hover, to.modal_option_fill_hover, t),
+            modal_option_selected_fill: mix(from.modal_option_selected_fill, to.modal_option_selected_fill, t),
+            modal_selected_border: mix(from.modal_selected_border, to.modal_selected_border, t),
+            node_border: mix(from.node_border, to.node_border, t),
+            graph_link: mix(from.graph_link, to.graph_link, t),
+            vm_panel: mix(from.vm_panel, to.vm_panel, t),
+            vm_graph: mix(from.vm_graph, to.vm_graph, t),
+            vm_side_panel: mix(from.vm_side_panel, to.vm_side_panel, t),
+            vm_border: mix(from.vm_border, to.vm_border, t),
+            vm_text_primary: mix(from.vm_text_primary, to.vm_text_primary, t),
+            vm_text_meta: mix(from.vm_text_meta, to.vm_text_meta, t),
+            vm_input_surface: mix(from.vm_input_surface, to.vm_input_surface, t),
+            vm_graph_link: mix(from.vm_graph_link, to.vm_graph_link, t),
+            vm_graph_link_active: mix(from.vm_graph_link_active, to.vm_graph_link_active, t),
+            vm_graph_grid: mix(from.vm_graph_grid, to.vm_graph_grid, t),
+            vm_node_fill: mix(from.vm_node_fill, to.vm_node_fill, t),
+            vm_node_selected_fill: mix(from.vm_node_selected_fill, to.vm_node_selected_fill, t),
+            vm_node_current_fill: mix(from.vm_node_current_fill, to.vm_node_current_fill, t),
+            vm_node_selected_border: mix(from.vm_node_selected_border, to.vm_node_selected_border, t),
+            vm_node_label: mix(from.vm_node_label, to.vm_node_label, t),
+            vm_node_shadow: mix(from.vm_node_shadow, to.vm_node_shadow, t),
+            button_soft_fill: mix(from.button_soft_fill, to.button_soft_fill, t),
+            button_soft_fill_hover: mix(from.button_soft_fill_hover, to.button_soft_fill_hover, t),
+            button_soft_label: mix(from.button_soft_label, to.button_soft_label, t),
+            button_soft_border: mix(from.button_soft_border, to.button_soft_border, t),
+            button_primary_fill: mix(from.button_primary_fill, to.button_primary_fill, t),
+            button_primary_fill_hover: mix(from.button_primary_fill_hover, to.button_primary_fill_hover, t),
+            button_primary_label: mix(from.button_primary_label, to.button_primary_label, t),
+            button_primary_border: mix(from.button_primary_border, to.button_primary_border, t),
+            button_danger_fill: mix(from.button_danger_fill, to.button_danger_fill, t),
+            button_danger_fill_hover: mix(from.button_danger_fill_hover, to.button_danger_fill_hover, t),
+            button_danger_label: mix(from.button_danger_label, to.button_danger_label, t),
+            button_danger_border: mix(from.button_danger_border, to.button_danger_border, t),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +425,10 @@ mod tests {
     fn oklch_matches_qml_reference() {
         let t = Theme::compute(280.0, true);
         // pastel(0.23, 0.015, -4.0) at hue 280 => oklch(0.23, 0.015, 276)
-        assert_eq!(hex(t.app_background), hex(oklch_to_color(0.23, 0.015, 276.0)));
+        assert_eq!(
+            hex(t.app_background),
+            hex(oklch_to_color(0.23, 0.015, 276.0))
+        );
         // success is hue-independent
         assert_eq!(hex(t.success), hex(oklch_to_color(0.67, 0.16, 145.0)));
         let light = Theme::compute(280.0, false);

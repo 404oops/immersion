@@ -12,9 +12,9 @@ use crate::backup_template::{
 };
 use crate::object_store::write_atomically;
 use crate::path_cleanup::{clean_path, join_path, path_equals};
-use crate::project_discovery::{known_kinds, DiscoveredProject};
+use crate::project_discovery::{DiscoveredProject, known_kinds};
 use chrono::Utc;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::fs;
 use std::path::Path;
 
@@ -60,7 +60,9 @@ fn canonical_config_dir() -> String {
     }
     #[cfg(target_os = "windows")]
     {
-        let appdata = std::env::var("APPDATA").unwrap_or_default().replace('\\', "/");
+        let appdata = std::env::var("APPDATA")
+            .unwrap_or_default()
+            .replace('\\', "/");
         if appdata.is_empty() {
             return String::new();
         }
@@ -101,7 +103,9 @@ fn migrate_legacy_config_if_needed(canonical_dir: &str) {
         if !local.is_empty() {
             legacy_dirs.push(join_path(&local, "musit"));
         }
-        let roaming = std::env::var("APPDATA").unwrap_or_default().replace('\\', "/");
+        let roaming = std::env::var("APPDATA")
+            .unwrap_or_default()
+            .replace('\\', "/");
         if !roaming.is_empty() {
             legacy_dirs.push(join_path(&roaming, "musit"));
             // Buggy path from appending "musit" to AppDataLocation twice.
@@ -175,10 +179,7 @@ fn project_to_json(project: &DiscoveredProject, note: &str) -> Value {
     let mut item = Map::new();
     item.insert("name".to_string(), json!(project.name));
     item.insert("root_path".to_string(), json!(project.root_path));
-    item.insert(
-        "kind".to_string(),
-        json!(project.kind.to_display_string()),
-    );
+    item.insert("kind".to_string(), json!(project.kind.to_display_string()));
     item.insert(
         "primary_project_file".to_string(),
         json!(project.primary_project_file),
@@ -265,7 +266,9 @@ impl ProjectRegistry {
 
     pub fn load_project_note(&self, root_path: &str) -> String {
         for value in read_projects_array(&self.data_file_path()) {
-            let Some(obj) = value.as_object() else { continue };
+            let Some(obj) = value.as_object() else {
+                continue;
+            };
             let candidate = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
             if path_equals(candidate, root_path) {
                 return obj
@@ -284,7 +287,9 @@ impl ProjectRegistry {
 
     pub fn load_project_primary_file(&self, root_path: &str) -> String {
         for value in read_projects_array(&self.data_file_path()) {
-            let Some(obj) = value.as_object() else { continue };
+            let Some(obj) = value.as_object() else {
+                continue;
+            };
             let candidate = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
             if path_equals(candidate, root_path) {
                 return obj
@@ -346,7 +351,10 @@ impl ProjectRegistry {
         }
 
         let mut root = self.read_config_root();
-        root.insert("projects_folder".to_string(), json!(clean_path(folder_path)));
+        root.insert(
+            "projects_folder".to_string(),
+            json!(clean_path(folder_path)),
+        );
         root.insert("updated_utc".to_string(), json!(now_utc_iso_ms()));
 
         write_json_atomically(&self.config_file_path(), &Value::Object(root))
@@ -367,6 +375,99 @@ impl ProjectRegistry {
             return String::new();
         }
         clean_folder
+    }
+
+    /// Persists the full projects-folder list (`projects_folders`), keeping
+    /// the legacy single `projects_folder` key set to the first entry so
+    /// older builds still find a folder.
+    pub fn save_projects_folders(&self, folder_paths: &[String]) -> bool {
+        let dir_path = app_config_directory();
+        if dir_path.is_empty() || fs::create_dir_all(&dir_path).is_err() {
+            return false;
+        }
+
+        let cleaned: Vec<String> = folder_paths.iter().map(|p| clean_path(p)).collect();
+        let mut root = self.read_config_root();
+        root.insert("projects_folders".to_string(), json!(cleaned));
+        match cleaned.first() {
+            Some(first) => {
+                root.insert("projects_folder".to_string(), json!(first));
+            }
+            None => {
+                root.remove("projects_folder");
+            }
+        }
+        root.insert("updated_utc".to_string(), json!(now_utc_iso_ms()));
+
+        write_json_atomically(&self.config_file_path(), &Value::Object(root))
+    }
+
+    /// Custom display names for projects-folder tabs, keyed by folder path.
+    pub fn load_projects_folder_names(&self) -> std::collections::HashMap<String, String> {
+        let root = self.read_config_root();
+        let mut names = std::collections::HashMap::new();
+        if let Some(map) = root
+            .get("projects_folder_names")
+            .and_then(|v| v.as_object())
+        {
+            for (path, value) in map {
+                if let Some(name) = value.as_str() {
+                    if !name.trim().is_empty() {
+                        names.insert(clean_path(path), name.trim().to_string());
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// Persists (or clears, when `name` is empty) a folder tab's custom name.
+    pub fn save_projects_folder_name(&self, folder_path: &str, name: &str) -> bool {
+        let dir_path = app_config_directory();
+        if dir_path.is_empty() || fs::create_dir_all(&dir_path).is_err() {
+            return false;
+        }
+
+        let clean = clean_path(folder_path);
+        let mut root = self.read_config_root();
+        let mut names = root
+            .get("projects_folder_names")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            names.remove(&clean);
+        } else {
+            names.insert(clean, json!(trimmed));
+        }
+        root.insert("projects_folder_names".to_string(), Value::Object(names));
+        root.insert("updated_utc".to_string(), json!(now_utc_iso_ms()));
+
+        write_json_atomically(&self.config_file_path(), &Value::Object(root))
+    }
+
+    /// Loads the saved projects-folder list; falls back to the legacy single
+    /// `projects_folder` key. Folders that no longer exist are dropped.
+    pub fn load_projects_folders(&self) -> Vec<String> {
+        let root = self.read_config_root();
+        let mut folders: Vec<String> = Vec::new();
+        if let Some(list) = root.get("projects_folders").and_then(|v| v.as_array()) {
+            for value in list {
+                let Some(path) = value.as_str() else { continue };
+                let clean = clean_path(path);
+                if !clean.is_empty() && Path::new(&clean).is_dir() {
+                    folders.push(clean);
+                }
+            }
+            return folders;
+        }
+
+        let legacy = self.load_projects_folder();
+        if !legacy.is_empty() {
+            folders.push(legacy);
+        }
+        folders
     }
 
     pub fn load_app_settings(&self) -> AppSettings {

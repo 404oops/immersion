@@ -140,9 +140,8 @@ fn register_marker_project(root_folder: &str, marker_file: &EntryInfo, state: &m
         .insert(name, marker_file.clone());
 }
 
-static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|[ _-])v(\d+)(?:$|[ _.-])").expect("version regex is valid")
-});
+static VERSION_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(?:^|[ _-])v(\d+)(?:$|[ _.-])").expect("version regex is valid"));
 
 fn extract_version_number(file_name_str: &str) -> i32 {
     let stem = complete_base_name(file_name_str);
@@ -564,10 +563,7 @@ fn scan_loose_project_files(
 
         // Files mode is extension-driven: only supported regular project
         // files are accepted, and formats declared as bundles are ignored.
-        if !entry.is_file
-            || kind == ProjectKind::Unknown
-            || backup_template::kind_is_bundle(kind)
-        {
+        if !entry.is_file || kind == ProjectKind::Unknown || backup_template::kind_is_bundle(kind) {
             continue;
         }
 
@@ -615,7 +611,9 @@ pub fn discover_all(
         scan_loose_project_files(
             &root_folder,
             &mut projects,
-            on_directory_scanned.as_deref_mut().unwrap_or(&mut noop_scan),
+            on_directory_scanned
+                .as_deref_mut()
+                .unwrap_or(&mut noop_scan),
             cancelled,
             on_progress.as_deref_mut().unwrap_or(&mut noop_progress),
             progress_interval,

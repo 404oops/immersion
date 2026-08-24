@@ -11,7 +11,7 @@ use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDidBecomeActiveNotification,
     NSEventModifierFlags, NSEventType, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength,
+    NSVariableStatusItemLength, NSWindow, NSWindowAnimationBehavior,
 };
 use objc2_foundation::{
     NSBundle, NSData, NSNotification, NSNotificationCenter, NSObject, NSPoint, NSString,
@@ -39,13 +39,63 @@ thread_local! {
     static ACTIVATION_OBSERVER: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>> =
         const { RefCell::new(None) };
     static ACTIVATION_SUPPRESSED_UNTIL: Cell<Option<Instant>> = const { Cell::new(None) };
+    static MAIN_NS_WINDOW: RefCell<Option<Retained<NSWindow>>> = const { RefCell::new(None) };
+}
+
+/// Adopts the window GPUI just opened, so hiding to the menu bar can order it
+/// out and a status-item click can order it back in.
+///
+/// `DocumentWindow` animation behaviour is what makes AppKit animate those:
+/// left at the default, a window ordered in from the status item simply
+/// appears. GPUI only sets a behaviour on popup windows, never on this one.
+pub fn adopt_main_window(title: &str) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    for window in app.windows().iter() {
+        if window.title().to_string() != title {
+            continue;
+        }
+        window.setAnimationBehavior(NSWindowAnimationBehavior::DocumentWindow);
+        MAIN_NS_WINDOW.with(|slot| *slot.borrow_mut() = Some(window.clone()));
+        return;
+    }
+}
+
+fn with_main_window(action: impl FnOnce(&NSWindow)) -> bool {
+    MAIN_NS_WINDOW.with(|slot| {
+        let slot = slot.borrow();
+        let Some(window) = slot.as_ref() else {
+            return false;
+        };
+        action(window);
+        true
+    })
+}
+
+/// Orders the main window out (animated), leaving the app in the menu bar.
+/// Returns false when there is no adopted window to hide.
+pub fn hide_main_window() -> bool {
+    with_main_window(|window| window.orderOut(None))
+}
+
+/// Orders it back in, animated, as a freshly opened window would be.
+pub fn show_main_window() -> bool {
+    with_main_window(|window| {
+        if window.isMiniaturized() {
+            window.deminiaturize(None);
+        }
+        window.makeKeyAndOrderFront(None);
+    })
 }
 
 /// Skips the next activation-driven window reveal for a moment; used around
 /// status-item interactions so opening the tray menu doesn't pop the window
 /// (PlatformAgent_mac's suppressNextActivationReveal).
 fn suppress_activation_reveal() {
-    ACTIVATION_SUPPRESSED_UNTIL.with(|cell| cell.set(Some(Instant::now() + Duration::from_secs(1))));
+    ACTIVATION_SUPPRESSED_UNTIL
+        .with(|cell| cell.set(Some(Instant::now() + Duration::from_secs(1))));
 }
 
 fn activation_reveal_suppressed() -> bool {
@@ -275,8 +325,7 @@ pub fn install_status_item(on_open: Box<dyn Fn()>, on_quit: Box<dyn Fn()>) {
 
     request_notification_authorization_once();
 
-    let target: Retained<StatusTarget> =
-        unsafe { msg_send![StatusTarget::alloc(mtm), init] };
+    let target: Retained<StatusTarget> = unsafe { msg_send![StatusTarget::alloc(mtm), init] };
 
     unsafe {
         let status_bar = NSStatusBar::systemStatusBar();

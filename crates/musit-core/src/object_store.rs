@@ -240,7 +240,11 @@ mod tests {
         assert!(store.init());
         let source = dir.path().join("f");
         fs::write(&source, b"x").unwrap();
-        assert!(store.stage_file(source.to_str().unwrap(), "../evil").is_none());
+        assert!(
+            store
+                .stage_file(source.to_str().unwrap(), "../evil")
+                .is_none()
+        );
         assert!(store.stage_file(source.to_str().unwrap(), "/abs").is_none());
     }
 }

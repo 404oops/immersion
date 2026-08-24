@@ -14,6 +14,14 @@ use crate::ui::controls::{
     themed_switch,
 };
 
+/// How tall a popup panel is: a fixed frame, or one that hugs its content up
+/// to a cap (short dialogs shouldn't paint a half-empty panel).
+#[derive(Clone, Copy)]
+enum PopupHeight {
+    Fixed(f32),
+    FitContent(f32),
+}
+
 /// ThemedPopup width/height rule.
 fn popup_size(window: &Window, min: (f32, f32), max: (f32, f32), pref: (f32, f32)) -> (f32, f32) {
     let viewport = window.viewport_size();
@@ -43,15 +51,14 @@ impl RootView {
             modal_opacity(self.confirm_enter_at, self.confirm_exit_at)
         } else if self.layout_dialog.open {
             modal_opacity(self.layout_enter_at, self.layout_exit_at)
-        } else if self.vm_open {
-            modal_opacity(self.vm_enter_at, self.vm_exit_at)
         } else if self.settings_open {
             modal_opacity(self.settings_enter_at, self.settings_exit_at)
         } else {
             (1.0, false)
         };
 
-        // Full-window scrim behind modal popups.
+        // Full-window scrim behind modal popups. It occludes the root, so it
+        // must forward the shared drag tracking (hue slider, scrollbars).
         layers.push(
             div()
                 .id("modal-scrim")
@@ -60,14 +67,22 @@ impl RootView {
                 .bg(theme.modal_scrim)
                 .opacity(scrim_opacity)
                 .occlude()
+                .on_mouse_move(
+                    cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
+                        this.global_mouse_move(event, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, _event, _window, cx| {
+                        this.global_mouse_up(cx);
+                    }),
+                )
                 .into_any_element(),
         );
 
         if self.settings_open {
             layers.push(self.render_settings_modal(window, cx).into_any_element());
-        }
-        if self.vm_open {
-            layers.push(self.render_version_manager(window, cx).into_any_element());
         }
 
         // Nested scrim for child dialogs (layout dialog over settings, confirm).
@@ -104,10 +119,11 @@ impl RootView {
     fn popup_frame(
         &self,
         id: &'static str,
-        size: (f32, f32),
+        size: (f32, PopupHeight),
         content: AnyElement,
         enter_at: Option<std::time::Instant>,
         exit_at: Option<std::time::Instant>,
+        cx: &mut Context<RootView>,
     ) -> impl IntoElement {
         let theme = self.theme;
         let (opacity, _) = modal_opacity(enter_at, exit_at);
@@ -122,12 +138,29 @@ impl RootView {
                 div()
                     .id(ElementId::Name(id.to_string().into()))
                     .w(px(size.0))
-                    .h(px(size.1))
+                    .map(|el| match size.1 {
+                        PopupHeight::Fixed(h) => el.h(px(h)),
+                        PopupHeight::FitContent(max) => el.max_h(px(max)),
+                    })
                     .rounded(px(MODAL_PANEL_RADIUS))
                     .bg(theme.vm_panel)
                     .border_1()
                     .border_color(theme.modal_border)
                     .occlude()
+                    // The occluding panel swallows the root's mouse stream;
+                    // forward the shared drag tracking (hue slider drags
+                    // happen INSIDE this panel).
+                    .on_mouse_move(cx.listener(
+                        |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                            this.global_mouse_move(event, cx);
+                        },
+                    ))
+                    .on_mouse_up(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _event, _window, cx| {
+                            this.global_mouse_up(cx);
+                        }),
+                    )
                     .overflow_hidden()
                     .opacity(opacity)
                     .child(content),
@@ -144,9 +177,8 @@ impl RootView {
         let theme = self.theme;
         let size = popup_size(window, (560.0, 480.0), (760.0, 720.0), (680.0, 640.0));
 
-        let divider = |theme: &crate::theme::Theme| {
-            div().h(px(1.0)).w_full().flex_none().bg(theme.vm_border)
-        };
+        let divider =
+            |theme: &crate::theme::Theme| div().h(px(1.0)).w_full().flex_none().bg(theme.vm_border);
 
         let has_folder = self.backend.has_projects_folder();
         let folder_path = self.backend.projects_folder_path().to_string();
@@ -154,15 +186,28 @@ impl RootView {
         let launch_supported = self.backend.launch_at_startup_supported();
         let launch_at_startup = self.backend.launch_at_startup();
         let sort_options = vec!["Name".to_string(), "Last Opened".to_string()];
-        let sort_index = if self.backend.sort_mode() == "Last Opened" { 1 } else { 0 };
+        let sort_index = if self.backend.sort_mode() == "Last Opened" {
+            1
+        } else {
+            0
+        };
         let log_options = vec!["Info".to_string(), "Debug".to_string()];
-        let log_index = if self.backend.log_level() == "Debug" { 1 } else { 0 };
-        let scheme_options = vec!["System".to_string(), "Light".to_string(), "Dark".to_string()];
+        let log_index = if self.backend.log_level() == "Debug" {
+            1
+        } else {
+            0
+        };
+        let scheme_options = vec![
+            "System".to_string(),
+            "Light".to_string(),
+            "Dark".to_string(),
+        ];
         let scheme_index = match self.backend.color_scheme_mode_string() {
             "Light" => 1,
             "Dark" => 2,
             _ => 0,
         };
+        let dev_details = self.show_dev_details();
         let retention = self.backend.snapshot_retention();
         let retention_edit = self.retention_input.clone();
         let notifications = self.backend.notifications_enabled();
@@ -255,9 +300,9 @@ impl RootView {
                                             .child(panel_button(
                                                 "choose-folder",
                                                 if has_folder {
-                                                    "Change Projects Folder"
+                                                    "Add Projects Folder\u{2026}"
                                                 } else {
-                                                    "Choose Projects Folder"
+                                                    "Choose Projects Folder\u{2026}"
                                                 },
                                                 ButtonVariant::Primary,
                                                 true,
@@ -277,9 +322,11 @@ impl RootView {
                                                 .flex_col()
                                                 .gap(px(8.0))
                                                 .child(section_label("Folder layout"))
-                                                .child(meta_label(
-                                                    "Stored in this folder as .immersion/settings.json",
-                                                ))
+                                                .when(dev_details, |el| {
+                                                    el.child(meta_label(
+                                                        "Stored in this folder as .immersion/settings.json",
+                                                    ))
+                                                })
                                                 .child(
                                                     div()
                                                         .text_size(px(12.0))
@@ -370,7 +417,7 @@ impl RootView {
                                             .gap(px(8.0))
                                             .child(section_label("Activity log level"))
                                             .child(meta_label(
-                                                "Debug shows scan and watcher details in the activity panel.",
+                                                "Debug adds scan and watcher detail to the log, and shows where things are stored on disk.",
                                             ))
                                             .child(self.render_combo(
                                                 ComboId::LogLevel,
@@ -384,7 +431,21 @@ impl RootView {
                                                         if index == 1 { "Debug" } else { "Info" };
                                                     this.backend.set_log_level(level);
                                                 },
-                                            )),
+                                            ))
+                                            // The activity log itself lives here now
+                                            // (the main view's bottom panel shows
+                                            // project details instead).
+                                            .child(
+                                                div()
+                                                    .h(px(180.0))
+                                                    .w_full()
+                                                    .rounded(px(6.0))
+                                                    .bg(theme.vm_input_surface)
+                                                    .border_1()
+                                                    .border_color(theme.vm_border)
+                                                    .p(px(8.0))
+                                                    .child(self.render_activity_log(cx)),
+                                            ),
                                     )
                                     .child(divider(&theme))
                                     // Snapshot retention.
@@ -435,7 +496,7 @@ impl RootView {
                                                     .gap(px(4.0))
                                                     .child(section_label("Save notifications"))
                                                     .child(meta_label(
-                                                        "Show an OS notification when a new snapshot is saved.",
+                                                        "Show a notification when a new version is saved.",
                                                     )),
                                             )
                                             .child(themed_switch(
@@ -568,7 +629,11 @@ impl RootView {
                                                             this.confirm_exit_at = None;
                                                             this.confirm = Some(ConfirmState {
                                                                 title: "Reset Configuration".to_string(),
-                                                                message: "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted.".to_string(),
+                                                                message: if this.show_dev_details() {
+                                                                    "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted.".to_string()
+                                                                } else {
+                                                                    "This clears your settings, folder choices, and project notes.\n\nYour saved versions are kept.".to_string()
+                                                                },
                                                                 confirm_text: "Reset".to_string(),
                                                                 danger: true,
                                                                 action: ConfirmAction::ResetConfig,
@@ -591,10 +656,11 @@ impl RootView {
 
         self.popup_frame(
             "settings-popup",
-            size,
+            (size.0, PopupHeight::Fixed(size.1)),
             content.into_any_element(),
             self.settings_enter_at,
             self.settings_exit_at,
+            cx,
         )
     }
 
@@ -606,13 +672,39 @@ impl RootView {
         cx: &mut Context<RootView>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let size = popup_size(window, (520.0, 420.0), (640.0, 560.0), (600.0, 500.0));
+        let size = popup_size(window, (460.0, 240.0), (600.0, 620.0), (560.0, 520.0));
 
         let folder_path = self.layout_dialog.folder_path.clone();
         let selected = self.layout_dialog.selected_layout.clone();
-        let awaiting = self.layout_dialog.awaiting_scan;
-        let scan_error = self.layout_dialog.scan_error.clone();
-        let scan_succeeded = self.layout_dialog.scan_succeeded;
+        let is_new_folder = self.layout_dialog.is_new_folder;
+
+        // Radio dot: the border alone left both cards looking equally chosen.
+        let radio = move |selected: bool| {
+            div()
+                .flex_none()
+                .mt(px(2.0))
+                .w(px(16.0))
+                .h(px(16.0))
+                .rounded_full()
+                .border_1()
+                .border_color(if selected {
+                    theme.modal_selected_border
+                } else {
+                    theme.modal_option_border
+                })
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(selected, |el| {
+                    el.child(
+                        div()
+                            .w(px(8.0))
+                            .h(px(8.0))
+                            .rounded_full()
+                            .bg(theme.modal_selected_border),
+                    )
+                })
+        };
 
         let card = |id: &'static str,
                     layout: &'static str,
@@ -625,9 +717,9 @@ impl RootView {
                 .w_full()
                 .rounded(px(MODAL_PANEL_RADIUS))
                 .bg(if selected {
-                    theme.vm_side_panel
+                    theme.modal_option_selected_fill
                 } else {
-                    theme.vm_panel
+                    theme.modal_option_fill
                 })
                 .border_1()
                 .border_color(if selected {
@@ -635,107 +727,140 @@ impl RootView {
                 } else {
                     theme.modal_option_border
                 })
-                .p(px(10.0))
+                .px(px(13.0))
+                .py(px(12.0))
                 .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .when(!awaiting, |el| {
-                    el.cursor_pointer()
-                        .on_click(cx.listener(move |this, _event, _window, cx| {
-                            this.layout_dialog_select_and_scan(layout);
-                            cx.notify();
-                        }))
+                .items_start()
+                .gap(px(11.0))
+                .when(!selected, |el| {
+                    el.hover(move |style| style.bg(theme.modal_option_fill_hover))
                 })
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _event, _window, cx| {
+                    this.layout_dialog_select(layout);
+                    cx.notify();
+                }))
+                .child(radio(selected))
                 .child(
+                    // min_w_0: without it the flex item takes its min-content
+                    // width and the description runs past the card edge
+                    // instead of wrapping.
                     div()
-                        .text_size(px(13.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(theme.vm_text_primary)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .line_height(px(16.0))
-                        .text_color(theme.vm_text_meta)
-                        .child(description),
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.vm_text_primary)
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .line_height(px(16.0))
+                                .text_color(theme.vm_text_meta)
+                                .child(description),
+                        ),
                 )
         };
 
-        let scroll_content = div()
+        // Nothing happens until OK, so the footer just says what OK will do.
+        let footer_text: SharedString = if self.show_dev_details() {
+            "Saved to .immersion/settings.json in this folder.".into()
+        } else if is_new_folder {
+            "The folder is scanned once you press OK.".into()
+        } else {
+            "Changing this rescans the folder.".into()
+        };
+
+        let body = div()
             .id("layout-dialog-scroll")
-            .size_full()
+            .w_full()
+            .max_h(px(size.1))
             .overflow_y_scroll()
             .track_scroll(&self.layout_dialog_scroll)
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(12.0))
-                    .px(px(14.0))
-                    .py(px(12.0))
+                    .gap(px(14.0))
+                    .px(px(20.0))
+                    .py(px(18.0))
                     .child(
                         div()
-                            .text_size(px(19.0))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.vm_text_primary)
-                            .child("How are your projects organized?"),
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(18.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.vm_text_primary)
+                                    .child("How are your projects organized?"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .line_height(px(16.0))
+                                    .text_color(theme.vm_text_meta)
+                                    .child("Pick the option that matches this folder."),
+                            )
+                            .when(!folder_path.is_empty(), |el| {
+                                el.child(
+                                    div()
+                                        .w_full()
+                                        .text_size(px(11.0))
+                                        .text_color(theme.vm_text_meta)
+                                        .opacity(0.7)
+                                        .truncate()
+                                        .child(SharedString::from(folder_path)),
+                                )
+                            }),
                     )
                     .child(
                         div()
-                            .text_size(px(12.0))
-                            .line_height(px(16.0))
-                            .text_color(theme.vm_text_meta)
-                            .child("This choice is saved in .immersion/settings.json inside the folder you selected."),
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .child(card(
+                                "layout-card-bundles",
+                                "Bundles",
+                                "Project folders with bundles",
+                                "Each project has its own subfolder or bundle, like .logicx.",
+                                selected == "Bundles",
+                                cx,
+                            ))
+                            .child(card(
+                                "layout-card-files",
+                                "Files",
+                                "Loose project files",
+                                "Project files like .als or .flp sit directly in the folder.",
+                                selected == "Files",
+                                cx,
+                            )),
                     )
-                    .when(!folder_path.is_empty(), |el| {
-                        el.child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(theme.vm_text_meta)
-                                .opacity(0.9)
-                                .child(SharedString::from(folder_path)),
-                        )
-                    })
-                    .child(card(
-                        "layout-card-bundles",
-                        "Bundles",
-                        "Project folders with bundles",
-                        "Each project lives in its own subfolder and uses bundle-style project files like .logicx or .band.",
-                        selected == "Bundles",
-                        cx,
-                    ))
-                    .child(card(
-                        "layout-card-files",
-                        "Files",
-                        "Loose project files",
-                        "Project files like .als and .flp sit directly in this folder without extra subfolders.",
-                        selected == "Files",
-                        cx,
-                    ))
-                    .when(awaiting || !scan_error.is_empty(), |el| {
-                        el.child(
-                            div()
-                                .text_size(px(12.0))
-                                .text_color(if awaiting {
-                                    theme.vm_text_meta
-                                } else if scan_succeeded {
-                                    theme.success
-                                } else {
-                                    theme.button_danger_label
-                                })
-                                .child(SharedString::from(if awaiting {
-                                    "Scanning the folder\u{2026}".to_string()
-                                } else {
-                                    scan_error
-                                })),
-                        )
-                    })
                     .child(
-                        div().flex().justify_end().child(div().w(px(96.0)).child(
-                            panel_button(
-                                "layout-dialog-close",
-                                "Close",
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(px(11.5))
+                                    .line_height(px(15.0))
+                                    .text_color(theme.vm_text_meta)
+                                    .opacity(0.7)
+                                    .child(footer_text),
+                            )
+                            .child(div().w(px(88.0)).flex_none().child(panel_button(
+                                "layout-dialog-cancel",
+                                "Cancel",
                                 ButtonVariant::Soft,
                                 true,
                                 &theme,
@@ -744,29 +869,29 @@ impl RootView {
                                 |this, _w, cx| {
                                     this.request_close_layout(cx);
                                 },
-                            ),
-                        )),
+                            )))
+                            .child(div().w(px(88.0)).flex_none().child(panel_button(
+                                "layout-dialog-ok",
+                                "OK",
+                                ButtonVariant::Primary,
+                                true,
+                                &theme,
+                                self,
+                                cx,
+                                |this, _w, cx| {
+                                    this.layout_dialog_confirm(cx);
+                                },
+                            ))),
                     ),
             );
 
-        let content = div()
-            .size_full()
-            .relative()
-            .child(scroll_content)
-            .child(scrollbar(
-                "layout-dialog",
-                &self.layout_dialog_scroll.clone(),
-                ScrollAxis::Vertical,
-                &theme,
-                cx,
-            ));
-
         self.popup_frame(
             "layout-dialog",
-            size,
-            content.into_any_element(),
+            (size.0, PopupHeight::FitContent(size.1)),
+            body.into_any_element(),
             self.layout_enter_at,
             self.layout_exit_at,
+            cx,
         )
     }
 
@@ -850,10 +975,11 @@ impl RootView {
 
         self.popup_frame(
             "confirm-dialog",
-            size,
+            (size.0, PopupHeight::Fixed(size.1)),
             content.into_any_element(),
             self.confirm_enter_at,
             self.confirm_exit_at,
+            cx,
         )
     }
 
@@ -871,7 +997,15 @@ impl RootView {
                 if let Some(path) = paths.first() {
                     let folder = path.to_string_lossy().to_string();
                     this.update(cx, |root: &mut RootView, cx| {
-                        root.open_layout_dialog_for_folder(&folder);
+                        // A folder set up before keeps its type in its own
+                        // settings.json — add it straight away instead of
+                        // asking again.
+                        if musit_core::folder_settings::has_layout_setting(&folder) {
+                            root.pending_select_latest = true;
+                            root.backend.add_projects_folder(&folder, "");
+                        } else {
+                            root.open_layout_dialog_for_folder(&folder);
+                        }
                         cx.notify();
                     })
                     .ok();
@@ -889,8 +1023,7 @@ impl RootView {
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
             .unwrap_or_else(|| "Immersion Logs.log".to_string());
-        let receiver =
-            cx.prompt_for_new_path(std::path::Path::new(&folder), Some(&file_name));
+        let receiver = cx.prompt_for_new_path(std::path::Path::new(&folder), Some(&file_name));
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(path))) = receiver.await {
                 let path_string = path.to_string_lossy().to_string();
@@ -906,12 +1039,16 @@ impl RootView {
 }
 
 /// Delete-version confirm content (VersionManagerWindow deleteConfirmDialog).
-pub fn delete_version_confirm(version_id: &str) -> ConfirmState {
+pub fn delete_version_confirm(version_id: &str, dev_details: bool) -> ConfirmState {
     ConfirmState {
         title: "Delete Version".to_string(),
-        message: format!(
-            "Delete version v{version_id}?\n\nThis removes its snapshot from .musit and cannot be undone."
-        ),
+        message: if dev_details {
+            format!(
+                "Delete version v{version_id}?\n\nThis removes its snapshot from .musit and cannot be undone."
+            )
+        } else {
+            format!("Delete version v{version_id}?\n\nThis cannot be undone.")
+        },
         confirm_text: "Delete".to_string(),
         danger: true,
         action: ConfirmAction::DeleteVersion(version_id.to_string()),

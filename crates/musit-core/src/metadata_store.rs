@@ -5,7 +5,7 @@ use crate::file_event::{FileEvent, FileEventType};
 use crate::path_cleanup::{artifact_equals, join_path};
 use crate::version_id;
 use chrono::Utc;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -33,10 +33,7 @@ fn direct_child_version(version_id: &str, branch_base_version: &str) -> i32 {
 /// Artifact recorded on a log line, with fallback for legacy lines that
 /// predate the artifact field (they were always single-file versions).
 pub fn artifact_of_log_line(obj: &Map<String, Value>) -> String {
-    let artifact = obj
-        .get("artifact")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let artifact = obj.get("artifact").and_then(|v| v.as_str()).unwrap_or("");
     if !artifact.is_empty() {
         return artifact.to_string();
     }
@@ -100,7 +97,11 @@ impl MetadataStore {
 
     /// Versions are numbered per artifact (a project file, or a bundle root
     /// like "Song.logicx" whose internal files share one version per save).
-    pub fn next_version_id_for_artifact(&self, artifact: &str, branch_base_version: &str) -> String {
+    pub fn next_version_id_for_artifact(
+        &self,
+        artifact: &str,
+        branch_base_version: &str,
+    ) -> String {
         let mut running_ordinal = 0i64;
         let mut max_top_level = 0i32;
         let mut max_child_for_base = 0i32;

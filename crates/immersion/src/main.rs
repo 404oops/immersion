@@ -27,19 +27,25 @@ thread_local! {
 }
 
 /// TrayController::showMainWindow + PlatformAgent::presentMainWindow.
+///
+/// The window is ordered out while hidden rather than kept on screen behind a
+/// hidden app, so ordering it back in plays the system's window-open
+/// animation instead of the window blinking into place.
 fn present_main_window(cx: &mut App) {
     platform::set_background_agent_mode(false);
     APP_HIDDEN.with(|hidden| hidden.set(false));
-    MAIN_WINDOW.with(|window| {
-        if let Some(handle) = window.borrow().as_ref() {
-            handle
-                .update(cx, |_view, win, _cx| {
-                    win.activate_window();
-                })
-                .ok();
-        }
-    });
     cx.activate(true);
+    if !platform::show_main_window() {
+        MAIN_WINDOW.with(|window| {
+            if let Some(handle) = window.borrow().as_ref() {
+                handle
+                    .update(cx, |_view, win, _cx| {
+                        win.activate_window();
+                    })
+                    .ok();
+            }
+        });
+    }
 }
 
 fn main() {
@@ -53,10 +59,12 @@ fn main() {
     // already configured (TrayController::attach). Only on macOS: other
     // platforms have no status item yet, so a hidden window would be
     // unreachable.
-    let saved_folder = musit_core::project_registry::ProjectRegistry.load_projects_folder();
+    let saved_folders = musit_core::project_registry::ProjectRegistry.load_projects_folders();
     let start_hidden = cfg!(target_os = "macos")
-        && !saved_folder.is_empty()
-        && musit_core::folder_settings::has_layout_setting(&saved_folder);
+        && !saved_folders.is_empty()
+        && saved_folders
+            .iter()
+            .all(|folder| musit_core::folder_settings::has_layout_setting(folder));
 
     let gpui_app = application();
 
@@ -102,7 +110,11 @@ fn main() {
             KeyBinding::new("shift-home", ti::SelectToHome, Some("TextInput")),
             KeyBinding::new("shift-end", ti::SelectToEnd, Some("TextInput")),
             KeyBinding::new("enter", ti::Enter, Some("TextInput")),
-            KeyBinding::new("ctrl-cmd-space", ti::ShowCharacterPalette, Some("TextInput")),
+            KeyBinding::new(
+                "ctrl-cmd-space",
+                ti::ShowCharacterPalette,
+                Some("TextInput"),
+            ),
             // App-level.
             KeyBinding::new("escape", CloseModal, None),
             KeyBinding::new("cmd-q", Quit, None),
@@ -141,6 +153,8 @@ fn main() {
             .expect("failed to open main window");
 
         MAIN_WINDOW.with(|slot| *slot.borrow_mut() = Some(window));
+        // Take ownership of the NSWindow for animated hide/show.
+        platform::adopt_main_window("Immersion");
 
         // Closing the window hides the app into the status bar (tray app) on
         // macOS. On other platforms gpui's hide() is a no-op and there is no
@@ -149,7 +163,12 @@ fn main() {
             .update(cx, |_view, win, cx| {
                 win.on_window_should_close(cx, |_win, cx| {
                     if cfg!(target_os = "macos") {
-                        cx.hide();
+                        // Order the window out (animated) rather than hiding
+                        // the whole app: an app-hidden window comes back with
+                        // no animation at all.
+                        if !platform::hide_main_window() {
+                            cx.hide();
+                        }
                         platform::set_background_agent_mode(true);
                         APP_HIDDEN.with(|hidden| hidden.set(true));
                         false

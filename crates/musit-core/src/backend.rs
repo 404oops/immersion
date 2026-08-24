@@ -21,7 +21,7 @@ use crate::path_cleanup::{
     relative_file_path, remove_empty_parent_dirs,
 };
 use crate::project_discovery::{self, DiscoveredProject};
-use crate::project_registry::{app_config_directory, AppSettings, ProjectRegistry};
+use crate::project_registry::{AppSettings, ProjectRegistry, app_config_directory};
 use crate::snapshot_service::{SnapshotNotice, SnapshotService};
 use crate::version_id;
 use crate::watcher::HybridFileWatcher;
@@ -32,9 +32,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 const MAX_ACTIVITY_LINES: usize = 2000;
@@ -87,6 +87,49 @@ pub struct ProjectListItem {
     pub last_opened: String,
 }
 
+/// One projects-folder tab shown in the main view.
+#[derive(Clone, Debug)]
+pub struct FolderTab {
+    pub path: String,
+    pub name: String,
+    pub layout: &'static str,
+    pub is_scanning: bool,
+    /// Short progress suffix for the tab title ("scanning…", "queued", …);
+    /// empty when the tab has nothing to report.
+    pub status: String,
+}
+
+/// Per-projects-folder state: each configured folder is discovered, watched,
+/// and monitored independently; the UI shows one folder at a time via tabs.
+struct FolderWorkspace {
+    root: String,
+    layout: ProjectsFolderLayout,
+    /// User-chosen tab name; empty means "use the folder's name".
+    display_name: String,
+    /// Theme hue remembered for this tab; `None` until one is saved.
+    hue: Option<f64>,
+    /// Live scan progress for the tab title (e.g. "25 folders").
+    scan_progress: String,
+    discovered_projects: Vec<DiscoveredProject>,
+    watcher: Option<HybridFileWatcher>,
+    scanning: bool,
+}
+
+impl FolderWorkspace {
+    fn new(root: String, layout: ProjectsFolderLayout) -> Self {
+        Self {
+            root,
+            layout,
+            display_name: String::new(),
+            hue: None,
+            scan_progress: String::new(),
+            discovered_projects: Vec::new(),
+            watcher: None,
+            scanning: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct VersionFileEntry {
     pub path: String,
@@ -135,7 +178,14 @@ pub enum BackendEvent {
     SelectedProjectPrimaryFileChanged,
     ProjectsFolderLayoutChanged,
     PendingProjectsFolderSetupChanged,
-    ProjectsFolderScanFinished(bool),
+    /// A folder's discovery scan finished. Carries the folder so a dialog
+    /// waiting on one folder doesn't react to another folder's background scan.
+    ProjectsFolderScanFinished {
+        folder: String,
+        found_projects: bool,
+    },
+    FoldersChanged,
+    ActiveFolderChanged,
     ThemeHueChanged,
     LaunchAtStartupChanged,
     SnapshotRetentionChanged,
@@ -200,7 +250,10 @@ enum BackendMsg {
         folder_path: String,
         scan_generation: i32,
     },
-    WatcherEvent(FileEvent),
+    WatcherEvent {
+        watch_root: String,
+        event: FileEvent,
+    },
     WatcherScanLog {
         scan_kind: String,
         root_path: String,
@@ -422,8 +475,7 @@ fn json_str<'a>(obj: &'a Map<String, Value>, key: &str) -> &'a str {
 }
 
 fn compact_json_line(obj: &Map<String, Value>) -> Vec<u8> {
-    let mut bytes =
-        serde_json::to_vec(&Value::Object(obj.clone())).expect("log line serializes");
+    let mut bytes = serde_json::to_vec(&Value::Object(obj.clone())).expect("log line serializes");
     bytes.push(b'\n');
     bytes
 }
@@ -569,10 +621,8 @@ fn migrate_misrouted_history(source_root: &str, destination_root: &str) -> usize
         } else {
             join_path(source_root, &stored_staged_path)
         };
-        let relative_to_source_staging = relative_file_path(
-            &join_path(&source_musit, "staging"),
-            &source_staged_path,
-        );
+        let relative_to_source_staging =
+            relative_file_path(&join_path(&source_musit, "staging"), &source_staged_path);
         let stamp = relative_to_source_staging
             .split('/')
             .next()
@@ -581,8 +631,7 @@ fn migrate_misrouted_history(source_root: &str, destination_root: &str) -> usize
         let destination_relative_staged =
             format!(".musit/staging/{stamp}/{}", json_str(obj, "path"));
         let destination_staged_path = join_path(destination_root, &destination_relative_staged);
-        if Path::new(&source_staged_path).exists()
-            && !Path::new(&destination_staged_path).exists()
+        if Path::new(&source_staged_path).exists() && !Path::new(&destination_staged_path).exists()
         {
             if fs::create_dir_all(parent_path(&destination_staged_path)).is_err()
                 || fs::copy(&source_staged_path, &destination_staged_path).is_err()
@@ -619,9 +668,14 @@ fn migrate_misrouted_history(source_root: &str, destination_root: &str) -> usize
 pub struct AppBackend {
     // State mirrored from the Qt member list.
     status_message: String,
-    projects_folder_root: String,
+    // Configured projects folders; the UI shows one at a time via tabs, but
+    // every folder is watched and versioned simultaneously.
+    workspaces: Vec<FolderWorkspace>,
+    active_workspace: i32,
+    // Folders waiting for their discovery scan (scans run one at a time on a
+    // background thread; the queue keeps startup with many folders sane).
+    scan_queue: Vec<String>,
     pending_projects_folder_setup: String,
-    projects_folder_layout: ProjectsFolderLayout,
     project_root: String,
     projects: Vec<ProjectListItem>,
     activity: Vec<String>,
@@ -640,7 +694,7 @@ pub struct AppBackend {
     notifications_enabled: bool,
     color_scheme_mode: ColorSchemeMode,
 
-    discovered_projects: Vec<DiscoveredProject>,
+    // Indexes into the ACTIVE workspace's discovered_projects.
     visible_project_indexes: Vec<usize>,
     last_opened_at_by_project_root: HashMap<String, SystemTime>,
     project_notes: HashMap<String, String>,
@@ -648,17 +702,27 @@ pub struct AppBackend {
 
     project_registry: ProjectRegistry,
     scan_cancel_flag: Option<Arc<AtomicBool>>,
-    is_scanning_projects: bool,
     last_scan_status_directories: i32,
     active_scan_folder: String,
     active_scan_generation: i32,
-    file_watcher: Option<HybridFileWatcher>,
-    // Projects awaiting monitoring init, advanced a time-sliced batch per
-    // pump so first-time seeding of a large folder doesn't freeze the UI
-    // (the Qt build used one QTimer::singleShot(0) per project).
-    monitoring_init_queue: std::collections::VecDeque<DiscoveredProject>,
+    active_scan_started_at: Option<Instant>,
+    // Projects awaiting monitoring init (tagged with their folder root),
+    // advanced a time-sliced batch per pump so first-time seeding of a large
+    // folder doesn't freeze the UI (Qt used one QTimer::singleShot(0) each).
+    monitoring_init_queue: std::collections::VecDeque<(String, DiscoveredProject)>,
     monitoring_init_total: usize,
+    monitoring_init_done: usize,
+    /// Set when an init batch blows its time budget (a project on a slow
+    /// network share can take seconds for a single item): the next batch waits
+    /// until then so the UI keeps a usable share of the pump.
+    monitoring_init_resume_at: Option<Instant>,
     snapshot_service_by_root: HashMap<String, SnapshotService>,
+    // (mtime, len)-validated caches so version-graph refreshes don't re-hash
+    // project files or re-parse log.jsonl on the UI thread unless they
+    // actually changed on disk.
+    file_hash_cache: std::cell::RefCell<HashMap<String, ((Option<SystemTime>, u64), String)>>,
+    parsed_log_cache:
+        std::cell::RefCell<HashMap<String, ((Option<SystemTime>, u64), Vec<VersionEntry>)>>,
     // pathKey(root) -> root as discovered (hash keys may be lowercased).
     canonical_root_by_key: HashMap<String, String>,
 
@@ -680,9 +744,10 @@ impl AppBackend {
 
         let mut backend = Self {
             status_message: strings::STATUS_SELECT_PROJECTS_FOLDER.to_string(),
-            projects_folder_root: String::new(),
+            workspaces: Vec::new(),
+            active_workspace: -1,
+            scan_queue: Vec::new(),
             pending_projects_folder_setup: String::new(),
-            projects_folder_layout: ProjectsFolderLayout::Bundles,
             project_root: String::new(),
             projects: Vec::new(),
             activity: Vec::new(),
@@ -700,20 +765,22 @@ impl AppBackend {
             snapshot_retention: UNCOMPRESSED_RECENT_VERSIONS,
             notifications_enabled: true,
             color_scheme_mode: ColorSchemeMode::System,
-            discovered_projects: Vec::new(),
             visible_project_indexes: Vec::new(),
             last_opened_at_by_project_root: HashMap::new(),
             project_notes: HashMap::new(),
             project_primary_files: HashMap::new(),
             project_registry,
             scan_cancel_flag: None,
-            is_scanning_projects: false,
             last_scan_status_directories: 0,
             active_scan_folder: String::new(),
             active_scan_generation: 0,
-            file_watcher: None,
+            active_scan_started_at: None,
             monitoring_init_queue: std::collections::VecDeque::new(),
             monitoring_init_total: 0,
+            monitoring_init_done: 0,
+            monitoring_init_resume_at: None,
+            file_hash_cache: std::cell::RefCell::new(HashMap::new()),
+            parsed_log_cache: std::cell::RefCell::new(HashMap::new()),
             snapshot_service_by_root: HashMap::new(),
             canonical_root_by_key: HashMap::new(),
             platform,
@@ -750,18 +817,258 @@ impl AppBackend {
             (backend.platform.set_launch_at_startup)(backend.launch_at_startup);
         }
 
-        let saved_projects_folder = backend.project_registry.load_projects_folder();
-        if !saved_projects_folder.is_empty() {
-            if folder_settings::has_layout_setting(&saved_projects_folder) {
-                backend.load_projects_from_folder(&saved_projects_folder, "");
-            } else {
-                backend.pending_projects_folder_setup = saved_projects_folder;
+        for saved_folder in backend.project_registry.load_projects_folders() {
+            if folder_settings::has_layout_setting(&saved_folder) {
+                backend.load_projects_from_folder(&saved_folder, "");
+            } else if backend.pending_projects_folder_setup.is_empty() {
+                backend.pending_projects_folder_setup = saved_folder;
                 backend.push_event(BackendEvent::PendingProjectsFolderSetupChanged);
             }
+        }
+        if !backend.workspaces.is_empty() {
+            // Each restored folder made itself active as it was added; the
+            // first one wins, and the visible list has to follow.
+            backend.active_workspace = 0;
+            backend.rebuild_visible_projects();
+            backend.apply_active_folder_hue();
+            backend.prioritize_active_folder_scan();
+            backend.refresh_status_for_active_folder();
+            backend.push_event(BackendEvent::ActiveFolderChanged);
         }
 
         backend.run_startup_self_check();
         backend
+    }
+
+    // ---- Workspaces (projects-folder tabs) --------------------------------
+
+    fn active(&self) -> Option<&FolderWorkspace> {
+        usize::try_from(self.active_workspace)
+            .ok()
+            .and_then(|i| self.workspaces.get(i))
+    }
+
+    fn active_mut(&mut self) -> Option<&mut FolderWorkspace> {
+        usize::try_from(self.active_workspace)
+            .ok()
+            .and_then(|i| self.workspaces.get_mut(i))
+    }
+
+    fn active_root(&self) -> &str {
+        self.active().map(|w| w.root.as_str()).unwrap_or("")
+    }
+
+    fn active_layout(&self) -> ProjectsFolderLayout {
+        self.active()
+            .map(|w| w.layout)
+            .unwrap_or(ProjectsFolderLayout::Bundles)
+    }
+
+    fn active_projects(&self) -> &[DiscoveredProject] {
+        self.active()
+            .map(|w| w.discovered_projects.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn workspace_index_by_root(&self, root: &str) -> Option<usize> {
+        self.workspaces
+            .iter()
+            .position(|w| path_equals(&w.root, root))
+    }
+
+    fn is_active_folder(&self, folder_root: &str) -> bool {
+        self.active()
+            .is_some_and(|w| path_equals(&w.root, folder_root))
+    }
+
+    /// Status line for work happening in one folder. Background folders keep
+    /// their progress out of the status bar — it describes the tab on screen.
+    fn set_status_for_folder(&mut self, folder_root: &str, message: String) {
+        if !self.is_active_folder(folder_root) || self.status_message == message {
+            return;
+        }
+        self.status_message = message;
+        self.push_event(BackendEvent::StatusMessageChanged);
+    }
+
+    /// Progress for the folder's own tab title. Unlike the status line this
+    /// is kept per folder, so a background scan still shows on its own tab.
+    fn set_scan_progress_for_folder(&mut self, folder_root: &str, progress: String) {
+        let Some(index) = self.workspace_index_by_root(folder_root) else {
+            return;
+        };
+        if self.workspaces[index].scan_progress == progress {
+            return;
+        }
+        self.workspaces[index].scan_progress = progress;
+        self.push_event(BackendEvent::FoldersChanged);
+    }
+
+    /// Rebuilds the status line from the active folder's own state (used when
+    /// the active tab changes, so it never inherits another folder's message).
+    fn refresh_status_for_active_folder(&mut self) {
+        let Some(workspace) = self.active() else {
+            self.status_message = strings::STATUS_SELECT_PROJECTS_FOLDER.to_string();
+            self.push_event(BackendEvent::StatusMessageChanged);
+            return;
+        };
+        let root = workspace.root.clone();
+        let scanning = workspace.scanning;
+        let watched = workspace.watcher.is_some();
+        let count = workspace.discovered_projects.len();
+        let queued = self.scan_queue.iter().any(|q| path_equals(q, &root));
+
+        let message = if scanning {
+            format!("Scanning {root} for projects...")
+        } else if queued {
+            format!("Waiting to scan {root}...")
+        } else if count == 0 {
+            "No supported project files found.".to_string()
+        } else if watched {
+            format!("Monitoring: {root}")
+        } else {
+            format!("Found {count} project folders.")
+        };
+        if self.status_message != message {
+            self.status_message = message;
+            self.push_event(BackendEvent::StatusMessageChanged);
+        }
+    }
+
+    /// The project the given visible-list index points at (active workspace).
+    fn visible_project(&self, visible_index: i32) -> Option<&DiscoveredProject> {
+        if visible_index < 0 {
+            return None;
+        }
+        let discovered_index = *self.visible_project_indexes.get(visible_index as usize)?;
+        self.active_projects().get(discovered_index)
+    }
+
+    pub fn folder_tabs(&self) -> Vec<FolderTab> {
+        self.workspaces
+            .iter()
+            .map(|w| FolderTab {
+                path: w.root.clone(),
+                name: if !w.display_name.is_empty() {
+                    w.display_name.clone()
+                } else {
+                    let name = file_name(&w.root);
+                    if name.is_empty() {
+                        w.root.clone()
+                    } else {
+                        name.to_string()
+                    }
+                },
+                layout: layout_display_name(w.layout),
+                is_scanning: w.scanning || self.scan_queue.iter().any(|q| path_equals(q, &w.root)),
+                status: if w.scanning {
+                    if w.scan_progress.is_empty() {
+                        "scanning\u{2026}".to_string()
+                    } else {
+                        format!("scanning {}", w.scan_progress)
+                    }
+                } else if self.scan_queue.iter().any(|q| path_equals(q, &w.root)) {
+                    "queued".to_string()
+                } else {
+                    String::new()
+                },
+            })
+            .collect()
+    }
+
+    /// Renames a folder tab (empty name restores the folder's own name); the
+    /// custom name is persisted in the registry.
+    pub fn rename_projects_folder(&mut self, index: i32, name: &str) {
+        if index < 0 || index as usize >= self.workspaces.len() {
+            return;
+        }
+        let trimmed = name.trim().to_string();
+        let workspace = &mut self.workspaces[index as usize];
+        if workspace.display_name == trimmed {
+            return;
+        }
+        workspace.display_name = trimmed.clone();
+        let root = workspace.root.clone();
+        self.project_registry
+            .save_projects_folder_name(&root, &trimmed);
+        folder_settings::save_name(&root, &trimmed);
+        self.log_config_change(&format!("folder tab renamed to \"{trimmed}\" for {root}"));
+        self.push_event(BackendEvent::FoldersChanged);
+    }
+
+    pub fn active_folder_index(&self) -> i32 {
+        self.active_workspace
+    }
+
+    pub fn set_active_folder_index(&mut self, index: i32) {
+        if index < 0 || index as usize >= self.workspaces.len() || index == self.active_workspace {
+            return;
+        }
+        self.active_workspace = index;
+        self.set_selected_project_index(-1);
+        // A filter typed for one folder must not hide another folder's list.
+        if !self.search_text.is_empty() {
+            self.search_text.clear();
+            self.push_event(BackendEvent::SearchTextChanged);
+        }
+        self.rebuild_visible_projects();
+        self.apply_active_folder_hue();
+        // Whatever the user just switched to gets the machine's attention: its
+        // scan jumps the queue (preempting a background one if need be) and its
+        // versioning init moves to the front.
+        self.prioritize_active_folder_scan();
+        self.prioritize_active_folder_monitoring();
+        self.refresh_status_for_active_folder();
+        self.push_event(BackendEvent::ActiveFolderChanged);
+        self.push_event(BackendEvent::ProjectsFolderChanged);
+        self.push_event(BackendEvent::ProjectsFolderLayoutChanged);
+    }
+
+    /// Adds a projects folder (or re-activates/rescans an existing one).
+    /// The wizard and the tab bar's "+" both land here.
+    pub fn add_projects_folder(&mut self, folder_path: &str, layout: &str) {
+        self.confirm_projects_folder(folder_path, layout);
+    }
+
+    /// Removes a folder tab: stops watching/monitoring it and forgets it in
+    /// the registry. On-disk version history (.musit) is left untouched.
+    pub fn remove_projects_folder(&mut self, index: i32) {
+        if index < 0 || index as usize >= self.workspaces.len() {
+            return;
+        }
+        let root = self.workspaces[index as usize].root.clone();
+        self.scan_queue.retain(|q| !path_equals(q, &root));
+        if path_equals(&self.active_scan_folder, &root) {
+            self.cancel_project_scan();
+        }
+        self.stop_monitoring_for_folder(&root);
+        self.workspaces.remove(index as usize);
+        self.persist_projects_folders();
+        self.project_registry.save_projects_folder_name(&root, "");
+
+        if self.workspaces.is_empty() {
+            self.active_workspace = -1;
+        } else if self.active_workspace >= index {
+            self.active_workspace = (self.active_workspace - 1).max(0);
+        }
+        self.set_selected_project_index(-1);
+        self.rebuild_visible_projects();
+        self.prioritize_active_folder_scan();
+        self.prioritize_active_folder_monitoring();
+        self.refresh_status_for_active_folder();
+        self.append_activity(&format!(
+            "[{}] removed projects folder {}",
+            now_human(),
+            root
+        ));
+        self.push_event(BackendEvent::FoldersChanged);
+        self.push_event(BackendEvent::ActiveFolderChanged);
+        self.push_event(BackendEvent::ProjectsFolderChanged);
+    }
+
+    fn persist_projects_folders(&mut self) {
+        let folders: Vec<String> = self.workspaces.iter().map(|w| w.root.clone()).collect();
+        self.project_registry.save_projects_folders(&folders);
     }
 
     // ---- Event/message pumping ------------------------------------------
@@ -793,7 +1100,7 @@ impl AppBackend {
             .is_some_and(|deadline| deadline <= Instant::now())
         {
             self.theme_hue_persist_deadline = None;
-            self.persist_app_settings();
+            self.persist_theme_hue();
             let hue = self.theme_hue;
             self.log_config_change(&format!("theme hue set to {hue:.0}"));
         }
@@ -805,7 +1112,7 @@ impl AppBackend {
     /// (the ~QmlBackend flush) since the debounce timer won't fire again.
     pub fn flush_pending_persist(&mut self) {
         if self.theme_hue_persist_deadline.take().is_some() {
-            self.persist_app_settings();
+            self.persist_theme_hue();
         }
     }
 
@@ -848,19 +1155,21 @@ impl AppBackend {
                     scan_generation,
                 );
             }
-            BackendMsg::WatcherEvent(event) => {
+            BackendMsg::WatcherEvent { watch_root, event } => {
                 // Resolve a newly-created nested project before an ancestor
                 // project gets a chance to claim the event.
                 let mut owned_by_nested_project = false;
                 for project_root in self.canonical_root_by_key.values() {
-                    if !path_equals(project_root, &self.projects_folder_root)
+                    if !path_equals(project_root, &watch_root)
                         && path_is_under_root(&event.absolute_path, project_root)
                     {
                         owned_by_nested_project = true;
                         break;
                     }
                 }
-                if !owned_by_nested_project && self.try_discover_project_from_event(&event) {
+                if !owned_by_nested_project
+                    && self.try_discover_project_from_event(&watch_root, &event)
+                {
                     return;
                 }
                 self.dispatch_file_event(&event);
@@ -922,19 +1231,29 @@ impl AppBackend {
     }
 
     pub fn has_discovered_projects(&self) -> bool {
-        !self.discovered_projects.is_empty()
+        !self.active_projects().is_empty()
     }
 
     pub fn has_projects_folder(&self) -> bool {
-        !self.projects_folder_root.is_empty()
+        !self.workspaces.is_empty()
     }
 
     pub fn projects_folder_path(&self) -> &str {
-        &self.projects_folder_root
+        self.active_root()
     }
 
+    /// Whether the ACTIVE folder is still being scanned (what the list UI
+    /// cares about); other folders scan in the background.
     pub fn is_scanning_projects(&self) -> bool {
-        self.is_scanning_projects
+        self.active().is_some_and(|w| w.scanning)
+            || self
+                .active()
+                .is_some_and(|w| self.scan_queue.iter().any(|q| path_equals(q, &w.root)))
+    }
+
+    /// Whether any folder is scanning or queued to scan.
+    pub fn is_scanning_any_folder(&self) -> bool {
+        !self.scan_queue.is_empty() || self.workspaces.iter().any(|w| w.scanning)
     }
 
     pub fn activity(&self) -> &[String] {
@@ -943,6 +1262,20 @@ impl AppBackend {
 
     pub fn theme_hue(&self) -> f64 {
         self.theme_hue
+    }
+
+    /// Adopts the active tab's remembered colour (the UI eases into it).
+    fn apply_active_folder_hue(&mut self) {
+        let Some(hue) = self.active().and_then(|w| w.hue) else {
+            return;
+        };
+        if (self.theme_hue - hue).abs() < 1e-9 {
+            return;
+        }
+        // Assigned rather than routed through set_theme_hue: a tab's colour is
+        // that folder's, and must not overwrite the app-wide default.
+        self.theme_hue = hue;
+        self.push_event(BackendEvent::ThemeHueChanged);
     }
 
     pub fn set_theme_hue(&mut self, value: f64) {
@@ -957,8 +1290,23 @@ impl AppBackend {
         }
 
         self.theme_hue = wrapped;
+        // The colour belongs to the tab being looked at; it is written to that
+        // folder's settings.json when the debounce fires.
+        if let Some(workspace) = self.active_mut() {
+            workspace.hue = Some(wrapped);
+        }
         self.push_event(BackendEvent::ThemeHueChanged);
         self.theme_hue_persist_deadline = Some(Instant::now() + THEME_HUE_PERSIST_DELAY);
+    }
+
+    /// Writes the debounced hue to the app config and to the active folder's
+    /// settings.json, so a re-added folder comes back the same colour.
+    fn persist_theme_hue(&mut self) {
+        self.persist_app_settings();
+        let hue = self.theme_hue;
+        if let Some(root) = self.active().map(|w| w.root.clone()) {
+            folder_settings::save_hue(&root, hue);
+        }
     }
 
     pub fn launch_at_startup(&self) -> bool {
@@ -1126,9 +1474,7 @@ impl AppBackend {
 
     fn apply_selection(&mut self, visible_index: i32) {
         self.selected_project_index = visible_index;
-        if visible_index >= 0 && (visible_index as usize) < self.visible_project_indexes.len() {
-            let project =
-                &self.discovered_projects[self.visible_project_indexes[visible_index as usize]];
+        if let Some(project) = self.visible_project(visible_index).cloned() {
             self.project_root = project.root_path.clone();
             self.selected_project_note = self
                 .project_notes
@@ -1136,12 +1482,6 @@ impl AppBackend {
                 .cloned()
                 .unwrap_or_default();
             self.selected_project_primary_file = project.primary_project_file.clone();
-            self.status_message = format!(
-                "Selected: {} ({})",
-                project.name,
-                project.kind.to_display_string()
-            );
-            self.push_event(BackendEvent::StatusMessageChanged);
         } else {
             self.project_root.clear();
             self.selected_project_note.clear();
@@ -1155,15 +1495,9 @@ impl AppBackend {
     }
 
     pub fn selected_project_files(&self) -> Vec<String> {
-        if self.selected_project_index < 0
-            || self.selected_project_index as usize >= self.visible_project_indexes.len()
-        {
-            return Vec::new();
-        }
-        self.discovered_projects
-            [self.visible_project_indexes[self.selected_project_index as usize]]
-            .project_files
-            .clone()
+        self.visible_project(self.selected_project_index)
+            .map(|project| project.project_files.clone())
+            .unwrap_or_default()
     }
 
     pub fn selected_project_primary_file(&self) -> &str {
@@ -1180,7 +1514,9 @@ impl AppBackend {
         let discovered_index = self.visible_project_indexes[self.selected_project_index as usize];
         let trimmed = value.trim().to_string();
         {
-            let project = &self.discovered_projects[discovered_index];
+            let Some(project) = self.active_projects().get(discovered_index) else {
+                return;
+            };
             if trimmed.is_empty() || !project_contains_file(project, &trimmed) {
                 return;
             }
@@ -1191,7 +1527,10 @@ impl AppBackend {
 
         let (root_path, project_name);
         {
-            let project = &mut self.discovered_projects[discovered_index];
+            let Some(workspace) = self.active_mut() else {
+                return;
+            };
+            let project = &mut workspace.discovered_projects[discovered_index];
             project.primary_project_file = trimmed.clone();
             root_path = project.root_path.clone();
             project_name = project.name.clone();
@@ -1204,8 +1543,9 @@ impl AppBackend {
             .project_registry
             .save_project_primary_file(&root_path, &trimmed)
         {
-            let project = self.discovered_projects[discovered_index].clone();
-            self.project_registry.save_project(&project);
+            if let Some(project) = self.active_projects().get(discovered_index).cloned() {
+                self.project_registry.save_project(&project);
+            }
         }
 
         self.rebuild_visible_projects();
@@ -1217,7 +1557,7 @@ impl AppBackend {
     }
 
     pub fn projects_folder_layout(&self) -> &'static str {
-        layout_display_name(self.projects_folder_layout)
+        layout_display_name(self.active_layout())
     }
 
     pub fn projects_folder_layout_for_path(&self, folder_path: &str) -> &'static str {
@@ -1241,14 +1581,9 @@ impl AppBackend {
     }
 
     pub fn set_selected_project_note(&mut self, value: &str) {
-        if self.selected_project_index < 0
-            || self.selected_project_index as usize >= self.visible_project_indexes.len()
-        {
+        let Some(project) = self.visible_project(self.selected_project_index) else {
             return;
-        }
-
-        let project = &self.discovered_projects
-            [self.visible_project_indexes[self.selected_project_index as usize]];
+        };
         let root_path = project.root_path.clone();
         let trimmed = value.trim().to_string();
         if self
@@ -1261,7 +1596,10 @@ impl AppBackend {
             return;
         }
 
-        if self.project_registry.save_project_note(&root_path, &trimmed) {
+        if self
+            .project_registry
+            .save_project_note(&root_path, &trimmed)
+        {
             self.project_notes.insert(root_path, trimmed.clone());
             self.selected_project_note = trimmed;
             self.push_event(BackendEvent::SelectedProjectNoteChanged);
@@ -1271,10 +1609,10 @@ impl AppBackend {
     // ---- Folder selection / scanning --------------------------------------
 
     pub fn reselect_projects_folder_layout(&mut self, layout: &str) {
-        if self.projects_folder_root.is_empty() {
+        let root = self.active_root().to_string();
+        if root.is_empty() {
             return;
         }
-        let root = self.projects_folder_root.clone();
         self.confirm_projects_folder(&root, layout);
     }
 
@@ -1284,19 +1622,29 @@ impl AppBackend {
             return;
         }
 
-        let folder_layout = layout_from_display_name(layout);
-        self.append_activity(&format!(
-            "[{}] folder layout set to {} for {}",
-            now_human(),
-            layout_display_name(folder_layout),
-            clean
-        ));
-        if !folder_settings::save_layout(&clean, folder_layout) {
+        // An empty layout means "whatever this folder already says it is":
+        // the type lives in the folder's settings.json, so a folder that has
+        // been set up before is never re-typed (or re-asked about).
+        let saved = folder_settings::load(&clean);
+        let folder_layout = if layout.is_empty() {
+            saved.layout
+        } else {
+            layout_from_display_name(layout)
+        };
+        if folder_layout != saved.layout || !folder_settings::has_layout_setting(&clean) {
             self.append_activity(&format!(
-                "[{}] failed to save projects folder layout under {}",
+                "[{}] folder layout set to {} for {}",
                 now_human(),
+                layout_display_name(folder_layout),
                 clean
             ));
+            if !folder_settings::save_layout(&clean, folder_layout) {
+                self.append_activity(&format!(
+                    "[{}] failed to save projects folder layout under {}",
+                    now_human(),
+                    clean
+                ));
+            }
         }
 
         if self.pending_projects_folder_setup == clean {
@@ -1304,9 +1652,7 @@ impl AppBackend {
             self.push_event(BackendEvent::PendingProjectsFolderSetupChanged);
         }
 
-        self.projects_folder_layout = folder_layout;
-        self.push_event(BackendEvent::ProjectsFolderLayoutChanged);
-        self.load_projects_from_folder(&clean, layout);
+        self.load_projects_from_folder(&clean, layout_display_name(folder_layout));
     }
 
     fn apply_saved_primary_file_overrides(&self, projects: &mut [DiscoveredProject]) {
@@ -1321,6 +1667,8 @@ impl AppBackend {
         }
     }
 
+    /// Adds/updates the folder as a workspace tab, activates it, and queues
+    /// its discovery scan (scans run one at a time on a worker thread).
     pub fn load_projects_from_folder(&mut self, folder_path: &str, layout_override: &str) {
         if folder_path.is_empty() {
             return;
@@ -1331,9 +1679,53 @@ impl AppBackend {
             return;
         }
 
-        if let Some(flag) = &self.scan_cancel_flag {
-            flag.store(true, Ordering::Relaxed);
+        let layout = if !layout_override.is_empty() {
+            layout_from_display_name(layout_override)
+        } else {
+            folder_settings::load_layout(&clean)
+        };
+
+        let (index, added) = match self.workspace_index_by_root(&clean) {
+            Some(i) => (i, false),
+            None => {
+                let mut workspace = FolderWorkspace::new(clean.clone(), layout);
+                // Re-adding a folder restores the session it saved in its own
+                // .immersion/settings.json (tab name, tab colour); the
+                // registry is the fallback for folders saved before that.
+                let saved = folder_settings::load(&clean);
+                workspace.display_name = saved.name.clone();
+                workspace.hue = saved.hue;
+                if workspace.display_name.is_empty() {
+                    let names = self.project_registry.load_projects_folder_names();
+                    if let Some((_, name)) =
+                        names.iter().find(|(path, _)| path_equals(path, &clean))
+                    {
+                        workspace.display_name = name.clone();
+                    }
+                }
+                // A folder with no colour of its own adopts the current one,
+                // so every tab has a remembered colour from the start.
+                if workspace.hue.is_none() {
+                    workspace.hue = Some(self.theme_hue);
+                    folder_settings::save_hue(&clean, self.theme_hue);
+                }
+                self.workspaces.push(workspace);
+                (self.workspaces.len() - 1, true)
+            }
+        };
+        self.workspaces[index].layout = layout;
+        if added {
+            self.persist_projects_folders();
+            self.push_event(BackendEvent::FoldersChanged);
         }
+        if self.active_workspace != index as i32 {
+            self.active_workspace = index as i32;
+            // Re-adding a folder brings its colour back with it.
+            self.apply_active_folder_hue();
+            self.push_event(BackendEvent::ActiveFolderChanged);
+            self.push_event(BackendEvent::ProjectsFolderChanged);
+        }
+        self.push_event(BackendEvent::ProjectsFolderLayoutChanged);
 
         // A stale filter from a previous folder must not hide the new projects.
         if !self.search_text.is_empty() {
@@ -1341,34 +1733,120 @@ impl AppBackend {
             self.push_event(BackendEvent::SearchTextChanged);
         }
 
-        let folder_path_changed = !path_equals(&self.projects_folder_root, &clean);
-        self.projects_folder_root = clean.clone();
-        if !layout_override.is_empty() {
-            self.projects_folder_layout = layout_from_display_name(layout_override);
-        } else {
-            self.projects_folder_layout = folder_settings::load_layout(&clean);
+        self.log_config_change(&format!("projects folder set to {clean}"));
+        self.queue_scan(&clean);
+    }
+
+    fn queue_scan(&mut self, folder: &str) {
+        let scan_in_flight = !self.active_scan_folder.is_empty();
+        if scan_in_flight && path_equals(&self.active_scan_folder, folder) {
+            // Restart the in-flight scan of this same folder (e.g. a layout
+            // change while scanning).
+            if let Some(flag) = &self.scan_cancel_flag {
+                flag.store(true, Ordering::Relaxed);
+            }
+            self.begin_scan(folder.to_string());
+            return;
         }
+        if scan_in_flight {
+            if !self.scan_queue.iter().any(|q| path_equals(q, folder)) {
+                self.scan_queue.push(folder.to_string());
+                self.push_event(BackendEvent::FoldersChanged);
+                self.push_event(BackendEvent::IsScanningProjectsChanged);
+            }
+            return;
+        }
+        self.begin_scan(folder.to_string());
+    }
+
+    fn start_next_queued_scan(&mut self) {
+        self.active_scan_folder.clear();
+        self.active_scan_started_at = None;
+        self.scan_cancel_flag = None;
+        while !self.scan_queue.is_empty() {
+            let next = self.scan_queue.remove(0);
+            if self.workspace_index_by_root(&next).is_some() {
+                self.begin_scan(next);
+                return;
+            }
+        }
+        self.push_event(BackendEvent::IsScanningProjectsChanged);
+        self.push_event(BackendEvent::FoldersChanged);
+    }
+
+    /// Makes the active folder's pending scan the one that actually runs. A
+    /// folder on an unresponsive share can hold the single scan slot for
+    /// minutes; the tab the user just opened should not wait behind it.
+    fn prioritize_active_folder_scan(&mut self) {
+        let Some(root) = self.active().map(|w| w.root.clone()) else {
+            return;
+        };
+        if path_equals(&self.active_scan_folder, &root) {
+            return;
+        }
+        let Some(position) = self.scan_queue.iter().position(|q| path_equals(q, &root)) else {
+            return;
+        };
+        // A local scan finishes in well under a second; let it, rather than
+        // restarting scans every time the user flicks between tabs.
+        if !self.active_scan_folder.is_empty()
+            && self
+                .active_scan_started_at
+                .is_some_and(|started| started.elapsed() < Duration::from_millis(750))
+        {
+            return;
+        }
+        let queued = self.scan_queue.remove(position);
+
+        if !self.active_scan_folder.is_empty() {
+            // Park the background scan at the head of the queue and drop its
+            // results; its generation is stale from here on.
+            let preempted = self.active_scan_folder.clone();
+            if let Some(flag) = &self.scan_cancel_flag {
+                flag.store(true, Ordering::Relaxed);
+            }
+            if let Some(index) = self.workspace_index_by_root(&preempted) {
+                self.workspaces[index].scanning = false;
+                self.workspaces[index].scan_progress.clear();
+            }
+            self.append_activity(&format!(
+                "[{}] project scan deferred: {} (switched to {})",
+                now_human(),
+                preempted,
+                root
+            ));
+            self.scan_queue.insert(0, preempted);
+        }
+        self.begin_scan(queued);
+    }
+
+    fn begin_scan(&mut self, clean: String) {
+        let Some(index) = self.workspace_index_by_root(&clean) else {
+            return;
+        };
+        let layout = self.workspaces[index].layout;
+
         self.active_scan_folder = clean.clone();
+        self.active_scan_started_at = Some(Instant::now());
         self.active_scan_generation += 1;
         let scan_generation = self.active_scan_generation;
-        if folder_path_changed {
-            self.push_event(BackendEvent::ProjectsFolderChanged);
-        }
-        self.push_event(BackendEvent::ProjectsFolderLayoutChanged);
-        self.log_config_change(&format!("projects folder set to {clean}"));
         self.last_scan_status_directories = 0;
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.scan_cancel_flag = Some(cancel_flag.clone());
 
-        self.stop_monitoring();
-        self.discovered_projects.clear();
-        self.rebuild_visible_projects();
-
-        if !self.is_scanning_projects {
-            self.set_scanning_projects(true);
+        self.stop_monitoring_for_folder(&clean);
+        // The previous results stay on screen until this scan delivers its
+        // own: clearing up front leaves the tab blank for as long as the scan
+        // takes, which on a network share can be forever.
+        self.workspaces[index].scanning = true;
+        self.workspaces[index].scan_progress.clear();
+        if index as i32 == self.active_workspace {
+            self.rebuild_visible_projects();
         }
-        self.status_message = format!("Scanning {clean} for projects...");
-        self.push_event(BackendEvent::StatusMessageChanged);
+        self.push_event(BackendEvent::IsScanningProjectsChanged);
+        self.push_event(BackendEvent::FoldersChanged);
+
+        self.set_status_for_folder(&clean, format!("Scanning {clean} for projects..."));
         self.append_activity(&format!(
             "[{}] project scan started: {}",
             now_human(),
@@ -1377,7 +1855,6 @@ impl AppBackend {
 
         // Discovery worker thread (ProjectDiscoveryScanWorker::scan port).
         let tx = self.msg_tx.clone();
-        let layout = self.projects_folder_layout;
         std::thread::Builder::new()
             .name("musit-discovery".to_string())
             .spawn(move || {
@@ -1431,25 +1908,23 @@ impl AppBackend {
             flag.store(true, Ordering::Relaxed);
         }
 
-        if !self.is_scanning_projects {
+        if self.active_scan_folder.is_empty() {
             return;
         }
 
         let folder = self.active_scan_folder.clone();
+        if let Some(index) = self.workspace_index_by_root(&folder) {
+            self.workspaces[index].scanning = false;
+            self.workspaces[index].scan_progress.clear();
+        }
         self.append_activity(&format!(
             "[{}] project scan cancelled: {}",
             now_human(),
             folder
         ));
-        self.set_scanning_projects(false);
-    }
-
-    fn set_scanning_projects(&mut self, scanning: bool) {
-        if self.is_scanning_projects == scanning {
-            return;
-        }
-        self.is_scanning_projects = scanning;
         self.push_event(BackendEvent::IsScanningProjectsChanged);
+        self.push_event(BackendEvent::FoldersChanged);
+        self.start_next_queued_scan();
     }
 
     fn handle_project_scan_directory(&mut self, directory_path: &str, directories_scanned: i32) {
@@ -1459,17 +1934,18 @@ impl AppBackend {
             directory_path
         ));
 
-        if !self.is_scanning_projects {
+        if self.active_scan_folder.is_empty() {
             return;
         }
 
         self.last_scan_status_directories = directories_scanned;
         if directories_scanned == 1 || directories_scanned % 25 == 0 {
-            self.status_message = format!(
-                "Scanning {} ({} folders)...",
-                self.active_scan_folder, directories_scanned
+            let folder = self.active_scan_folder.clone();
+            self.set_scan_progress_for_folder(&folder, format!("{directories_scanned} folders"));
+            self.set_status_for_folder(
+                &folder,
+                format!("Scanning {folder} ({directories_scanned} folders)..."),
             );
-            self.push_event(BackendEvent::StatusMessageChanged);
         }
     }
 
@@ -1484,33 +1960,51 @@ impl AppBackend {
             return;
         }
 
-        if !path_equals(folder_path, &self.active_scan_folder) || !self.is_scanning_projects {
+        let Some(index) = self.workspace_index_by_root(folder_path) else {
+            return;
+        };
+        if !path_equals(folder_path, &self.active_scan_folder) || !self.workspaces[index].scanning {
             return;
         }
 
+        // Partials are cumulative, so an empty one says nothing — don't let it
+        // wipe the results this tab is currently showing.
         let partial_count = partial_projects.len();
-        self.apply_discovered_projects(partial_projects);
+        if partial_count > 0 || self.workspaces[index].discovered_projects.is_empty() {
+            self.apply_discovered_projects(index, partial_projects);
+        }
 
         self.last_scan_status_directories = directories_scanned;
-        self.status_message = if partial_count == 0 {
-            format!(
-                "Scanning {} ({} folders)...",
-                self.active_scan_folder, directories_scanned
-            )
+        let folder = self.active_scan_folder.clone();
+        self.set_scan_progress_for_folder(
+            &folder,
+            if partial_count == 0 {
+                format!("{directories_scanned} folders")
+            } else {
+                format!("{partial_count} found")
+            },
+        );
+        let message = if partial_count == 0 {
+            format!("Scanning {folder} ({directories_scanned} folders)...")
         } else {
             format!(
-                "Scanning {} ({} folders, {} projects)...",
-                self.active_scan_folder, directories_scanned, partial_count
+                "Scanning {folder} ({directories_scanned} folders, {partial_count} projects)..."
             )
         };
-        self.push_event(BackendEvent::StatusMessageChanged);
+        self.set_status_for_folder(&folder, message);
     }
 
-    fn apply_discovered_projects(&mut self, projects: Vec<DiscoveredProject>) {
+    fn apply_discovered_projects(
+        &mut self,
+        workspace_index: usize,
+        projects: Vec<DiscoveredProject>,
+    ) {
         let mut merged = projects;
         self.apply_saved_primary_file_overrides(&mut merged);
-        self.discovered_projects = merged;
-        self.rebuild_visible_projects();
+        self.workspaces[workspace_index].discovered_projects = merged;
+        if workspace_index as i32 == self.active_workspace {
+            self.rebuild_visible_projects();
+        }
     }
 
     fn handle_project_scan_completed(
@@ -1537,7 +2031,6 @@ impl AppBackend {
             return;
         }
 
-        self.set_scanning_projects(false);
         self.append_activity(&format!(
             "[{}] project scan finished: {} folders in {} ms ({} projects)",
             now_human(),
@@ -1547,27 +2040,40 @@ impl AppBackend {
         ));
 
         self.finish_loading_projects(projects, folder_path.to_string());
+        self.start_next_queued_scan();
     }
 
     fn finish_loading_projects(&mut self, projects: Vec<DiscoveredProject>, clean_path: String) {
-        self.apply_discovered_projects(projects);
-        if self.discovered_projects.is_empty() {
-            self.stop_monitoring();
-            self.status_message = "No supported project files found.".to_string();
-            self.push_event(BackendEvent::StatusMessageChanged);
+        let Some(workspace_index) = self.workspace_index_by_root(&clean_path) else {
+            return;
+        };
+        self.workspaces[workspace_index].scanning = false;
+        self.workspaces[workspace_index].scan_progress.clear();
+        self.push_event(BackendEvent::IsScanningProjectsChanged);
+        self.push_event(BackendEvent::FoldersChanged);
+        self.apply_discovered_projects(workspace_index, projects);
+
+        let project_count = self.workspaces[workspace_index].discovered_projects.len();
+        if project_count == 0 {
+            self.stop_monitoring_for_folder(&clean_path);
+            self.set_status_for_folder(
+                &clean_path,
+                "No supported project files found.".to_string(),
+            );
             self.append_activity(&format!(
                 "[{}] first-day setup found no project files under {}",
                 now_human(),
                 clean_path
             ));
-            self.push_event(BackendEvent::ProjectsFolderScanFinished(false));
+            self.push_event(BackendEvent::ProjectsFolderScanFinished {
+                folder: clean_path.clone(),
+                found_projects: false,
+            });
             return;
         }
 
-        self.project_registry.save_projects_folder(&clean_path);
-        self.project_notes.clear();
-        self.project_primary_files.clear();
-        for project in self.discovered_projects.clone() {
+        self.persist_projects_folders();
+        for project in self.workspaces[workspace_index].discovered_projects.clone() {
             self.project_registry.save_project(&project);
             self.project_notes.insert(
                 project.root_path.clone(),
@@ -1579,21 +2085,23 @@ impl AppBackend {
             );
         }
 
-        self.status_message = format!(
-            "First-time setup complete. Found {} project folders.",
-            self.discovered_projects.len()
+        self.set_status_for_folder(
+            &clean_path,
+            format!("Found {project_count} project folders."),
         );
-        self.push_event(BackendEvent::StatusMessageChanged);
 
         self.append_activity(&format!(
             "[{}] discovered {} projects from {}",
             now_human(),
-            self.discovered_projects.len(),
+            project_count,
             clean_path
         ));
 
-        self.start_monitoring();
-        self.push_event(BackendEvent::ProjectsFolderScanFinished(true));
+        self.start_monitoring_for_folder(&clean_path);
+        self.push_event(BackendEvent::ProjectsFolderScanFinished {
+            folder: clean_path.clone(),
+            found_projects: true,
+        });
     }
 
     // ---- Opening / selecting ----------------------------------------------
@@ -1605,8 +2113,9 @@ impl AppBackend {
 
         self.set_selected_project_index(visible_index);
 
-        let project =
-            self.discovered_projects[self.visible_project_indexes[visible_index as usize]].clone();
+        let Some(project) = self.visible_project(visible_index).cloned() else {
+            return;
+        };
         if project.primary_project_file.is_empty() {
             self.append_activity(&format!(
                 "[{}] open failed: no project file selected",
@@ -1662,11 +2171,7 @@ impl AppBackend {
 
         self.last_opened_at_by_project_root
             .insert(path_key(&project.root_path), SystemTime::now());
-        self.append_activity(&format!(
-            "[{}] opened {}",
-            now_human(),
-            project_file_path
-        ));
+        self.append_activity(&format!("[{}] opened {}", now_human(), project_file_path));
 
         if self.sort_mode == SortMode::LastOpened {
             self.rebuild_visible_projects();
@@ -1682,16 +2187,49 @@ impl AppBackend {
 
     // ---- Versions -----------------------------------------------------------
 
+    /// SHA-256 of a file, reused from cache while (mtime, len) is unchanged.
+    fn cached_file_sha256(&self, path: &str) -> String {
+        let Ok(meta) = fs::metadata(path) else {
+            return String::new();
+        };
+        let stamp = (meta.modified().ok(), meta.len());
+        if let Some((cached_stamp, hash)) = self.file_hash_cache.borrow().get(path) {
+            if *cached_stamp == stamp {
+                return hash.clone();
+            }
+        }
+        let hash = sha256_file_hex(path);
+        self.file_hash_cache
+            .borrow_mut()
+            .insert(path.to_string(), (stamp, hash.clone()));
+        hash
+    }
+
     pub fn get_project_versions(&self, visible_index: i32) -> Vec<VersionEntry> {
-        if visible_index < 0 || visible_index as usize >= self.visible_project_indexes.len() {
+        let Some(project) = self.visible_project(visible_index) else {
             return Vec::new();
+        };
+        let log_path = join_path(&project.root_path, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
+        let mut versions = self.parsed_versions_for(&log_path, &project.primary_project_file);
+        self.mark_current_version(project, &mut versions);
+        versions
+    }
+
+    /// Parses one project's version entries from its log, cached against the
+    /// log file's (mtime, len) so unchanged logs cost two stat calls.
+    fn parsed_versions_for(&self, log_path: &str, primary_file: &str) -> Vec<VersionEntry> {
+        let Ok(meta) = fs::metadata(log_path) else {
+            return Vec::new();
+        };
+        let stamp = (meta.modified().ok(), meta.len());
+        let cache_key = format!("{log_path}\u{0}{primary_file}");
+        if let Some((cached_stamp, cached)) = self.parsed_log_cache.borrow().get(&cache_key) {
+            if *cached_stamp == stamp {
+                return cached.clone();
+            }
         }
 
-        let project =
-            &self.discovered_projects[self.visible_project_indexes[visible_index as usize]];
-        let log_path = join_path(&project.root_path, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
-
-        let Some(raw_lines) = read_log_raw_lines(&log_path) else {
+        let Some(raw_lines) = read_log_raw_lines(log_path) else {
             return Vec::new();
         };
 
@@ -1708,8 +2246,7 @@ impl AppBackend {
             };
 
             let staged_path = json_str(&obj, "staged");
-            if !artifact_equals(&artifact_of_log_line(&obj), &project.primary_project_file)
-                || staged_path.is_empty()
+            if !artifact_equals(&artifact_of_log_line(&obj), primary_file) || staged_path.is_empty()
             {
                 continue;
             }
@@ -1749,12 +2286,18 @@ impl AppBackend {
             versions.push(version);
         }
 
-        // A version is "current" when every file it captured matches what is
-        // on disk right now (by object hash, or by content against the
-        // staged copy).
+        self.parsed_log_cache
+            .borrow_mut()
+            .insert(cache_key, (stamp, versions.clone()));
+        versions
+    }
+
+    /// A version is "current" when every file it captured matches what is
+    /// on disk right now (by object hash, or by content against the staged
+    /// copy). Disk hashes come from the (mtime, len)-validated cache.
+    fn mark_current_version(&self, project: &DiscoveredProject, versions: &mut [VersionEntry]) {
         let mut current_version_id = String::new();
-        let mut disk_hash_by_path: HashMap<String, String> = HashMap::new();
-        for version in &versions {
+        for version in versions.iter() {
             let mut all_match = !version.files.is_empty();
             for file_entry in &version.files {
                 let disk_path = join_path(&project.root_path, &file_entry.path);
@@ -1763,10 +2306,7 @@ impl AppBackend {
                     break;
                 }
 
-                let disk_hash = disk_hash_by_path
-                    .entry(disk_path.clone())
-                    .or_insert_with(|| sha256_file_hex(&disk_path))
-                    .clone();
+                let disk_hash = self.cached_file_sha256(&disk_path);
 
                 let mut matches = false;
                 if !disk_hash.is_empty() && !file_entry.object_hash.is_empty() {
@@ -1798,12 +2338,10 @@ impl AppBackend {
         // current. Claiming the latest one is current would mislead the user
         // into believing their working state is already versioned.
         if !current_version_id.is_empty() {
-            for version in &mut versions {
+            for version in versions.iter_mut() {
                 version.is_current = version.id == current_version_id;
             }
         }
-
-        versions
     }
 
     pub fn selected_project_version_graph(&self) -> Vec<VersionGraphNode> {
@@ -1839,7 +2377,10 @@ impl AppBackend {
                 parent_id.clear();
             }
             resolved_parent.insert(id.clone(), parent_id.clone());
-            children_by_parent.entry(parent_id).or_default().push(id.clone());
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(id.clone());
         }
 
         let mut graph: Vec<VersionGraphNode> = Vec::new();
@@ -1907,16 +2448,12 @@ impl AppBackend {
     // ---- Restore / notes / delete -------------------------------------------
 
     pub fn restore_version_by_id(&mut self, version_id_str: &str) -> bool {
-        if self.selected_project_index < 0
-            || self.selected_project_index as usize >= self.visible_project_indexes.len()
-            || version_id_str.is_empty()
-        {
+        if version_id_str.is_empty() {
             return false;
         }
-
-        let project = self.discovered_projects
-            [self.visible_project_indexes[self.selected_project_index as usize]]
-            .clone();
+        let Some(project) = self.visible_project(self.selected_project_index).cloned() else {
+            return false;
+        };
         let artifact_path = join_path(&project.root_path, &project.primary_project_file);
 
         // If the on-disk state matches no snapshot (e.g. the watcher has not
@@ -2067,15 +2604,12 @@ impl AppBackend {
     }
 
     pub fn save_version_note(&mut self, version_id_str: &str, note: &str) -> bool {
-        if self.selected_project_index < 0
-            || self.selected_project_index as usize >= self.visible_project_indexes.len()
-            || version_id_str.is_empty()
-        {
+        if version_id_str.is_empty() {
             return false;
         }
-
-        let project = &self.discovered_projects
-            [self.visible_project_indexes[self.selected_project_index as usize]];
+        let Some(project) = self.visible_project(self.selected_project_index).cloned() else {
+            return false;
+        };
         let log_path = join_path(&project.root_path, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
 
         let Some(mut lines) = read_log_raw_lines(&log_path) else {
@@ -2142,16 +2676,12 @@ impl AppBackend {
     }
 
     pub fn delete_version_by_id(&mut self, version_id_str: &str) -> bool {
-        if self.selected_project_index < 0
-            || self.selected_project_index as usize >= self.visible_project_indexes.len()
-            || version_id_str.is_empty()
-        {
+        if version_id_str.is_empty() {
             return false;
         }
-
-        let project = self.discovered_projects
-            [self.visible_project_indexes[self.selected_project_index as usize]]
-            .clone();
+        let Some(project) = self.visible_project(self.selected_project_index).cloned() else {
+            return false;
+        };
         let log_path = join_path(&project.root_path, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
 
         let Some(original_lines) = read_log_raw_lines(&log_path) else {
@@ -2302,12 +2832,12 @@ impl AppBackend {
             (self.platform.set_launch_at_startup)(false);
         }
 
-        self.projects_folder_root.clear();
+        self.workspaces.clear();
+        self.active_workspace = -1;
+        self.scan_queue.clear();
         self.pending_projects_folder_setup.clear();
-        self.projects_folder_layout = ProjectsFolderLayout::Bundles;
         self.active_scan_folder.clear();
         self.project_root.clear();
-        self.discovered_projects.clear();
         self.visible_project_indexes.clear();
         self.projects.clear();
         self.activity_all.clear();
@@ -2320,7 +2850,6 @@ impl AppBackend {
         self.project_notes.clear();
         self.project_primary_files.clear();
         self.last_opened_at_by_project_root.clear();
-        self.is_scanning_projects = false;
 
         self.theme_hue = 280.0;
         self.theme_hue_persist_deadline = None;
@@ -2347,6 +2876,8 @@ impl AppBackend {
             BackendEvent::SelectedProjectVersionGraphChanged,
             BackendEvent::ProjectsFolderLayoutChanged,
             BackendEvent::PendingProjectsFolderSetupChanged,
+            BackendEvent::FoldersChanged,
+            BackendEvent::ActiveFolderChanged,
             BackendEvent::ThemeHueChanged,
             BackendEvent::SortModeChanged,
             BackendEvent::LogLevelChanged,
@@ -2416,23 +2947,32 @@ impl AppBackend {
             return;
         }
         self.theme_hue_persist_deadline = None;
-        self.persist_app_settings();
+        self.persist_theme_hue();
     }
 
     fn append_activity_with_level(&mut self, line: &str, level: LogLevel) {
         self.activity_all.push(line.to_string());
         self.activity_levels.push(level);
-        self.trim_activity_log();
-        self.rebuild_visible_activity();
+        let trimmed = self.trim_activity_log();
+        let visible = !(self.log_level == LogLevel::Info && level == LogLevel::Debug);
+        if trimmed {
+            self.rebuild_visible_activity();
+        } else if visible {
+            // Append incrementally instead of re-cloning the filtered list.
+            self.activity.push(line.to_string());
+            self.push_event(BackendEvent::ActivityChanged);
+        }
+        // A filtered-out debug line changes nothing user-visible: no event,
+        // so idle watcher chatter doesn't force re-renders.
     }
 
     fn log_config_change(&mut self, detail: &str) {
         self.append_debug_activity(&format!("[{}] config: {}", now_human(), detail));
     }
 
-    fn trim_activity_log(&mut self) {
+    fn trim_activity_log(&mut self) -> bool {
         if self.activity_all.len() <= MAX_ACTIVITY_LINES {
-            return;
+            return false;
         }
 
         let excess = self.activity_all.len() - MAX_ACTIVITY_LINES;
@@ -2442,6 +2982,7 @@ impl AppBackend {
         } else {
             self.activity_levels.clear();
         }
+        true
     }
 
     fn append_activity(&mut self, line: &str) {
@@ -2478,22 +3019,17 @@ impl AppBackend {
         if app_data_dir.is_empty() {
             issues.push("Could not resolve app config directory.".to_string());
         } else if fs::create_dir_all(&app_data_dir).is_err() {
-            issues.push(format!(
-                "Could not create config directory: {app_data_dir}"
-            ));
+            issues.push(format!("Could not create config directory: {app_data_dir}"));
         } else {
             let probe_path = join_path(&app_data_dir, ".musit_write_probe");
             if fs::write(&probe_path, b"ok").is_err() {
-                issues.push(format!(
-                    "Config directory is not writable: {app_data_dir}"
-                ));
+                issues.push(format!("Config directory is not writable: {app_data_dir}"));
             } else {
                 let _ = fs::remove_file(&probe_path);
             }
         }
 
-        let saved_folder = self.project_registry.load_projects_folder();
-        if !saved_folder.is_empty() {
+        for saved_folder in self.project_registry.load_projects_folders() {
             if !Path::new(&saved_folder).is_dir() {
                 issues.push(format!(
                     "Saved projects folder no longer exists: {saved_folder}"
@@ -2505,9 +3041,7 @@ impl AppBackend {
                 // storage can be created on first snapshot.
                 let probe_path = join_path(&saved_folder, ".musit_write_probe");
                 if fs::write(&probe_path, b"ok").is_err() {
-                    issues.push(format!(
-                        ".musit storage is not writable in: {saved_folder}"
-                    ));
+                    issues.push(format!(".musit storage is not writable in: {saved_folder}"));
                 } else {
                     let _ = fs::remove_file(&probe_path);
                 }
@@ -2567,8 +3101,9 @@ impl AppBackend {
     fn rebuild_visible_projects(&mut self) {
         let query = self.search_text.trim().to_lowercase();
 
-        let mut visible: Vec<usize> = Vec::with_capacity(self.discovered_projects.len());
-        for (i, project) in self.discovered_projects.iter().enumerate() {
+        let projects: Vec<DiscoveredProject> = self.active_projects().to_vec();
+        let mut visible: Vec<usize> = Vec::with_capacity(projects.len());
+        for (i, project) in projects.iter().enumerate() {
             if !query.is_empty() {
                 let haystack = format!(
                     "{} {} {} {}",
@@ -2586,15 +3121,28 @@ impl AppBackend {
         }
 
         let sort_mode = self.sort_mode;
-        let is_scanning = self.is_scanning_projects;
+        let is_scanning = self.is_scanning_projects();
+        // Decorate-sort-undecorate: one stat per project instead of
+        // O(n log n) stats inside the comparator; the display pass below
+        // reuses the same values.
+        let opened_display: Vec<Option<SystemTime>> = projects
+            .iter()
+            .map(|project| self.effective_last_opened(project, true))
+            .collect();
+        let opened_sort: Vec<Option<SystemTime>> = if is_scanning {
+            projects
+                .iter()
+                .map(|project| self.effective_last_opened(project, false))
+                .collect()
+        } else {
+            opened_display.clone()
+        };
         visible.sort_by(|&left, &right| {
-            let l = &self.discovered_projects[left];
-            let r = &self.discovered_projects[right];
+            let l = &projects[left];
+            let r = &projects[right];
 
             if sort_mode == SortMode::LastOpened {
-                let l_opened = self.effective_last_opened(l, !is_scanning);
-                let r_opened = self.effective_last_opened(r, !is_scanning);
-                match (l_opened, r_opened) {
+                match (opened_sort[left], opened_sort[right]) {
                     (Some(_), None) => return std::cmp::Ordering::Less,
                     (None, Some(_)) => return std::cmp::Ordering::Greater,
                     (Some(lo), Some(ro)) if lo != ro => return ro.cmp(&lo),
@@ -2617,10 +3165,7 @@ impl AppBackend {
         if !self.project_root.is_empty() {
             let mut new_index = -1i32;
             for (i, &discovered_index) in self.visible_project_indexes.iter().enumerate() {
-                if path_equals(
-                    &self.discovered_projects[discovered_index].root_path,
-                    &self.project_root,
-                ) {
+                if path_equals(&projects[discovered_index].root_path, &self.project_root) {
                     new_index = i as i32;
                     break;
                 }
@@ -2637,8 +3182,8 @@ impl AppBackend {
         let mut items: Vec<ProjectListItem> =
             Vec::with_capacity(self.visible_project_indexes.len());
         for &index in &self.visible_project_indexes {
-            let project = &self.discovered_projects[index];
-            let effective_last_opened = self.effective_last_opened(project, true);
+            let project = &projects[index];
+            let effective_last_opened = opened_display[index];
             let parent = parent_path(&project.root_path);
             items.push(ProjectListItem {
                 name: project.name.clone(),
@@ -2659,22 +3204,71 @@ impl AppBackend {
 
     // ---- Monitoring ------------------------------------------------------------
 
-    /// startMonitoringDeferred: queues per-project init, advanced in
-    /// time-sliced batches from `process_pending` (advanceMonitoringInit).
-    fn start_monitoring(&mut self) {
-        if self.projects_folder_root.is_empty() || self.discovered_projects.is_empty() {
+    /// startMonitoringDeferred for one folder: queues per-project init,
+    /// advanced in time-sliced batches from `process_pending`.
+    fn start_monitoring_for_folder(&mut self, folder_root: &str) {
+        let Some(index) = self.workspace_index_by_root(folder_root) else {
+            return;
+        };
+        if self.workspaces[index].discovered_projects.is_empty() {
             return;
         }
 
-        if let Some(watcher) = self.file_watcher.take() {
+        if let Some(watcher) = self.workspaces[index].watcher.take() {
             watcher.stop_watching();
         }
-        self.snapshot_service_by_root.clear();
-        self.canonical_root_by_key.clear();
+        self.drop_services_under(folder_root);
 
-        self.monitoring_init_queue = self.discovered_projects.iter().cloned().collect();
-        self.monitoring_init_total = self.monitoring_init_queue.len();
+        let root = self.workspaces[index].root.clone();
+        let projects = self.workspaces[index].discovered_projects.clone();
+        self.monitoring_init_total += projects.len();
+        if index as i32 == self.active_workspace {
+            // The folder on screen goes to the head of the line: its versioning
+            // must come up first even if a background folder queued hundreds of
+            // projects on a slow share.
+            for project in projects.into_iter().rev() {
+                self.monitoring_init_queue
+                    .push_front((root.clone(), project));
+            }
+        } else {
+            for project in projects {
+                self.monitoring_init_queue
+                    .push_back((root.clone(), project));
+            }
+        }
         self.advance_monitoring_init();
+    }
+
+    /// Moves the active folder's pending init items to the front of the queue.
+    fn prioritize_active_folder_monitoring(&mut self) {
+        let Some(root) = self.active().map(|w| w.root.clone()) else {
+            return;
+        };
+        if !self
+            .monitoring_init_queue
+            .iter()
+            .any(|(folder, _)| path_equals(folder, &root))
+        {
+            return;
+        }
+        let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut self.monitoring_init_queue)
+            .into_iter()
+            .partition(|(folder, _)| path_equals(folder, &root));
+        self.monitoring_init_queue = mine.into_iter().chain(others).collect();
+    }
+
+    /// Removes the snapshot services of every project under `folder_root`.
+    fn drop_services_under(&mut self, folder_root: &str) {
+        let doomed: Vec<String> = self
+            .canonical_root_by_key
+            .iter()
+            .filter(|(_, root)| path_is_under_root(root, folder_root))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in doomed {
+            self.snapshot_service_by_root.remove(&key);
+            self.canonical_root_by_key.remove(&key);
+        }
     }
 
     /// Initializes queued projects for up to ~30ms, then yields so the UI
@@ -2684,26 +3278,65 @@ impl AppBackend {
             return;
         }
         let budget = Duration::from_millis(30);
-        let started = Instant::now();
-        while let Some(project) = self.monitoring_init_queue.pop_front() {
-            let done = self.monitoring_init_total - self.monitoring_init_queue.len();
-            self.status_message = format!(
-                "Initializing versioning ({}/{})...",
-                done, self.monitoring_init_total
+        let now = Instant::now();
+        if self
+            .monitoring_init_resume_at
+            .is_some_and(|resume_at| resume_at > now)
+        {
+            return;
+        }
+        self.monitoring_init_resume_at = None;
+
+        let started = now;
+        while let Some((folder_root, project)) = self.monitoring_init_queue.pop_front() {
+            self.monitoring_init_done += 1;
+            let done = self.monitoring_init_done;
+            let total = self.monitoring_init_total.max(done);
+            self.set_status_for_folder(
+                &folder_root,
+                format!("Initializing versioning ({done}/{total})..."),
             );
-            self.push_event(BackendEvent::StatusMessageChanged);
-            self.init_monitoring_for_project(&project);
+            self.init_monitoring_for_project(&folder_root, &project);
+
+            // A folder is watchable as soon as *its* projects are initialized —
+            // waiting for the whole queue would leave healthy folders unwatched
+            // behind one that is crawling over the network.
+            if !self
+                .monitoring_init_queue
+                .iter()
+                .any(|(root, _)| path_equals(root, &folder_root))
+            {
+                self.start_watcher_for_folder(&folder_root);
+            }
+
             if started.elapsed() >= budget && !self.monitoring_init_queue.is_empty() {
+                // Yield for as long as we overran, so one very slow project
+                // costs the UI at most half of its frames rather than all.
+                let overrun = started.elapsed().saturating_sub(budget);
+                if overrun > Duration::from_millis(1) {
+                    self.monitoring_init_resume_at =
+                        Some(Instant::now() + overrun.min(Duration::from_millis(250)));
+                }
                 return;
             }
         }
         self.monitoring_init_total = 0;
-        self.start_file_watcher_if_ready();
+        self.monitoring_init_done = 0;
+        self.monitoring_init_resume_at = None;
+        self.start_watchers_when_ready();
     }
 
-    fn init_monitoring_for_project(&mut self, project: &DiscoveredProject) -> bool {
-        let mut ancestor_roots: Vec<String> = vec![self.projects_folder_root.clone()];
-        for candidate in &self.discovered_projects {
+    fn init_monitoring_for_project(
+        &mut self,
+        folder_root: &str,
+        project: &DiscoveredProject,
+    ) -> bool {
+        let folder_projects: Vec<DiscoveredProject> = self
+            .workspace_index_by_root(folder_root)
+            .map(|i| self.workspaces[i].discovered_projects.clone())
+            .unwrap_or_default();
+        let mut ancestor_roots: Vec<String> = vec![folder_root.to_string()];
+        for candidate in &folder_projects {
             if !path_equals(&candidate.root_path, &project.root_path)
                 && path_is_under_root(&project.root_path, &candidate.root_path)
             {
@@ -2782,56 +3415,117 @@ impl AppBackend {
         true
     }
 
-    fn start_file_watcher_if_ready(&mut self) {
-        if self.snapshot_service_by_root.is_empty() {
-            self.status_message = "Failed to initialize versioning".to_string();
-            self.push_event(BackendEvent::StatusMessageChanged);
+    /// Starts a watcher for every workspace that has monitored projects but
+    /// no watcher yet (called when the init queue drains).
+    fn start_watchers_when_ready(&mut self) {
+        let roots: Vec<String> = self
+            .workspaces
+            .iter()
+            .filter(|w| w.watcher.is_none() && !w.discovered_projects.is_empty())
+            .map(|w| w.root.clone())
+            .collect();
+        for root in roots {
+            self.start_watcher_for_folder(&root);
+        }
+    }
+
+    fn start_watcher_for_folder(&mut self, folder_root: &str) {
+        if self
+            .workspace_index_by_root(folder_root)
+            .is_none_or(|index| self.workspaces[index].watcher.is_some())
+        {
+            return;
+        }
+        let has_services = self
+            .canonical_root_by_key
+            .values()
+            .any(|root| path_is_under_root(root, folder_root));
+        if !has_services {
+            self.set_status_for_folder(folder_root, "Failed to initialize versioning".to_string());
+            self.append_activity(&format!(
+                "[{}] versioning could not be initialized for {}",
+                now_human(),
+                folder_root
+            ));
             return;
         }
 
         let event_tx = self.msg_tx.clone();
         let log_tx = self.msg_tx.clone();
+        let watch_root = folder_root.to_string();
         let watcher = HybridFileWatcher::new(
             move |event| {
-                let _ = event_tx.send(BackendMsg::WatcherEvent(event));
-            },
-            Some(Box::new(move |scan_kind, root_path, item_count, elapsed| {
-                let _ = log_tx.send(BackendMsg::WatcherScanLog {
-                    scan_kind: scan_kind.to_string(),
-                    root_path: root_path.to_string(),
-                    item_count,
-                    elapsed_ms: elapsed,
+                let _ = event_tx.send(BackendMsg::WatcherEvent {
+                    watch_root: watch_root.clone(),
+                    event,
                 });
-            })),
+            },
+            Some(Box::new(
+                move |scan_kind, root_path, item_count, elapsed| {
+                    let _ = log_tx.send(BackendMsg::WatcherScanLog {
+                        scan_kind: scan_kind.to_string(),
+                        root_path: root_path.to_string(),
+                        item_count,
+                        elapsed_ms: elapsed,
+                    });
+                },
+            )),
         );
 
-        if !watcher.start_watching(&self.projects_folder_root) {
-            self.status_message = "Failed to start watcher".to_string();
-            self.push_event(BackendEvent::StatusMessageChanged);
-            self.snapshot_service_by_root.clear();
-            self.canonical_root_by_key.clear();
+        if !watcher.start_watching(folder_root) {
+            self.set_status_for_folder(folder_root, "Failed to start watcher".to_string());
+            self.append_activity(&format!(
+                "[{}] failed to start watcher for {}",
+                now_human(),
+                folder_root
+            ));
+            self.drop_services_under(folder_root);
             return;
         }
-        self.file_watcher = Some(watcher);
+        if let Some(index) = self.workspace_index_by_root(folder_root) {
+            self.workspaces[index].watcher = Some(watcher);
+        }
 
-        self.status_message = format!("Monitoring: {}", self.projects_folder_root);
-        self.push_event(BackendEvent::StatusMessageChanged);
+        self.set_status_for_folder(folder_root, format!("Monitoring: {folder_root}"));
 
-        let folder = self.projects_folder_root.clone();
         self.append_activity(&format!(
             "[{}] monitoring started for {}",
             Local::now().format("%Y-%m-%dT%H:%M:%S"),
-            folder
+            folder_root
         ));
     }
 
+    fn stop_monitoring_for_folder(&mut self, folder_root: &str) {
+        if let Some(index) = self.workspace_index_by_root(folder_root) {
+            if let Some(watcher) = self.workspaces[index].watcher.take() {
+                watcher.stop_watching();
+            }
+        }
+        let before = self.monitoring_init_queue.len();
+        self.monitoring_init_queue
+            .retain(|(root, _)| !path_equals(root, folder_root));
+        self.monitoring_init_total = self
+            .monitoring_init_total
+            .saturating_sub(before - self.monitoring_init_queue.len());
+        if self.monitoring_init_queue.is_empty() {
+            self.monitoring_init_total = 0;
+            self.monitoring_init_done = 0;
+            self.monitoring_init_resume_at = None;
+        }
+        self.drop_services_under(folder_root);
+    }
+
     fn stop_monitoring(&mut self) {
-        if let Some(watcher) = self.file_watcher.take() {
-            watcher.stop_watching();
+        for workspace in &mut self.workspaces {
+            if let Some(watcher) = workspace.watcher.take() {
+                watcher.stop_watching();
+            }
         }
 
         self.monitoring_init_queue.clear();
         self.monitoring_init_total = 0;
+        self.monitoring_init_done = 0;
+        self.monitoring_init_resume_at = None;
         self.snapshot_service_by_root.clear();
         self.canonical_root_by_key.clear();
         self.append_activity(&format!(
@@ -2840,12 +3534,17 @@ impl AppBackend {
         ));
     }
 
-    fn contains_discovered_project(&self, candidate: &DiscoveredProject) -> bool {
-        for project in &self.discovered_projects {
+    fn contains_discovered_project(
+        &self,
+        workspace_index: usize,
+        candidate: &DiscoveredProject,
+    ) -> bool {
+        let workspace = &self.workspaces[workspace_index];
+        for project in &workspace.discovered_projects {
             if !path_equals(&project.root_path, &candidate.root_path) {
                 continue;
             }
-            if self.projects_folder_layout == ProjectsFolderLayout::Bundles
+            if workspace.layout == ProjectsFolderLayout::Bundles
                 || artifact_equals(
                     &project.primary_project_file,
                     &candidate.primary_project_file,
@@ -2857,14 +3556,19 @@ impl AppBackend {
         false
     }
 
-    fn adopt_discovered_project(&mut self, project: &DiscoveredProject) -> bool {
-        if self.contains_discovered_project(project) {
+    fn adopt_discovered_project(
+        &mut self,
+        workspace_index: usize,
+        project: &DiscoveredProject,
+    ) -> bool {
+        if self.contains_discovered_project(workspace_index, project) {
             return false;
         }
 
         let mut adopted_projects = vec![project.clone()];
         self.apply_saved_primary_file_overrides(&mut adopted_projects);
         let adopted = adopted_projects.remove(0);
+        let folder_root = self.workspaces[workspace_index].root.clone();
 
         // Initialize storage and seed/migrate history first. Publishing the
         // project afterwards guarantees the main view observes a usable
@@ -2872,12 +3576,14 @@ impl AppBackend {
         if !self
             .snapshot_service_by_root
             .contains_key(&path_key(&adopted.root_path))
-            && !self.init_monitoring_for_project(&adopted)
+            && !self.init_monitoring_for_project(&folder_root, &adopted)
         {
             return false;
         }
 
-        self.discovered_projects.push(adopted.clone());
+        self.workspaces[workspace_index]
+            .discovered_projects
+            .push(adopted.clone());
         self.project_registry.save_project(&adopted);
         self.project_notes.insert(
             adopted.root_path.clone(),
@@ -2887,7 +3593,9 @@ impl AppBackend {
             adopted.root_path.clone(),
             adopted.primary_project_file.clone(),
         );
-        self.rebuild_visible_projects();
+        if workspace_index as i32 == self.active_workspace {
+            self.rebuild_visible_projects();
+        }
 
         self.append_activity(&format!(
             "[{}] new project detected: {} ({})",
@@ -2898,8 +3606,11 @@ impl AppBackend {
         true
     }
 
-    fn try_discover_project_from_event(&mut self, event: &FileEvent) -> bool {
-        if self.is_scanning_projects || self.projects_folder_root.is_empty() {
+    fn try_discover_project_from_event(&mut self, watch_root: &str, event: &FileEvent) -> bool {
+        let Some(workspace_index) = self.workspace_index_by_root(watch_root) else {
+            return false;
+        };
+        if self.workspaces[workspace_index].scanning {
             return false;
         }
 
@@ -2911,18 +3622,18 @@ impl AppBackend {
         }
 
         let Some(discovered) = project_discovery::discover_project_for_changed_path(
-            &self.projects_folder_root,
+            &self.workspaces[workspace_index].root,
             &event.absolute_path,
-            self.projects_folder_layout,
+            self.workspaces[workspace_index].layout,
         ) else {
             return false;
         };
 
-        if self.contains_discovered_project(&discovered) {
+        if self.contains_discovered_project(workspace_index, &discovered) {
             return false;
         }
 
-        self.adopt_discovered_project(&discovered)
+        self.adopt_discovered_project(workspace_index, &discovered)
     }
 
     fn dispatch_file_event(&mut self, event: &FileEvent) -> bool {
@@ -2980,8 +3691,10 @@ impl Drop for AppBackend {
     fn drop(&mut self) {
         self.flush_pending_theme_hue_persist();
         self.cancel_project_scan();
-        if let Some(watcher) = self.file_watcher.take() {
-            watcher.stop_watching();
+        for workspace in &mut self.workspaces {
+            if let Some(watcher) = workspace.watcher.take() {
+                watcher.stop_watching();
+            }
         }
     }
 }

@@ -4,9 +4,9 @@
 //! standard zlib deflate stream. Objects written by the Qt build must stay
 //! readable here and vice versa.
 
+use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
-use flate2::Compression;
 use std::io::{Read, Write};
 
 pub fn q_compress(data: &[u8], level: u32) -> Vec<u8> {

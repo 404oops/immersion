@@ -7,13 +7,26 @@ pub mod mac;
 
 #[cfg(target_os = "macos")]
 pub use mac::{
-    install_activation_observer, install_status_item, is_launch_at_startup_supported,
-    set_background_agent_mode, set_dock_icon_if_unbundled, set_launch_at_startup,
-    show_notification,
+    adopt_main_window, hide_main_window, install_activation_observer, install_status_item,
+    is_launch_at_startup_supported, set_background_agent_mode, set_dock_icon_if_unbundled,
+    set_launch_at_startup, show_main_window, show_notification,
 };
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_background_agent_mode(_enabled: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn adopt_main_window(_title: &str) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn hide_main_window() -> bool {
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn show_main_window() -> bool {
+    false
+}
 
 #[cfg(not(target_os = "macos"))]
 pub fn install_activation_observer(_on_activate: Box<dyn Fn()>) {}

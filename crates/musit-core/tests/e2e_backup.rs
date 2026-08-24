@@ -23,7 +23,11 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-fn wait_for(backend: &mut AppBackend, timeout: Duration, mut predicate: impl FnMut(&mut AppBackend) -> bool) -> bool {
+fn wait_for(
+    backend: &mut AppBackend,
+    timeout: Duration,
+    mut predicate: impl FnMut(&mut AppBackend) -> bool,
+) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         backend.process_pending();
@@ -293,8 +297,7 @@ fn e2e_backup() {
 
         let legacy_index = project_index_by_file(&routing_backend, "Legacy Project.flp");
         assert!(
-            legacy_index >= 0
-                && routing_backend.get_project_versions(legacy_index).len() == 2,
+            legacy_index >= 0 && routing_backend.get_project_versions(legacy_index).len() == 2,
             "rediscovery migration: ancestor versions moved into project"
         );
         assert!(
@@ -343,8 +346,7 @@ fn e2e_backup() {
         assert!(
             wait_for(&mut routing_backend, WAIT, |backend| {
                 new_project_index = project_index_by_file(backend, "New Project.flp");
-                new_project_index >= 0
-                    && backend.get_project_versions(new_project_index).len() == 2
+                new_project_index >= 0 && backend.get_project_versions(new_project_index).len() == 2
             }),
             "rediscovery routing: save recorded in nested project"
         );
@@ -652,10 +654,93 @@ fn e2e_backup() {
     {
         let v11 = version_by_id(&versions, "1.1").expect("v1.1 exists");
         assert_eq!(v11.parent, "1", "branch: 1.1 has parent 1");
-        assert_eq!(
-            v11.files.len(),
-            2,
-            "branch: 1.1 groups both bundle files"
-        );
+        assert_eq!(v11.files.len(), 2, "branch: 1.1 groups both bundle files");
     }
+
+    // ---- Multiple projects folders (workspaces/tabs) ----
+    let second_dir = tempfile::tempdir().unwrap();
+    let second_root = second_dir.path().to_string_lossy().to_string();
+    assert!(
+        write_file(&format!("{second_root}/SongB/SongB.als"), b"als bytes"),
+        "multi-folder: second folder created"
+    );
+
+    backend.add_projects_folder(&second_root, "Bundles");
+    assert!(
+        wait_for(&mut backend, WAIT, |backend| {
+            backend.take_events();
+            backend.has_discovered_projects() && !backend.is_scanning_projects()
+        }),
+        "multi-folder: second folder scan completed"
+    );
+    assert_eq!(backend.folder_tabs().len(), 2, "multi-folder: two tabs");
+    assert_eq!(
+        backend.active_folder_index(),
+        1,
+        "multi-folder: newly added folder becomes active"
+    );
+    assert_eq!(
+        backend.projects().len(),
+        1,
+        "multi-folder: active tab lists only its own project"
+    );
+
+    // Both folders stay monitored at once: a save in the FIRST folder while
+    // the SECOND tab is active must still be captured.
+    let first_log_path = format!("{project_root}/.musit/versions/log.jsonl");
+    let log_lines_before = read_file(&first_log_path)
+        .split(|b| *b == b'\n')
+        .filter(|line| !line.is_empty())
+        .count();
+    assert!(
+        write_file(&project_data_path, b"projectdata background tab"),
+        "multi-folder: cannot rewrite first folder's file"
+    );
+    let background_recorded = wait_for(&mut backend, WAIT, |backend| {
+        backend.take_events();
+        let lines = read_file(&first_log_path)
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.is_empty())
+            .count();
+        lines > log_lines_before
+    });
+    if !background_recorded {
+        eprintln!("ACTIVITY DUMP:\n{}", backend.activity().join("\n"));
+    }
+    assert!(
+        background_recorded,
+        "multi-folder: background folder still records versions"
+    );
+
+    // Tab switching swaps the visible list back (the first folder holds the
+    // bundle project plus OtherSong adopted in the routing phase above).
+    backend.set_active_folder_index(0);
+    backend.take_events();
+    assert!(
+        backend
+            .projects()
+            .iter()
+            .any(|p| p.file.contains("Song.logicx")),
+        "multi-folder: first tab shows the original project again"
+    );
+    assert!(
+        !backend.projects().iter().any(|p| p.file.contains(".als")),
+        "multi-folder: first tab does not leak the second folder's project"
+    );
+
+    // Removing the second folder keeps the first working.
+    backend.remove_projects_folder(1);
+    backend.take_events();
+    assert_eq!(backend.folder_tabs().len(), 1, "multi-folder: tab removed");
+    assert!(
+        backend.has_discovered_projects(),
+        "multi-folder: remaining folder still has its projects"
+    );
+    assert_eq!(
+        project_registry::ProjectRegistry
+            .load_projects_folders()
+            .len(),
+        1,
+        "multi-folder: registry persists the remaining folder"
+    );
 }
