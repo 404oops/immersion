@@ -81,8 +81,3 @@ pub fn install_status_item(_on_open: Box<dyn Fn()>, _on_quit: Box<dyn Fn()>) {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_dock_icon_if_unbundled() {}
-
-#[cfg(not(target_os = "macos"))]
-pub fn is_bundled() -> bool {
-    false
-}

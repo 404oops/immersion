@@ -47,6 +47,7 @@ fn now_utc_iso_ms() -> String {
     Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
+#[cfg(not(target_os = "windows"))]
 fn home_dir() -> String {
     dirs::home_dir()
         .map(|p| p.to_string_lossy().replace('\\', "/"))

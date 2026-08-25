@@ -16,6 +16,9 @@ const SERVER_NAME: &str = "musit-immersion-v1";
 const RAISE_COMMAND: &[u8] = b"raise";
 const PEER_READ_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Unix-socket endpoint path. Compiled on all platforms so every build
+/// type-checks it; only Unix targets call it.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn socket_path() -> PathBuf {
     std::env::temp_dir().join(SERVER_NAME)
 }
