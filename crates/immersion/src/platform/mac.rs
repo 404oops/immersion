@@ -1,5 +1,5 @@
-//! macOS platform glue: NSStatusItem (MacStatusBar.mm), activation policy
-//! (PlatformAgent_mac.mm), SMAppService launch-at-login, and
+//! macOS platform glue: NSStatusItem menu bar item, activation policy
+//! (background-agent mode), SMAppService launch-at-login, and
 //! UNUserNotificationCenter save notifications.
 
 use std::cell::{Cell, RefCell};
@@ -21,9 +21,9 @@ use objc2_user_notifications::{
     UNUserNotificationCenterDelegate,
 };
 
-/// Menu bar template icon (qt-legacy/icons/menubar.png).
+/// Menu bar template icon.
 const MENUBAR_ICON: &[u8] = include_bytes!("../../assets/icons/menubar.png");
-/// App icon for the Dock when running unbundled (qt-legacy/icons/app.png).
+/// App icon for the Dock when running unbundled.
 const APP_ICON: &[u8] = include_bytes!("../../assets/icons/app.png");
 
 thread_local! {
@@ -91,8 +91,7 @@ pub fn show_main_window() -> bool {
 }
 
 /// Skips the next activation-driven window reveal for a moment; used around
-/// status-item interactions so opening the tray menu doesn't pop the window
-/// (PlatformAgent_mac's suppressNextActivationReveal).
+/// status-item interactions so opening the tray menu doesn't pop the window.
 fn suppress_activation_reveal() {
     ACTIVATION_SUPPRESSED_UNTIL
         .with(|cell| cell.set(Some(Instant::now() + Duration::from_secs(1))));
@@ -186,9 +185,9 @@ define_class!(
     unsafe impl NSObjectProtocol for NotificationDelegate {}
 
     unsafe impl UNUserNotificationCenterDelegate for NotificationDelegate {
-        // MacStatusBar.mm's delegate: present banner + sound + list even
-        // while Immersion is the frontmost app (macOS default suppresses
-        // notifications from the active app).
+        // Present banner + sound + list even while Immersion is the frontmost
+        // app (the macOS default suppresses notifications from the active
+        // app).
         #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
         fn will_present_notification(
             &self,
@@ -206,8 +205,8 @@ define_class!(
 
 /// Reveals the window when the app is activated without going through
 /// applicationShouldHandleReopen — Spotlight and Dock often activate an
-/// already-running process directly (PlatformAgent_mac.mm's
-/// applicationDidBecomeActive handler).
+/// already-running process directly, so this observes
+/// NSApplicationDidBecomeActiveNotification instead.
 pub fn install_activation_observer(on_activate: Box<dyn Fn()>) {
     if MainThreadMarker::new().is_none() {
         return;
@@ -245,7 +244,7 @@ pub fn is_bundled() -> bool {
     NSBundle::mainBundle().bundleIdentifier().is_some()
 }
 
-/// PlatformAgent::setBackgroundAgentMode: Accessory hides the Dock icon.
+/// Background-agent mode: the Accessory activation policy hides the Dock icon.
 pub fn set_background_agent_mode(enabled: bool) {
     let Some(mtm) = MainThreadMarker::new() else {
         return;
@@ -266,7 +265,7 @@ fn image_from_bytes(bytes: &[u8]) -> Option<Retained<NSImage>> {
 
 fn status_bar_icon(mtm: MainThreadMarker) -> Option<Retained<NSImage>> {
     let _ = mtm;
-    // Prefer a bundled template icon like the Qt build.
+    // Prefer the template icon shipped in the app bundle's resources.
     unsafe {
         let bundle = NSBundle::mainBundle();
         let name = NSString::from_str("menubar");

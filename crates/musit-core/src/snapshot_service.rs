@@ -1,6 +1,5 @@
 //! Creates content-addressed snapshots for file events, groups bundle saves
 //! into single versions, compacts old staged copies and tracks branch state.
-//! Port of `qt-legacy/src/core/SnapshotService.{h,cpp}`.
 
 use crate::backup_template::{
     self, MAX_UNCOMPRESSED_RECENT_VERSIONS, MIN_UNCOMPRESSED_RECENT_VERSIONS,
@@ -16,7 +15,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-/// Signals the Qt version emitted; delivered through a callback sink here.
+/// Notifications about snapshot activity, delivered through a callback sink.
 #[derive(Clone, Debug)]
 pub enum SnapshotNotice {
     /// A snapshot (or deletion record) was written. Human-readable message.
@@ -514,7 +513,7 @@ impl Default for SnapshotService {
     }
 }
 
-/// Recursive file walk including hidden files (QDirIterator equivalent).
+/// Recursive file walk including hidden files.
 fn walk_files(dir: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_string()];
@@ -525,7 +524,7 @@ fn walk_files(dir: &str) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             let path_str = path.to_string_lossy().replace('\\', "/");
-            // Never follow symlinks (QDirIterator without FollowSymlinks):
+            // Never follow symlinks:
             // a symlinked dir inside a bundle could form a cycle and hang.
             let Ok(file_type) = entry.file_type() else {
                 continue;

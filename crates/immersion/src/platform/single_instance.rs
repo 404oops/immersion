@@ -1,11 +1,10 @@
-//! Single-instance guard (SingleInstanceGuard.cpp port).
+//! Single-instance guard.
 //!
-//! On Unix this uses a Unix domain socket at the same path QLocalServer would
-//! use ($TMPDIR/musit-immersion-v1), so the Rust and Qt builds also exclude
-//! each other. On other platforms (Windows) it uses an exclusive OS file lock
-//! plus a TCP loopback listener whose port is written next to the lock file —
-//! the named-mutex + QLocalServer equivalent. The secondary instance sends
-//! "raise" and exits; the primary forwards raise requests through a channel.
+//! On Unix this uses a Unix domain socket at `$TMPDIR/musit-immersion-v1`.
+//! On other platforms (Windows) it uses an exclusive OS file lock plus a TCP
+//! loopback listener whose port is written next to the lock file. The
+//! secondary instance sends "raise" and exits; the primary forwards raise
+//! requests through a channel.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -39,7 +38,7 @@ pub enum InstanceGuard {
 }
 
 /// Runs as primary without a working raise channel (couldn't own the
-/// endpoint); matches the Qt fallback of still launching the app.
+/// endpoint): the app still launches rather than refusing to start.
 fn degraded_primary() -> InstanceGuard {
     let (_tx, rx) = channel();
     InstanceGuard::Primary(rx)

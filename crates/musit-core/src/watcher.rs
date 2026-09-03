@@ -2,9 +2,8 @@
 //! ReadDirectoryChangesW / inotify) marking paths dirty, a 400ms debounce
 //! with size+mtime stabilization, and a 5s full-tree safety scan.
 //!
-//! Behavioral port of `qt-legacy/src/core/FileWatcherFactory.cpp`
-//! (HybridWatchWorker). Files that stabilize in the same debounce tick share
-//! a scan sequence, which SnapshotService uses to group bundle saves.
+//! Files that stabilize in the same debounce tick share a scan sequence,
+//! which SnapshotService uses to group bundle saves.
 
 use crate::file_event::{FileEvent, FileEventType};
 use crate::path_cleanup::{clean_path, join_path, path_equals, relative_file_path};

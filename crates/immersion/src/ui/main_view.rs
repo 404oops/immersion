@@ -2,20 +2,77 @@
 //! and version graph (right), and a details panel (blame/notes) at the
 //! bottom (~0.3 of the split area, draggable).
 
+use chrono::{Datelike, Local, NaiveDateTime};
 use gpui::{
-    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, SharedString, Window, canvas, div,
-    linear_color_stop, linear_gradient, prelude::*, px, relative, uniform_list,
+    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, Rgba, SharedString, Window,
+    canvas, div, linear_color_stop, linear_gradient, prelude::*, px, relative, uniform_list,
 };
 
-use crate::app::{
-    ComboId, ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView,
+use crate::app::{ComboId, ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView};
+use crate::ui::controls::{
+    ButtonVariant, CONTROL_HEIGHT, CONTROL_RADIUS, ScrollAxis, caption, lerp_rgba, panel_button,
+    scrollbar, text_field,
 };
-use crate::ui::controls::{ScrollAxis, action_button, scrollbar, text_field};
+use crate::ui::lighting;
 
-/// Uniform row pitch: 72px card + 8px spacing baked into the row.
-const PROJECT_ROW_PITCH: f32 = 80.0;
+/// Uniform row pitch: name and file line plus padding; rows touch and are
+/// separated by a hairline rather than by spacing.
+const PROJECT_ROW_PITCH: f32 = 56.0;
 /// Shared height of everything in the header row: tabs, "+", Settings.
-const TAB_HEIGHT: f32 = 30.0;
+const TAB_HEIGHT: f32 = CONTROL_HEIGHT;
+/// Space between the header and the panels, and between the panels
+/// themselves (both drag handles are exactly this thick).
+const PANE_GAP: f32 = 12.0;
+
+/// Two-letter monogram for a project kind: an all-caps short first word
+/// ("FL Studio" -> "FL") is used as is, otherwise the first two letters.
+fn kind_monogram(kind: &str) -> String {
+    let first_word = kind.split_whitespace().next().unwrap_or("");
+    if (1..=3).contains(&first_word.chars().count())
+        && first_word
+            .chars()
+            .all(|c| c.is_uppercase() || c.is_ascii_digit())
+    {
+        return first_word.to_string();
+    }
+    let letters: String = kind
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(2)
+        .collect();
+    if letters.is_empty() {
+        "?".to_string()
+    } else {
+        letters.to_uppercase()
+    }
+}
+
+/// "2026-09-02 00:52:09" as "Sep 2", or "Sep 2, 2025" outside the current
+/// year; anything unparseable is shown as is.
+fn short_date(stamp: &str) -> String {
+    let Ok(when) = NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S") else {
+        return stamp.to_string();
+    };
+    if when.year() == Local::now().year() {
+        when.format("%b %-d").to_string()
+    } else {
+        when.format("%b %-d, %Y").to_string()
+    }
+}
+
+/// Where a project sits inside its folder, when that says more than the
+/// name does: None for projects directly in the folder (every row would
+/// repeat the folder path otherwise) or in a folder of their own name.
+fn location_hint(project_path: &str, folder_root: &str, name: &str) -> Option<String> {
+    let rest = project_path
+        .strip_prefix(folder_root)?
+        .trim_start_matches(['/', '\\']);
+    if rest.is_empty() || rest == name {
+        None
+    } else {
+        Some(rest.to_string())
+    }
+}
 
 impl RootView {
     pub fn render_main_view(
@@ -32,7 +89,8 @@ impl RootView {
             let total = f32::from(bounds.size.width);
             // Re-clamped every frame, so narrowing the window can't push
             // either pane under its floor either.
-            (total * self.list_fraction).clamp(LIST_PANE_MIN, (total - GRAPH_PANE_MIN).max(LIST_PANE_MIN))
+            (total * self.list_fraction)
+                .clamp(LIST_PANE_MIN, (total - GRAPH_PANE_MIN).max(LIST_PANE_MIN))
         });
         let details_height = self
             .split_bounds
@@ -48,7 +106,7 @@ impl RootView {
             .flex()
             .flex_col()
             .p(px(16.0))
-            .gap(px(10.0))
+            .gap(px(PANE_GAP))
             // Header: folder tabs (each carrying its own scan progress) and
             // Settings. There is no status line — a tab says what it is doing.
             .child(
@@ -57,24 +115,29 @@ impl RootView {
                     .items_start()
                     .gap(px(12.0))
                     .child(
-                        // One row however many folders there are: the strip
-                        // scrolls sideways instead of wrapping and pushing the
-                        // panels down. The tabs are direct children of the
-                        // scroll container — wrapped in a row they get clamped
-                        // to its width and there is nothing left to scroll.
+                        // One row however many folders there are: a segmented
+                        // control that hugs its segments and scrolls sideways
+                        // once they outgrow the header, instead of wrapping and
+                        // pushing the panels down.
                         div()
                             .flex_1()
                             .min_w_0()
                             .relative()
+                            .flex()
+                            .items_center()
                             .child(
                                 div()
                                     .id("folder-tabs-scroll")
-                                    .w_full()
+                                    .flex_none()
+                                    .max_w_full()
+                                    .h(px(TAB_HEIGHT))
+                                    .p(px(2.0))
+                                    .rounded(px(CONTROL_RADIUS + 1.0))
+                                    .bg(self.segment_track_color())
+                                    .shadow(lighting::recessed(theme.is_dark_mode))
                                     .flex()
                                     .items_center()
-                                    .gap(px(6.0))
-                                    // Room under the tabs for the scrollbar.
-                                    .pb(px(8.0))
+                                    .gap(px(2.0))
                                     .overflow_x_scroll()
                                     .track_scroll(&self.tabs_scroll)
                                     .children(self.folder_tab_items(cx)),
@@ -93,12 +156,14 @@ impl RootView {
                         // Tab height, so the three header controls line up on
                         // both edges instead of stepping.
                         div()
-                            .w(px(108.0))
+                            .w(px(92.0))
                             .h(px(TAB_HEIGHT))
                             .flex_none()
-                            .child(action_button(
+                            .child(panel_button(
                                 "settings-button",
                                 "Settings",
+                                ButtonVariant::Soft,
+                                true,
                                 &theme,
                                 self,
                                 cx,
@@ -160,7 +225,7 @@ impl RootView {
                             .child(
                                 div()
                                     .id("list-split-handle")
-                                    .w(px(10.0))
+                                    .w(px(PANE_GAP))
                                     .h_full()
                                     .flex_none()
                                     .flex()
@@ -195,11 +260,12 @@ impl RootView {
                                     .child(self.render_graph_panel(cx)),
                             ),
                     )
-                    // Split handle: 20px tall, centered 6x6 dot.
+                    // Split handle: same thickness as the list|graph one, so
+                    // the three panels sit an even distance apart.
                     .child(
                         div()
                             .id("split-handle")
-                            .h(px(20.0))
+                            .h(px(PANE_GAP))
                             .w_full()
                             .flex_none()
                             .flex()
@@ -233,8 +299,29 @@ impl RootView {
             )
     }
 
+    /// Track of the folder segmented control: a shade off the window
+    /// background, so the raised active segment reads as the selection.
+    fn segment_track_color(&self) -> Rgba {
+        if self.theme.is_dark_mode {
+            self.theme.row_odd
+        } else {
+            self.theme.row_even
+        }
+    }
+
+    /// Fill of the active segment: white in light mode, a lighter tint in
+    /// dark mode.
+    fn segment_fill_color(&self) -> Rgba {
+        if self.theme.is_dark_mode {
+            self.theme.button_soft_fill
+        } else {
+            self.theme.vm_panel
+        }
+    }
+
     fn folder_tab_items(&mut self, cx: &mut Context<RootView>) -> Vec<gpui::AnyElement> {
         let theme = self.theme;
+        let segment_fill = self.segment_fill_color();
         let tabs = self.backend.folder_tabs();
         let active = self.backend.active_folder_index();
         let renaming = self.renaming_tab;
@@ -251,26 +338,28 @@ impl RootView {
                 let tab_name = tab.name.clone();
                 div()
                     .id(ElementId::NamedInteger("folder-tab".into(), index as u64))
-                    .h(px(TAB_HEIGHT))
+                    .h(px(TAB_HEIGHT - 4.0))
                     .flex_none()
                     .max_w(px(260.0))
-                    .pl(px(12.0))
-                    .pr(px(6.0))
-                    .rounded(px(6.0))
+                    .pl(px(10.0))
+                    .pr(px(if selected { 4.0 } else { 10.0 }))
+                    .rounded(px(CONTROL_RADIUS - 1.0))
                     .flex()
                     .items_center()
                     .gap(px(6.0))
                     .cursor_pointer()
-                    .bg(if selected {
-                        theme.panel_surface
-                    } else {
-                        theme.row_odd
+                    // The active segment is raised out of the track.
+                    .when(selected, |el| {
+                        el.bg(lighting::lit(segment_fill, 0.05))
+                            .shadow(lighting::raised(theme.is_dark_mode))
                     })
-                    .border_1()
-                    .border_color(if selected {
-                        theme.accent
-                    } else {
-                        theme.node_border
+                    .when(!selected, |el| {
+                        el.hover(move |style| {
+                            style.bg(Rgba {
+                                a: 0.5,
+                                ..segment_fill
+                            })
+                        })
                     })
                     // Click selects; double-click renames inline.
                     .on_mouse_down(
@@ -306,36 +395,43 @@ impl RootView {
                     .when(!is_renaming, |el| {
                         el.child(
                             div()
-                                .text_size(px(12.0))
+                                .text_size(px(12.5))
                                 .font_weight(if selected {
-                                    FontWeight::BOLD
+                                    FontWeight::MEDIUM
                                 } else {
                                     FontWeight::NORMAL
                                 })
-                                .text_color(theme.text_primary)
+                                .text_color(if selected {
+                                    theme.text_primary
+                                } else {
+                                    theme.text_secondary
+                                })
+                                .whitespace_nowrap()
                                 .child(SharedString::from(label)),
                         )
                         .when(!status.is_empty(), |el| {
                             el.child(
                                 div()
                                     .text_size(px(11.0))
-                                    .text_color(theme.text_secondary)
+                                    .text_color(theme.text_muted)
+                                    .whitespace_nowrap()
                                     .child(SharedString::from(status)),
                             )
                         })
                     })
                     // Close: stop watching this folder (history stays on disk).
-                    .child(
+                    // Only the active segment offers it.
+                    .when(selected, |el| el.child(
                         div()
                             .id(ElementId::NamedInteger("folder-tab-close".into(), index as u64))
                             .w(px(18.0))
                             .h(px(18.0))
-                            .rounded(px(4.0))
+                            .rounded(px(3.0))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(px(11.0))
-                            .text_color(theme.text_secondary)
+                            .text_size(px(10.0))
+                            .text_color(theme.text_muted)
                             .hover(move |style| style.bg(theme.button_soft_fill))
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -363,7 +459,7 @@ impl RootView {
                                 }),
                             )
                             .child("\u{2715}"),
-                    )
+                    ))
                     .into_any_element()
             })
             .collect()
@@ -377,7 +473,7 @@ impl RootView {
 
         let scrolled = -f32::from(self.tabs_scroll.offset().x);
         let max_scroll = f32::from(self.tabs_scroll.max_offset().x);
-        let opaque: gpui::Hsla = gpui::Rgba::from(self.theme.app_background).into();
+        let opaque: gpui::Hsla = self.segment_track_color().into();
         let clear = opaque.opacity(0.0);
 
         let mut fades = Vec::new();
@@ -386,7 +482,7 @@ impl RootView {
                 div()
                     .absolute()
                     .top_0()
-                    .bottom(px(6.0))
+                    .bottom_0()
                     .left_0()
                     .w(px(FADE_WIDTH))
                     .bg(linear_gradient(
@@ -402,7 +498,7 @@ impl RootView {
                 div()
                     .absolute()
                     .top_0()
-                    .bottom(px(6.0))
+                    .bottom_0()
                     .right_0()
                     .w(px(FADE_WIDTH))
                     .bg(linear_gradient(
@@ -425,15 +521,16 @@ impl RootView {
             .h(px(TAB_HEIGHT))
             .w(px(TAB_HEIGHT))
             .flex_none()
-            .rounded(px(6.0))
+            .rounded(px(CONTROL_RADIUS))
             .flex()
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .bg(theme.row_odd)
+            .bg(lighting::lit(theme.button_soft_fill, 0.08))
             .border_1()
-            .border_color(theme.node_border)
-            .hover(move |style| style.bg(theme.button_soft_fill))
+            .border_color(lighting::rim(theme.button_soft_fill, theme.is_dark_mode))
+            .shadow(lighting::raised(theme.is_dark_mode))
+            .hover(move |style| style.bg(lighting::lit(theme.button_soft_fill_hover, 0.1)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
@@ -453,16 +550,16 @@ impl RootView {
                             .top(px(5.0))
                             .left_0()
                             .w(px(12.0))
-                            .h(px(2.0))
+                            .h(px(1.5))
                             .rounded(px(1.0))
                             .bg(theme.text_secondary),
                     )
                     .child(
                         div()
                             .absolute()
-                            .left(px(5.0))
+                            .left(px(5.25))
                             .top_0()
-                            .w(px(2.0))
+                            .w(px(1.5))
                             .h(px(12.0))
                             .rounded(px(1.0))
                             .bg(theme.text_secondary),
@@ -489,23 +586,41 @@ impl RootView {
         div()
             .size_full()
             .rounded(px(8.0))
-            .bg(theme.panel_surface)
+            .bg(lighting::lit(theme.panel_surface, 0.02))
+            .border_1()
+            .border_color(theme.vm_border)
+            .shadow(lighting::panel(theme.is_dark_mode))
             .p(px(10.0))
             .flex()
             .flex_col()
             .gap(px(8.0))
-            // Header row.
+            // Header row: title with the count, sort control on the right.
             .child(
                 div()
+                    .h(px(CONTROL_HEIGHT))
                     .flex()
                     .items_center()
                     .child(
                         div()
                             .min_w_0()
-                            .truncate()
-                            .text_size(px(13.0))
-                            .text_color(theme.text_primary)
-                            .child("Discovered Projects"),
+                            .flex()
+                            .items_baseline()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.text_primary)
+                                    .child("Projects"),
+                            )
+                            .when(has_projects, |el| {
+                                el.child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(theme.text_muted)
+                                        .child(SharedString::from(project_count.to_string())),
+                                )
+                            }),
                     )
                     .child(div().flex_1().min_w(px(8.0)))
                     .child(
@@ -513,20 +628,14 @@ impl RootView {
                             .flex()
                             .flex_none()
                             .items_center()
-                            .gap(px(6.0))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(px(13.0))
-                                    .text_color(theme.text_secondary)
-                                    .child("Sort:"),
-                            )
+                            .gap(px(8.0))
+                            .child(caption(&theme, "Sort by"))
                             .child(self.render_combo(
                                 ComboId::SortMain,
                                 "sort-main",
                                 sort_index,
                                 &sort_options,
-                                Some(150.0),
+                                Some(124.0),
                                 cx,
                                 |this, index, _window, _cx| {
                                     let mode = if index == 1 { "Last Opened" } else { "Name" };
@@ -551,18 +660,53 @@ impl RootView {
                             cx.processor(move |this: &mut RootView, range: std::ops::Range<usize>, _window, cx| {
                                 let theme = this.theme;
                                 let selected_index = this.backend.selected_project_index();
+                                let folder_root = this
+                                    .backend
+                                    .folder_tabs()
+                                    .get(this.backend.active_folder_index().max(0) as usize)
+                                    .map(|tab| tab.path.clone())
+                                    .unwrap_or_default();
+                                // Selection fills the row with the accent and
+                                // turns its text white; hover is a faint tint.
+                                let hover_bg = if theme.is_dark_mode {
+                                    theme.row_even
+                                } else {
+                                    theme.row_odd
+                                };
+                                let on_accent = theme.button_label;
                                 range
                                     .map(|index| {
                                         let Some(project) = this.backend.projects().get(index)
                                         else {
                                             return div().into_any_element();
                                         };
-                                        let row_color = if index % 2 == 0 {
-                                            theme.row_even
-                                        } else {
-                                            theme.row_odd
-                                        };
                                         let selected = index as i32 == selected_index;
+                                        // 0 = plain row, 1 = fully selected; in
+                                        // between while a selection cross-fades.
+                                        let weight = this
+                                            .row_fade
+                                            .as_ref()
+                                            .map(|fade| fade.weight(&(index as i32), selected))
+                                            .unwrap_or(if selected { 1.0 } else { 0.0 });
+                                        let row_bg =
+                                            lerp_rgba(theme.panel_surface, theme.button_fill, weight);
+                                        let name_color =
+                                            lerp_rgba(theme.text_primary, on_accent, weight);
+                                        let date_color = lerp_rgba(
+                                            theme.text_muted,
+                                            Rgba { a: 0.8, ..on_accent },
+                                            weight,
+                                        );
+                                        let file_color = lerp_rgba(
+                                            theme.text_secondary,
+                                            Rgba { a: 0.85, ..on_accent },
+                                            weight,
+                                        );
+                                        let tile_fill = lerp_rgba(
+                                            theme.button_fill,
+                                            lighting::shade(theme.button_fill, 0.22),
+                                            weight,
+                                        );
                                         let name = if project.name.is_empty() {
                                             format!("Project {}", index + 1)
                                         } else {
@@ -573,12 +717,21 @@ impl RootView {
                                         } else {
                                             project.kind.clone()
                                         };
-                                        let file_line = format!("Project file: {}", project.file);
-                                        let path_line = format!("Path: {}", project.path);
+                                        let monogram = kind_monogram(&kind);
+                                        let mut file_line = project.file.clone();
+                                        if let Some(hint) =
+                                            location_hint(&project.path, &folder_root, &name)
+                                        {
+                                            file_line = format!("{file_line}  \u{00b7}  {hint}");
+                                        }
+                                        let opened = if project.last_opened.is_empty() {
+                                            String::new()
+                                        } else {
+                                            short_date(&project.last_opened)
+                                        };
                                         div()
                                             .h(px(PROJECT_ROW_PITCH))
                                             .w_full()
-                                            .pb(px(8.0))
                                             .child(
                                                 div()
                                                     .id(ElementId::NamedInteger(
@@ -586,18 +739,19 @@ impl RootView {
                                                         index as u64,
                                                     ))
                                                     .size_full()
-                                                    .rounded(px(6.0))
-                                                    .bg(row_color)
-                                                    // Constant border width: only the
-                                                    // color changes on selection, so
-                                                    // content never shifts.
-                                                    .border_2()
-                                                    .border_color(if selected {
-                                                        theme.accent
-                                                    } else {
-                                                        row_color
+                                                    .relative()
+                                                    .rounded(px(CONTROL_RADIUS))
+                                                    .when(weight > 0.0, |el| {
+                                                        el.bg(lighting::lit(row_bg, 0.08 * weight))
+                                                            .shadow(lighting::faded(
+                                                                lighting::raised(theme.is_dark_mode),
+                                                                weight,
+                                                            ))
                                                     })
-                                                    .p(px(8.0))
+                                                    .when(weight <= 0.0, |el| {
+                                                        el.hover(move |style| style.bg(hover_bg))
+                                                    })
+                                                    .px(px(10.0))
                                                     .flex()
                                                     .items_center()
                                                     .gap(px(10.0))
@@ -619,27 +773,29 @@ impl RootView {
                                                             },
                                                         ),
                                                     )
-                                                    // Kind badge.
+                                                    // Kind monogram: a solid square with two
+                                                    // letters, like an app icon.
                                                     .child(
                                                         div()
-                                                            .w(px(48.0))
-                                                            .h(px(48.0))
+                                                            .w(px(30.0))
+                                                            .h(px(30.0))
                                                             .flex_none()
-                                                            .rounded(px(6.0))
-                                                            .bg(theme.accent)
+                                                            .rounded(px(8.0))
+                                                            .bg(lighting::lit(tile_fill, 0.14))
+                                                            .shadow(lighting::raised(theme.is_dark_mode))
                                                             .flex()
                                                             .items_center()
                                                             .justify_center()
                                                             .child(
                                                                 div()
-                                                                    .w(px(42.0))
-                                                                    .text_size(px(10.0))
-                                                                    .text_color(gpui::white())
-                                                                    .text_center()
-                                                                    .child(SharedString::from(kind)),
+                                                                    .text_size(px(11.5))
+                                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                                    .text_color(on_accent)
+                                                                    .child(SharedString::from(monogram)),
                                                             ),
                                                     )
-                                                    // Metadata column.
+                                                    // Name with the last-opened date, then the
+                                                    // file (and location, when it adds anything).
                                                     .child(
                                                         div()
                                                             .flex_1()
@@ -649,24 +805,35 @@ impl RootView {
                                                             .gap(px(2.0))
                                                             .child(
                                                                 div()
-                                                                    .text_size(px(13.0))
-                                                                    .font_weight(FontWeight::BOLD)
-                                                                    .text_color(theme.text_primary)
-                                                                    .child(SharedString::from(name)),
+                                                                    .flex()
+                                                                    .items_baseline()
+                                                                    .gap(px(8.0))
+                                                                    .child(
+                                                                        div()
+                                                                            .flex_1()
+                                                                            .min_w_0()
+                                                                            .text_size(px(13.5))
+                                                                            .font_weight(FontWeight::SEMIBOLD)
+                                                                            .text_color(name_color)
+                                                                            .truncate()
+                                                                            .child(SharedString::from(name)),
+                                                                    )
+                                                                    .when(!opened.is_empty(), |el| {
+                                                                        el.child(
+                                                                            div()
+                                                                                .flex_none()
+                                                                                .text_size(px(11.0))
+                                                                                .text_color(date_color)
+                                                                                .child(SharedString::from(opened)),
+                                                                        )
+                                                                    }),
                                                             )
                                                             .child(
                                                                 div()
                                                                     .text_size(px(12.0))
-                                                                    .text_color(theme.text_secondary)
+                                                                    .text_color(file_color)
                                                                     .truncate()
                                                                     .child(SharedString::from(file_line)),
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(12.0))
-                                                                    .text_color(theme.text_muted)
-                                                                    .truncate()
-                                                                    .child(SharedString::from(path_line)),
                                                             ),
                                                     ),
                                             )
@@ -693,9 +860,9 @@ impl RootView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_size(px(20.0))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.text_status)
+                                .text_size(px(13.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text_muted)
                                 .child(if is_scanning {
                                     "Scanning for projects\u{2026}"
                                 } else {

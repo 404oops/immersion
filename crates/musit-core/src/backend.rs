@@ -1,11 +1,10 @@
 //! Application backend: orchestrates discovery, monitoring, versions,
 //! restore/delete, notes, settings and the activity log.
 //!
-//! Port of `qt-legacy/src/ui/QmlBackend.{h,cpp}` minus the QML property
-//! plumbing. Qt signals become [`BackendEvent`]s drained via
-//! [`AppBackend::take_events`]; queued cross-thread signals become an
-//! internal channel drained by [`AppBackend::process_pending`], which the
-//! host (UI shell or test) pumps on its own cadence.
+//! State changes surface as [`BackendEvent`]s drained via
+//! [`AppBackend::take_events`]; cross-thread work arrives on an internal
+//! channel drained by [`AppBackend::process_pending`], which the host (UI
+//! shell or test) pumps on its own cadence.
 
 use crate::backup_template::{
     self, MAX_UNCOMPRESSED_RECENT_VERSIONS, MIN_UNCOMPRESSED_RECENT_VERSIONS,
@@ -40,7 +39,7 @@ use std::time::{Duration, Instant, SystemTime};
 const MAX_ACTIVITY_LINES: usize = 2000;
 const THEME_HUE_PERSIST_DELAY: Duration = Duration::from_millis(400);
 
-// ---- AppStrings (port of qt-legacy/src/ui/AppStrings.h) ------------------
+// ---- User-facing strings --------------------------------------------------
 
 pub mod strings {
     pub const STATUS_SELECT_PROJECTS_FOLDER: &str =
@@ -77,7 +76,7 @@ pub enum ColorSchemeMode {
     Dark,
 }
 
-/// One row of the visible project list (the QVariantMap the QML used).
+/// One row of the visible project list.
 #[derive(Clone, Debug)]
 pub struct ProjectListItem {
     pub name: String,
@@ -146,21 +145,26 @@ pub struct VersionEntry {
     pub note: String,
     pub parent: String,
     pub is_current: bool,
+    /// Compaction has removed every staged copy of this version; its content
+    /// now lives only as compressed objects (restore decompresses on demand).
+    pub is_compressed: bool,
     pub files: Vec<VersionFileEntry>,
 }
 
-/// Version graph node: a version entry plus layout data.
+/// Version graph node: a version plus its place in the tree. Emitted in
+/// depth-first order by [`AppBackend::selected_project_version_graph`];
+/// placing nodes on screen is the shell's job.
 #[derive(Clone, Debug, Default)]
 pub struct VersionGraphNode {
     pub version: VersionEntry,
+    /// Parent version id; empty for a top-level version.
     pub parent_id: String,
+    /// 0 for top-level versions, one more per branch level.
     pub depth: i32,
-    pub row: i32,
-    pub x: f32,
-    pub y: f32,
 }
 
-/// The Qt signals, as drainable events for the host shell.
+/// State-change notifications for the host shell, drained via
+/// [`AppBackend::take_events`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BackendEvent {
     StatusMessageChanged,
@@ -199,7 +203,7 @@ pub enum BackendEvent {
     },
 }
 
-/// Host-provided platform hooks (PlatformAgent in the Qt build).
+/// Host-provided platform hooks.
 pub struct PlatformHooks {
     pub launch_at_startup_supported: bool,
     pub set_launch_at_startup: Box<dyn Fn(bool) + Send>,
@@ -229,7 +233,7 @@ fn default_open_path(path: &str) -> bool {
     result.map(|s| s.success()).unwrap_or(false)
 }
 
-// ---- Internal messages (queued connections in the Qt build) ---------------
+// ---- Internal messages (cross-thread, drained by `process_pending`) -------
 
 enum BackendMsg {
     ScanDirectory {
@@ -377,6 +381,19 @@ fn sha256_file_hex(file_path: &str) -> String {
     }
     let digest = hasher.finalize();
     digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A version is compressed once compaction has removed its staged copies:
+/// no file of the version still has one on disk, so restoring it
+/// decompresses from the object store instead of copying a staged file.
+fn mark_compressed_versions(project: &DiscoveredProject, versions: &mut [VersionEntry]) {
+    for version in versions.iter_mut() {
+        version.is_compressed = !version.files.is_empty()
+            && version.files.iter().all(|file_entry| {
+                let staged = resolve_staged_path(&project.root_path, &file_entry.staged_path);
+                staged.is_empty() || !Path::new(&staged).exists()
+            });
+    }
 }
 
 fn resolve_staged_path(project_root: &str, staged_path: &str) -> String {
@@ -692,7 +709,6 @@ fn migrate_misrouted_history(source_root: &str, destination_root: &str) -> usize
 // ---- AppBackend -------------------------------------------------------------
 
 pub struct AppBackend {
-    // State mirrored from the Qt member list.
     status_message: String,
     // Configured projects folders; the UI shows one at a time via tabs, but
     // every folder is watched and versioned simultaneously.
@@ -734,7 +750,7 @@ pub struct AppBackend {
     active_scan_started_at: Option<Instant>,
     // Projects awaiting monitoring init (tagged with their folder root),
     // advanced a time-sliced batch per pump so first-time seeding of a large
-    // folder doesn't freeze the UI (Qt used one QTimer::singleShot(0) each).
+    // folder doesn't freeze the UI.
     monitoring_init_queue: std::collections::VecDeque<(String, DiscoveredProject)>,
     monitoring_init_total: usize,
     monitoring_init_done: usize,
@@ -1087,6 +1103,9 @@ impl AppBackend {
         }
         self.set_selected_project_index(-1);
         self.rebuild_visible_projects();
+        // The tab that takes over brings its own colour, exactly as if the
+        // user had clicked it.
+        self.apply_active_folder_hue();
         self.prioritize_active_folder_scan();
         self.prioritize_active_folder_monitoring();
         self.refresh_status_for_active_folder();
@@ -1142,8 +1161,8 @@ impl AppBackend {
         self.advance_monitoring_init();
     }
 
-    /// Persists any debounced settings immediately; call on app shutdown
-    /// (the ~QmlBackend flush) since the debounce timer won't fire again.
+    /// Persists any debounced settings immediately; call on app shutdown,
+    /// since the debounce timer won't fire again.
     pub fn flush_pending_persist(&mut self) {
         if self.theme_hue_persist_deadline.take().is_some() {
             self.persist_theme_hue();
@@ -2265,6 +2284,7 @@ impl AppBackend {
         let log_path = join_path(&project.root_path, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
         let mut versions = self.parsed_versions_for(&log_path, &project.primary_project_file);
         self.mark_current_version(project, &mut versions);
+        mark_compressed_versions(project, &mut versions);
         versions
     }
 
@@ -2345,6 +2365,7 @@ impl AppBackend {
                 note: json_str(&obj, "note").to_string(),
                 parent: json_str(&obj, "parent").to_string(),
                 is_current: false,
+                is_compressed: false,
                 files: vec![file_entry],
             };
             version_index_by_id.insert(version_id, versions.len());
@@ -2419,6 +2440,10 @@ impl AppBackend {
         }
     }
 
+    /// The selected project's versions as a tree in depth-first order:
+    /// parents before their children, siblings in version order, top-level
+    /// versions as roots. A node whose parent no longer exists (deleted by an
+    /// older release) becomes a root rather than vanishing with its subtree.
     pub fn selected_project_version_graph(&self) -> Vec<VersionGraphNode> {
         if self.selected_project_index < 0
             || self.selected_project_index as usize >= self.visible_project_indexes.len()
@@ -2459,12 +2484,10 @@ impl AppBackend {
         }
 
         let mut graph: Vec<VersionGraphNode> = Vec::new();
-        let mut row = 0i32;
 
         fn append_children(
             parent_id: &str,
             depth: i32,
-            row: &mut i32,
             graph: &mut Vec<VersionGraphNode>,
             children_by_parent: &HashMap<String, Vec<String>>,
             node_by_id: &HashMap<String, VersionEntry>,
@@ -2491,15 +2514,10 @@ impl AppBackend {
                     version: version.clone(),
                     parent_id: resolved_parent.get(&child_id).cloned().unwrap_or_default(),
                     depth,
-                    row: *row,
-                    x: 88.0 + depth as f32 * 176.0,
-                    y: 72.0 + *row as f32 * 92.0,
                 });
-                *row += 1;
                 append_children(
                     &child_id,
                     depth + 1,
-                    row,
                     graph,
                     children_by_parent,
                     node_by_id,
@@ -2511,7 +2529,6 @@ impl AppBackend {
         append_children(
             "",
             0,
-            &mut row,
             &mut graph,
             &children_by_parent,
             &node_by_id,

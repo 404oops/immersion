@@ -1,21 +1,26 @@
-//! Version graph pane (VersionGraphNode.qml port: dotted grid, orthogonal
-//! links, ancestry highlight) and the bottom details panel (blame,
-//! description, notes) — both live in the main view now.
+//! Version graph pane (dotted grid, orthogonal links, ancestry highlight)
+//! and the bottom details panel (blame, description, notes); both live in
+//! the main view.
 
 use gpui::{
-    Context, ElementId, FontWeight, MouseButton, PathBuilder, SharedString, Window, canvas, div,
-    fill, point, prelude::*, px, size,
+    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, Rgba, SharedString, Window,
+    canvas, div, fill, point, prelude::*, px, size,
 };
 
-use crate::app::{ComboId, RootView};
-use crate::ui::controls::{ButtonVariant, ScrollAxis, panel_button, scrollbar, text_area};
+use crate::app::{ComboId, RootView, SelectionFade};
+use crate::theme::{MONO_FONT, Theme};
+use crate::ui::controls::{
+    ButtonVariant, CONTROL_HEIGHT, ScrollAxis, caption, lerp_rgba, panel_button, scrollbar,
+    text_area,
+};
+use crate::ui::graph_layout::{self, GraphNode, NODE_HALF_H, NODE_HALF_W};
+use crate::ui::lighting;
 use crate::ui::modals::delete_version_confirm;
-
-const NODE_HALF_W: f32 = 38.0;
-const NODE_HALF_H: f32 = 23.0;
 
 impl RootView {
     pub(crate) fn render_graph_panel(&mut self, cx: &mut Context<RootView>) -> impl IntoElement {
+        // The pane may have been resized since the last layout.
+        self.sync_graph_columns();
         let theme = self.theme;
         let graph_empty = self.vm_graph.is_empty();
         let (extent_w, extent_h) = self.vm_graph_extent;
@@ -54,6 +59,7 @@ impl RootView {
             .bg(theme.vm_graph)
             .border_1()
             .border_color(theme.vm_border)
+            .shadow(lighting::panel(theme.is_dark_mode))
             .overflow_hidden()
             .relative()
             .when(graph_empty, |el| {
@@ -133,11 +139,12 @@ impl RootView {
                                                 move |bounds, _state, window, _cx| {
                                                     let origin = bounds.origin;
 
-                                                    // Dotted grid (28px at 100% zoom),
-                                                    // painted only for the visible clip —
-                                                    // the full extent can be thousands of
-                                                    // dots while the viewport shows ~700.
-                                                    let grid_step = (28.0_f32 * zoom).max(10.0);
+                                                    // Dotted grid, painted only for the
+                                                    // visible clip — the full extent can be
+                                                    // thousands of dots while the viewport
+                                                    // shows ~700.
+                                                    let grid_step =
+                                                        (graph_layout::GRID * zoom).max(10.0);
                                                     let dot_radius = 1.1_f32 * zoom.clamp(0.7, 1.6);
                                                     let grid_color = theme.vm_graph_grid;
                                                     let width = f32::from(bounds.size.width);
@@ -211,34 +218,54 @@ impl RootView {
                                                         let mid_x = x1 + (x2 - x1) * 0.5;
 
                                                         let stroke_width =
-                                                            (if highlighted { 2.5 } else { 1.75 })
+                                                            (if highlighted { 2.5 } else { 2.0 })
                                                                 * zoom.clamp(0.7, 1.5);
                                                         let color = if highlighted {
                                                             theme.vm_graph_link_active
                                                         } else {
                                                             theme.vm_graph_link
                                                         };
-                                                        let mut builder =
-                                                            PathBuilder::stroke(px(stroke_width));
-                                                        builder.move_to(point(
-                                                            origin.x + px(x1),
-                                                            origin.y + px(y1),
-                                                        ));
-                                                        builder.line_to(point(
-                                                            origin.x + px(mid_x),
-                                                            origin.y + px(y1),
-                                                        ));
-                                                        builder.line_to(point(
-                                                            origin.x + px(mid_x),
-                                                            origin.y + px(y2),
-                                                        ));
-                                                        builder.line_to(point(
-                                                            origin.x + px(x2),
-                                                            origin.y + px(y2),
-                                                        ));
-                                                        if let Ok(path) = builder.build() {
-                                                            window.paint_path(path, color);
-                                                        }
+                                                        // Three axis-aligned quads rather than a
+                                                        // stroked path: crisp edges with no
+                                                        // jaggies. Positions snap to half pixels
+                                                        // and the segments overlap by half the
+                                                        // width so the corners close cleanly.
+                                                        let snap = |v: f32| (v * 2.0).round() / 2.0;
+                                                        let half = stroke_width * 0.5;
+                                                        let mut segment =
+                                                            |x: f32, y: f32, w: f32, h: f32| {
+                                                                window.paint_quad(fill(
+                                                                    gpui::Bounds::new(
+                                                                        point(
+                                                                            origin.x + px(snap(x)),
+                                                                            origin.y + px(snap(y)),
+                                                                        ),
+                                                                        size(
+                                                                            px(snap(w)),
+                                                                            px(snap(h)),
+                                                                        ),
+                                                                    ),
+                                                                    color,
+                                                                ));
+                                                            };
+                                                        segment(
+                                                            x1,
+                                                            y1 - half,
+                                                            mid_x - x1 + half,
+                                                            stroke_width,
+                                                        );
+                                                        segment(
+                                                            mid_x - half,
+                                                            y1.min(y2) - half,
+                                                            stroke_width,
+                                                            (y2 - y1).abs() + stroke_width,
+                                                        );
+                                                        segment(
+                                                            mid_x - half,
+                                                            y2 - half,
+                                                            x2 - mid_x + half,
+                                                            stroke_width,
+                                                        );
                                                     }
                                                 },
                                             )
@@ -248,12 +275,7 @@ impl RootView {
                                         // Nodes.
                                         .children(self.vm_graph.iter().enumerate().map(
                                             |(index, node)| {
-                                                self.render_graph_node(
-                                                    index,
-                                                    node.clone(),
-                                                    zoom,
-                                                    cx,
-                                                )
+                                                self.render_graph_node(index, node, zoom, cx)
                                             },
                                         )),
                                 ),
@@ -294,15 +316,20 @@ impl RootView {
                                         .id("graph-zoom-reset")
                                         .h(px(22.0))
                                         .px(px(6.0))
-                                        .rounded(px(5.0))
+                                        .rounded(px(4.0))
                                         .flex()
                                         .items_center()
                                         .cursor_pointer()
-                                        .bg(theme.panel_surface)
+                                        .bg(lighting::lit(theme.button_soft_fill, 0.08))
                                         .border_1()
-                                        .border_color(theme.node_border)
+                                        .border_color(lighting::rim(
+                                            theme.button_soft_fill,
+                                            theme.is_dark_mode,
+                                        ))
+                                        .shadow(lighting::raised(theme.is_dark_mode))
                                         .text_size(px(10.0))
-                                        .text_color(theme.text_secondary)
+                                        .font_family(MONO_FONT)
+                                        .text_color(theme.text_muted)
                                         .hover(move |style| style.bg(theme.button_soft_fill))
                                         .on_mouse_down(
                                             MouseButton::Left,
@@ -337,16 +364,17 @@ impl RootView {
             .id(id)
             .w(px(22.0))
             .h(px(22.0))
-            .rounded(px(5.0))
+            .rounded(px(4.0))
             .flex()
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .bg(theme.panel_surface)
+            .bg(lighting::lit(theme.button_soft_fill, 0.08))
             .border_1()
-            .border_color(theme.node_border)
+            .border_color(lighting::rim(theme.button_soft_fill, theme.is_dark_mode))
+            .shadow(lighting::raised(theme.is_dark_mode))
             .text_size(px(12.0))
-            .text_color(theme.text_secondary)
+            .text_color(theme.text_muted)
             .hover(move |style| style.bg(theme.button_soft_fill))
             .on_mouse_down(
                 MouseButton::Left,
@@ -360,47 +388,60 @@ impl RootView {
     fn render_graph_node(
         &self,
         index: usize,
-        node: musit_core::backend::VersionGraphNode,
+        node: &GraphNode,
         zoom: f32,
         cx: &mut Context<RootView>,
     ) -> impl IntoElement + use<> {
         let theme = self.theme;
         let selected = self.vm_selected_id == node.version.id;
         let current = node.version.is_current;
+        let compressed = node.version.is_compressed;
+        // 0 = plain node, 1 = fully selected; in between while the selection
+        // cross-fades from one version to another.
+        let weight = self
+            .node_fade
+            .as_ref()
+            .map(|fade| fade.weight(&node.version.id, selected))
+            .unwrap_or(if selected { 1.0 } else { 0.0 });
         // Text shrinks slower than geometry so labels stay legible when
         // zoomed out.
         let text_zoom = zoom.clamp(0.75, 1.6);
 
+        let white: Rgba = gpui::white().into();
+        let light = Rgba {
+            r: 0xee as f32 / 255.0,
+            g: 0xf2 as f32 / 255.0,
+            b: 1.0,
+            a: 1.0,
+        };
         let fill_color = if current {
             theme.vm_node_current_fill
-        } else if selected {
-            theme.vm_node_selected_fill
         } else {
-            theme.vm_node_fill
+            lerp_rgba(theme.vm_node_fill, theme.vm_node_selected_fill, weight)
         };
         let border_color = if current {
             theme.success_border
-        } else if selected {
-            theme.vm_node_selected_border
         } else {
-            theme.node_border
+            lerp_rgba(theme.node_border, theme.vm_node_selected_border, weight)
         };
-        let label_color = if current || selected {
-            gpui::white().into()
+        let label_color = if current {
+            white
         } else {
-            theme.vm_node_label
+            lerp_rgba(theme.vm_node_label, white, weight)
         };
-        let sub_label_color: gpui::Rgba = if current || selected {
-            gpui::Rgba {
-                r: 0xee as f32 / 255.0,
-                g: 0xf2 as f32 / 255.0,
-                b: 1.0,
-                a: 1.0,
-            }
+        let sub_label_color = if current {
+            light
         } else {
-            theme.vm_text_meta
+            lerp_rgba(theme.vm_text_meta, light, weight)
         };
+        let border_width = if compressed { 1.5 } else { 1.0 } + weight;
 
+        let mut node_shadows = lighting::raised(theme.is_dark_mode);
+        if current {
+            node_shadows.push(lighting::glow(theme.success_strong, 0.45, 8.0 * zoom));
+        } else if weight > 0.0 {
+            node_shadows.push(lighting::glow(theme.accent, 0.4 * weight, 8.0 * zoom));
+        }
         let version_id = node.version.id.clone();
         let note = node.version.note.clone();
         let show_full =
@@ -414,25 +455,21 @@ impl RootView {
             .w(px(NODE_HALF_W * 2.0 * zoom))
             .h(px(NODE_HALF_H * 2.0 * zoom))
             .cursor_pointer()
-            // Shadow.
+            // Body: lit card; the current and selected versions also glow.
             .child(
                 div()
                     .absolute()
                     .inset_0()
-                    .mt(px(2.0 * zoom))
-                    .rounded(px(12.0 * zoom))
-                    .bg(theme.vm_node_shadow)
-                    .opacity(if selected { 0.35 } else { 0.22 }),
-            )
-            // Body.
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .rounded(px(12.0 * zoom))
-                    .bg(fill_color)
-                    .when(selected, |el| el.border_2())
-                    .when(!selected, |el| el.border_1())
+                    .rounded(px(8.0 * zoom))
+                    .bg(lighting::lit(
+                        fill_color,
+                        if current { 0.1 } else { 0.05 + 0.05 * weight },
+                    ))
+                    .shadow(node_shadows)
+                    .border(px(border_width))
+                    // Dashes mark versions compaction has reduced to
+                    // compressed objects; restoring one decompresses it.
+                    .when(compressed, |el| el.border_dashed())
                     .border_color(border_color)
                     .flex()
                     .flex_col()
@@ -443,7 +480,8 @@ impl RootView {
                     .child(
                         div()
                             .text_size(px(12.0 * text_zoom))
-                            .font_weight(FontWeight::BOLD)
+                            .font_family(MONO_FONT)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(label_color)
                             .child(SharedString::from(if node.version.label.is_empty() {
                                 "?".to_string()
@@ -455,56 +493,44 @@ impl RootView {
                         el.child(
                             div()
                                 .text_size(px(9.0 * text_zoom))
+                                .font_family(MONO_FONT)
                                 .text_color(sub_label_color)
-                                .opacity(0.92)
+                                .opacity(0.9)
                                 .child(SharedString::from(node.version.full_label.clone())),
                         )
                     }),
             )
-            // CURRENT badge above the node.
-            .when(current, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .top(px(-20.0 * zoom))
-                        .left_0()
-                        .right_0()
-                        .flex()
-                        .justify_center()
-                        .child(
-                            div()
-                                .h(px(16.0 * text_zoom))
-                                .px(px(5.0 * text_zoom))
-                                .rounded(px(8.0 * text_zoom))
-                                .bg(theme.success_strong)
-                                .flex()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .text_size(px(8.0 * text_zoom))
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(gpui::white())
-                                        .child("CURRENT"),
-                                ),
-                        ),
-                )
-            })
+            // Click selects; double-click restores, like "Open Version".
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _event, _window, cx| {
-                    this.vm_selected_id = version_id.clone();
-                    let note = note.clone();
-                    this.version_note_input.update(cx, |input, cx| {
-                        input.set_text(&note, cx);
-                        input.disabled = false;
-                    });
+                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                    if event.click_count >= 2 {
+                        this.pending_select_latest = true;
+                        this.backend.restore_version_by_id(&version_id);
+                    } else {
+                        let previous =
+                            std::mem::replace(&mut this.vm_selected_id, version_id.clone());
+                        if previous != version_id {
+                            this.node_fade = Some(SelectionFade {
+                                to: version_id.clone(),
+                                from: previous,
+                                since: std::time::Instant::now(),
+                            });
+                        }
+                        let note = note.clone();
+                        this.version_note_input.update(cx, |input, cx| {
+                            input.set_text(&note, cx);
+                            input.disabled = false;
+                        });
+                    }
                     cx.notify();
                 }),
             )
     }
 
-    /// Bottom details panel: project info ("blame"), project note, and the
-    /// selected version's metadata/note/actions, side by side.
+    /// Bottom details panel: project info, project note, and the selected
+    /// version's metadata, note and actions, as three columns split by
+    /// hairlines.
     pub(crate) fn render_details_panel(
         &mut self,
         window: &mut Window,
@@ -529,43 +555,33 @@ impl RootView {
         let has_selection = !self.vm_selected_id.is_empty();
         let selected_node = self.node_by_id(&self.vm_selected_id).cloned();
         let current_node = self.current_version_node().cloned();
-        let selected_id = self.vm_selected_id.clone();
 
-        let version_heading = if let Some(node) = &selected_node {
-            format!(
-                "Version {}",
-                if node.version.full_label.is_empty() {
-                    node.version.id.clone()
-                } else {
-                    node.version.full_label.clone()
-                }
-            )
-        } else if has_selection {
-            format!("Version {selected_id}")
-        } else {
-            "No version selected".to_string()
+        let version_label = match &selected_node {
+            Some(node) if !node.version.full_label.is_empty() => node.version.full_label.clone(),
+            Some(node) => node.version.id.clone(),
+            None if has_selection => self.vm_selected_id.clone(),
+            None => "\u{2014}".to_string(),
         };
-        let current_line = if let Some(node) = &current_node {
-            format!("Current: {}", node.version.full_label)
-        } else {
-            "No saved version matches the file on disk".to_string()
-        };
-        let time_line = if let Some(node) = &selected_node {
-            if node.version.timestamp.is_empty() {
-                "Saved: unknown".to_string()
-            } else {
-                format!("Saved: {}", node.version.timestamp)
-            }
-        } else {
-            "Select a version in the graph.".to_string()
+        let selected_is_current = selected_node
+            .as_ref()
+            .is_some_and(|node| node.version.is_current);
+        let saved_at = selected_node
+            .as_ref()
+            .map(|node| node.version.timestamp.clone())
+            .filter(|timestamp| !timestamp.is_empty());
+        let current_note = match (&current_node, selected_is_current) {
+            (_, true) => None,
+            (Some(node), false) => Some(format!("Current: {}", node.version.full_label)),
+            (None, false) => Some("No saved version matches the file on disk".to_string()),
         };
 
         let panel = div()
             .size_full()
             .rounded(px(8.0))
-            .bg(theme.vm_side_panel)
+            .bg(lighting::lit(theme.vm_side_panel, 0.02))
             .border_1()
             .border_color(theme.vm_border)
+            .shadow(lighting::panel(theme.is_dark_mode))
             .overflow_hidden()
             .relative();
 
@@ -577,85 +593,113 @@ impl RootView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_size(px(14.0))
+                    .text_size(px(13.0))
                     .text_color(theme.vm_text_meta)
                     .child("Select a project to see its details and versions."),
             );
         };
 
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let path_display = match &home {
+            Some(home) if project_item.path.starts_with(home.as_str()) => {
+                format!("~{}", &project_item.path[home.len()..])
+            }
+            _ => project_item.path.clone(),
+        };
+        let last_opened = if project_item.last_opened.is_empty() {
+            "never".to_string()
+        } else {
+            project_item.last_opened.clone()
+        };
+
+        let divider = || div().w(px(1.0)).h_full().flex_none().bg(theme.vm_border);
+
         // No inner scrolling: the note areas flex-fill whatever height the
         // divider gives the panel, so the action buttons stay visible and
         // the three columns keep a level top and bottom line.
         panel.child(
-            div().size_full().p(px(12.0)).child(
+            div().size_full().p(px(14.0)).child(
                 div()
                     .size_full()
                     .flex()
-                    .gap(px(14.0))
-                    // Column 1: project info ("blame").
+                    .gap(px(16.0))
+                    // Column 1: project.
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .h_full()
                             .flex()
                             .flex_col()
-                            .gap(px(6.0))
+                            .gap(px(8.0))
+                            // Fixed-height blocks: the column can run short of
+                            // room, and a shrinking text block clips to nothing.
+                            .child(caption(&theme, "Project"))
                             .child(
                                 div()
+                                    .flex_none()
                                     .text_size(px(13.0))
-                                    .font_weight(FontWeight::BOLD)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.vm_text_primary)
+                                    .truncate()
                                     .child(SharedString::from(project_item.name.clone())),
                             )
-                            .child(meta_line(&theme, format!("Kind: {}", project_item.kind)))
-                            .child(meta_line(
-                                &theme,
-                                format!("Project file: {}", project_item.file),
-                            ))
-                            .child(meta_line(&theme, format!("Path: {}", project_item.path)))
-                            .child(meta_line(
-                                &theme,
-                                if project_item.last_opened.is_empty() {
-                                    "Last opened: never".to_string()
-                                } else {
-                                    format!("Last opened: {}", project_item.last_opened)
-                                },
-                            ))
-                            // Main project file picker (multi-file projects).
-                            .when(files.len() > 1, |el| {
-                                el.child(
-                                    div()
-                                        .mt(px(4.0))
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(4.0))
-                                        .child(
-                                            div()
-                                                .text_size(px(12.0))
-                                                .font_weight(FontWeight::BOLD)
-                                                .text_color(theme.vm_text_primary)
-                                                .child("Main project file"),
-                                        )
-                                        .child(self.render_combo(
-                                            ComboId::PrimaryFile,
-                                            "primary-file",
-                                            primary_index,
-                                            &files,
-                                            None,
-                                            cx,
-                                            move |this, index, _w, cx| {
-                                                let files = this.backend.selected_project_files();
-                                                if let Some(file) = files.get(index) {
-                                                    let file = file.clone();
-                                                    this.backend
-                                                        .set_selected_project_primary_file(&file);
-                                                }
-                                                cx.notify();
-                                            },
-                                        )),
-                                )
-                            }),
+                            // Only what the list does not already show: the
+                            // file (a picker when the project has several),
+                            // where it lives, and when it was last opened.
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .map(|el| {
+                                        if files.len() > 1 {
+                                            el.child(
+                                                div()
+                                                    .h(px(CONTROL_HEIGHT))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(8.0))
+                                                    .child(detail_key(&theme, "File"))
+                                                    .child(div().flex_1().min_w_0().child(
+                                                        self.render_combo(
+                                                            ComboId::PrimaryFile,
+                                                            "primary-file",
+                                                            primary_index,
+                                                            &files,
+                                                            None,
+                                                            cx,
+                                                            move |this, index, _w, cx| {
+                                                                let files = this
+                                                                    .backend
+                                                                    .selected_project_files();
+                                                                if let Some(file) = files.get(index)
+                                                                {
+                                                                    let file = file.clone();
+                                                                    this.backend
+                                                                        .set_selected_project_primary_file(
+                                                                            &file,
+                                                                        );
+                                                                }
+                                                                cx.notify();
+                                                            },
+                                                        ),
+                                                    )),
+                                            )
+                                        } else {
+                                            el.child(detail_row(
+                                                &theme,
+                                                "File",
+                                                project_item.file.clone(),
+                                            ))
+                                        }
+                                    })
+                                    .child(detail_row(&theme, "Path", path_display))
+                                    .child(detail_row(&theme, "Opened", last_opened)),
+                            ),
                     )
+                    .child(divider())
                     // Column 2: project note.
                     .child(
                         div()
@@ -664,13 +708,14 @@ impl RootView {
                             .h_full()
                             .flex()
                             .flex_col()
-                            .gap(px(6.0))
+                            .gap(px(8.0))
                             .child(
                                 div()
-                                    .text_size(px(13.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.vm_text_primary)
-                                    .child("Project Note"),
+                                    .h(px(15.0))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .child(caption(&theme, "Project note")),
                             )
                             .child(text_area(
                                 &self.project_note_input,
@@ -680,22 +725,25 @@ impl RootView {
                                 window,
                                 cx,
                             ))
-                            .child(panel_button(
-                                "save-project-note",
-                                "Save Project Note",
-                                ButtonVariant::Primary,
-                                true,
-                                &theme,
-                                self,
-                                cx,
-                                |this, _w, cx| {
-                                    let note = this.project_note_input.read(cx).text();
-                                    this.backend.set_selected_project_note(&note);
-                                    cx.notify();
-                                },
+                            .child(div().flex_none().flex().justify_end().child(
+                                div().w(px(96.0)).child(panel_button(
+                                    "save-project-note",
+                                    "Save note",
+                                    ButtonVariant::Soft,
+                                    true,
+                                    &theme,
+                                    self,
+                                    cx,
+                                    |this, _w, cx| {
+                                        let note = this.project_note_input.read(cx).text();
+                                        this.backend.set_selected_project_note(&note);
+                                        cx.notify();
+                                    },
+                                )),
                             )),
                     )
-                    // Column 3: selected version details, note, actions.
+                    .child(divider())
+                    // Column 3: selected version.
                     .child(
                         div()
                             .flex_1()
@@ -703,21 +751,23 @@ impl RootView {
                             .h_full()
                             .flex()
                             .flex_col()
-                            .gap(px(6.0))
+                            .gap(px(8.0))
                             .child(
                                 div()
+                                    .h(px(15.0))
+                                    .flex_none()
                                     .flex()
                                     .items_center()
-                                    .gap(px(8.0))
+                                    .gap(px(7.0))
+                                    .child(caption(&theme, "Version"))
                                     .child(
                                         div()
                                             .text_size(px(13.0))
-                                            .font_weight(FontWeight::BOLD)
+                                            .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme.vm_text_primary)
-                                            .child(SharedString::from(version_heading)),
+                                            .child(SharedString::from(version_label)),
                                     )
-                                    // Metas right-aligned beside the heading:
-                                    // save time and the on-disk current marker.
+                                    // Right-aligned metas: save time, current state.
                                     .child(
                                         div()
                                             .flex_1()
@@ -725,22 +775,39 @@ impl RootView {
                                             .flex()
                                             .justify_end()
                                             .items_center()
-                                            .gap(px(8.0))
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .text_color(theme.vm_text_meta)
-                                                    .truncate()
-                                                    .child(SharedString::from(time_line)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .font_weight(FontWeight::BOLD)
-                                                    .text_color(theme.success_strong)
-                                                    .truncate()
-                                                    .child(SharedString::from(current_line)),
-                                            ),
+                                            .gap(px(10.0))
+                                            .when_some(saved_at, |el, saved_at| {
+                                                el.child(
+                                                    div()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(px(4.0))
+                                                        .text_size(px(11.0))
+                                                        .text_color(theme.vm_text_meta)
+                                                        .child("Saved")
+                                                        .child(SharedString::from(saved_at)),
+                                                )
+                                            })
+                                            .when(selected_is_current, |el| {
+                                                el.child(
+                                                    div().flex().items_center().gap(px(5.0)).child(
+                                                        div()
+                                                            .text_size(px(11.0))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(theme.success_strong)
+                                                            .child("Current"),
+                                                    ),
+                                                )
+                                            })
+                                            .when_some(current_note, |el, note| {
+                                                el.child(
+                                                    div()
+                                                        .text_size(px(11.0))
+                                                        .text_color(theme.vm_text_meta)
+                                                        .truncate()
+                                                        .child(SharedString::from(note)),
+                                                )
+                                            }),
                                     ),
                             )
                             .child(text_area(
@@ -751,14 +818,38 @@ impl RootView {
                                 window,
                                 cx,
                             ))
+                            // Actions: destructive on the left, the call to
+                            // action on the right.
                             .child(
                                 div()
                                     .flex()
+                                    .items_center()
+                                    .flex_none()
                                     .gap(px(8.0))
-                                    .child(div().flex_1().child(panel_button(
+                                    .child(div().w(px(76.0)).child(panel_button(
+                                        "delete-version",
+                                        "Delete",
+                                        ButtonVariant::Danger,
+                                        has_selection,
+                                        &theme,
+                                        self,
+                                        cx,
+                                        |this, w, cx| {
+                                            this.take_modal_focus(w, cx);
+                                            this.confirm_enter_at = Some(std::time::Instant::now());
+                                            this.confirm_exit_at = None;
+                                            this.confirm = Some(delete_version_confirm(
+                                                &this.vm_selected_id,
+                                                this.show_dev_details(),
+                                            ));
+                                            cx.notify();
+                                        },
+                                    )))
+                                    .child(div().flex_1())
+                                    .child(div().w(px(100.0)).child(panel_button(
                                         "save-version-note",
-                                        "Save Note",
-                                        ButtonVariant::Primary,
+                                        "Save note",
+                                        ButtonVariant::Soft,
                                         has_selection,
                                         &theme,
                                         self,
@@ -771,9 +862,9 @@ impl RootView {
                                             cx.notify();
                                         },
                                     )))
-                                    .child(div().flex_1().child(panel_button(
+                                    .child(div().w(px(118.0)).child(panel_button(
                                         "open-version",
-                                        "Open Version",
+                                        "Open version",
                                         ButtonVariant::Primary,
                                         has_selection,
                                         &theme,
@@ -785,26 +876,6 @@ impl RootView {
                                             this.backend.restore_version_by_id(&version_id);
                                             cx.notify();
                                         },
-                                    )))
-                                    .child(div().flex_1().child(panel_button(
-                                        "delete-version",
-                                        "Delete",
-                                        ButtonVariant::Danger,
-                                        has_selection,
-                                        &theme,
-                                        self,
-                                        cx,
-                                        |this, w, cx| {
-                                            this.take_modal_focus(w, cx);
-                                            this.confirm_enter_at = Some(std::time::Instant::now());
-                                            this.confirm_exit_at = None;
-                                            this.confirm =
-                                                Some(delete_version_confirm(
-                                                    &this.vm_selected_id,
-                                                    this.show_dev_details(),
-                                                ));
-                                            cx.notify();
-                                        },
                                     ))),
                             ),
                     ),
@@ -813,11 +884,33 @@ impl RootView {
     }
 }
 
-fn meta_line(theme: &crate::theme::Theme, text: String) -> impl IntoElement {
+/// One line of the project inspector: a muted key in a fixed column and
+/// its value.
+fn detail_row(theme: &Theme, key: &str, value: String) -> impl IntoElement {
     div()
+        // Same height as the file picker, so the rows share one rhythm.
+        .h(px(CONTROL_HEIGHT))
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(detail_key(theme, key))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(12.0))
+                .text_color(theme.vm_text_primary)
+                .truncate()
+                .child(SharedString::from(value)),
+        )
+}
+
+/// Key column of the inspector rows.
+fn detail_key(theme: &Theme, key: &str) -> impl IntoElement {
+    div()
+        .w(px(52.0))
+        .flex_none()
         .text_size(px(12.0))
-        .line_height(px(16.0))
         .text_color(theme.vm_text_meta)
-        .truncate()
-        .child(SharedString::from(text))
+        .child(SharedString::from(key.to_string()))
 }

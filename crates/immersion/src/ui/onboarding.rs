@@ -63,7 +63,7 @@ impl RootView {
                  Bitwig, FL Studio, Logic, Reaper, ...) every time you save.\n\n\
                  Start by choosing a folder that contains your projects.",
             ))
-            .child(div().h(px(40.0)).w(px(260.0)).child(panel_button(
+            .child(div().h(px(30.0)).w(px(240.0)).child(panel_button(
                 "onboarding-choose-folder",
                 "Choose Projects Folder…",
                 ButtonVariant::Primary,
@@ -129,7 +129,7 @@ impl RootView {
                     cx.notify();
                 },
             ))
-            .child(div().h(px(34.0)).w(px(120.0)).child(panel_button(
+            .child(div().h(px(30.0)).w(px(120.0)).child(panel_button(
                 "onboarding-layout-back",
                 "Back",
                 ButtonVariant::Soft,
@@ -206,7 +206,7 @@ impl RootView {
                     .flex()
                     .gap(px(10.0))
                     .when(!found_projects, |el| {
-                        el.child(div().h(px(38.0)).flex_1().child(panel_button(
+                        el.child(div().h(px(30.0)).flex_1().child(panel_button(
                             "onboarding-retry-layout",
                             "Try Other Layout",
                             ButtonVariant::Soft,
@@ -223,7 +223,7 @@ impl RootView {
                             },
                         )))
                     })
-                    .child(div().h(px(38.0)).flex_1().child(panel_button(
+                    .child(div().h(px(30.0)).flex_1().child(panel_button(
                         "onboarding-add-more",
                         "Add Another Folder…",
                         ButtonVariant::Soft,
@@ -235,7 +235,7 @@ impl RootView {
                             this.prompt_for_onboarding_folder(cx);
                         },
                     )))
-                    .child(div().h(px(38.0)).flex_1().child(panel_button(
+                    .child(div().h(px(30.0)).flex_1().child(panel_button(
                         "onboarding-finish",
                         "Done",
                         ButtonVariant::Primary,

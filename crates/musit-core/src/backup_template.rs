@@ -2,8 +2,7 @@
 //! the main project file (or directory bundle) plus accompanying manifests,
 //! minus bulky media (audio/video/cache) via include/exclude patterns.
 //!
-//! Port of `qt-legacy/src/core/BackupTemplate.{h,cpp}` and the `ProjectKind`
-//! enum from `ProjectDiscovery.h`.
+//! Also defines the `ProjectKind` enum that templates are keyed by.
 //!
 //! Pattern syntax (case-insensitive, '/' separators):
 //!   `**` matches anything including '/'
@@ -90,7 +89,7 @@ pub enum ProjectKind {
 }
 
 impl ProjectKind {
-    /// User-facing name; port of `ProjectDiscovery::kindToString`.
+    /// User-facing name of the project kind.
     pub fn to_display_string(self) -> &'static str {
         match self {
             ProjectKind::Ableton => "Ableton Live",

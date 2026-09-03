@@ -1,8 +1,8 @@
-//! 1:1 port of qt-legacy/src/qml/Theme.qml.
+//! OKLCH-based theme palette.
 //!
 //! All colors are derived from a single base hue (degrees) plus a light/dark
-//! flag, through an OKLCH -> linear sRGB -> sRGB pipeline identical to the
-//! QML implementation (same matrix constants, same clamping).
+//! flag, through an OKLCH -> linear sRGB -> sRGB pipeline (standard OKLab
+//! matrix constants; lightness and the linear channels are clamped).
 
 use gpui::Rgba;
 
@@ -40,7 +40,8 @@ pub fn relative_luminance(color: Rgba) -> f64 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
-/// OKLCH -> sRGB, matching Theme.qml's `oklchToColor` exactly.
+/// OKLCH -> sRGB. Lightness is clamped to [0, 1] and chroma to >= 0; the
+/// linear channels are clamped before gamma encoding.
 pub fn oklch_to_color(l_in: f64, c_in: f64, h_degrees: f64) -> Rgba {
     let l = clamp01(l_in);
     let c = c_in.max(0.0);
@@ -69,7 +70,7 @@ pub fn oklch_to_color(l_in: f64, c_in: f64, h_degrees: f64) -> Rgba {
     }
 }
 
-/// `#AARRGGBB` / `#RRGGBB` literal helper matching QML color strings.
+/// `0xAARRGGBB` literal helper (alpha in the top byte).
 const fn argb(hex: u32) -> Rgba {
     Rgba {
         r: ((hex >> 16) & 0xff) as f32 / 255.0,
@@ -97,6 +98,16 @@ pub const MODAL_ENTER_DURATION_MS: u64 = 220;
 pub const MODAL_EXIT_DURATION_MS: u64 = 160;
 pub const MODAL_PANEL_RADIUS: f32 = 10.0;
 pub const MODAL_EDGE_PADDING: f32 = 48.0;
+
+/// Monospace face for identifiers, paths and timestamps: the system's own
+/// mono where there is one, so it sits naturally beside the UI font.
+pub const MONO_FONT: &str = if cfg!(target_os = "macos") {
+    "Menlo"
+} else if cfg!(target_os = "windows") {
+    "Consolas"
+} else {
+    "DejaVu Sans Mono"
+};
 
 /// Fully evaluated theme palette; recompute when hue or dark mode changes.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -182,7 +193,7 @@ pub struct Theme {
 
 impl Theme {
     pub fn compute(hue: f64, dark: bool) -> Self {
-        // Pastel helper: keeps chroma in a soft range (Theme.qml `pastel`).
+        // Pastel helper: keeps chroma in a soft range (capped at 0.16).
         let pastel = |l: f64, c: f64, dh: f64| oklch_to_color(l, clamp(c, 0.0, 0.16), hue + dh);
         let pick =
             |dark_color: Rgba, light_color: Rgba| if dark { dark_color } else { light_color };
@@ -275,7 +286,7 @@ impl Theme {
             vm_graph_grid: pick(argb(0x26ff_ffff), argb(0x1600_0000)),
             vm_node_fill: pick(oklch_to_color(0.40, 0.070, hue), WHITE),
             vm_node_selected_fill: pick(selection, pastel(0.66, 0.105, 0.0)),
-            vm_node_current_fill: pick(success, pastel(0.62, 0.120, 145.0)),
+            vm_node_current_fill: pick(success, oklch_to_color(0.62, 0.120, 145.0)),
             vm_node_selected_border: pick(pastel(0.92, 0.020, 12.0), pastel(0.52, 0.100, 0.0)),
             vm_node_label: pick(text_primary, pastel(0.22, 0.030, 0.0)),
             vm_node_shadow: pick(argb(0x6600_0000), argb(0x2200_0000)),
@@ -302,7 +313,6 @@ impl Theme {
     }
 }
 
-
 /// Blends two colours in linear-light sRGB (matching the OKLCH pipeline's
 /// working space more closely than a raw sRGB mix).
 fn mix(from: Rgba, to: Rgba, t: f32) -> Rgba {
@@ -324,6 +334,22 @@ impl Theme {
     /// the colour wheel and paint every hue in between — going from orange to
     /// blue would pass through green, which reads as the theme changing to
     /// something else mid-transition rather than settling.
+    /// Palette part-way through a fade. Between two hues in the same colour
+    /// scheme the palette is re-derived from the interpolated hue, so the
+    /// fade travels around the colour wheel and never dips through the grey
+    /// that a straight sRGB mix of, say, purple and green passes through.
+    /// A scheme change has no hue path and mixes colour by colour instead.
+    pub fn blend(from: &Theme, to: &Theme, t: f32) -> Theme {
+        let t = t.clamp(0.0, 1.0);
+        if from.is_dark_mode == to.is_dark_mode {
+            let delta = (to.hue - from.hue + 540.0).rem_euclid(360.0) - 180.0;
+            let hue = (from.hue + delta * t as f64).rem_euclid(360.0);
+            Theme::compute(hue, to.is_dark_mode)
+        } else {
+            Theme::lerp(from, to, t)
+        }
+    }
+
     pub fn lerp(from: &Theme, to: &Theme, t: f32) -> Theme {
         let t = t.clamp(0.0, 1.0);
         Theme {
@@ -369,8 +395,16 @@ impl Theme {
             modal_border: mix(from.modal_border, to.modal_border, t),
             modal_option_border: mix(from.modal_option_border, to.modal_option_border, t),
             modal_option_fill: mix(from.modal_option_fill, to.modal_option_fill, t),
-            modal_option_fill_hover: mix(from.modal_option_fill_hover, to.modal_option_fill_hover, t),
-            modal_option_selected_fill: mix(from.modal_option_selected_fill, to.modal_option_selected_fill, t),
+            modal_option_fill_hover: mix(
+                from.modal_option_fill_hover,
+                to.modal_option_fill_hover,
+                t,
+            ),
+            modal_option_selected_fill: mix(
+                from.modal_option_selected_fill,
+                to.modal_option_selected_fill,
+                t,
+            ),
             modal_selected_border: mix(from.modal_selected_border, to.modal_selected_border, t),
             node_border: mix(from.node_border, to.node_border, t),
             graph_link: mix(from.graph_link, to.graph_link, t),
@@ -387,7 +421,11 @@ impl Theme {
             vm_node_fill: mix(from.vm_node_fill, to.vm_node_fill, t),
             vm_node_selected_fill: mix(from.vm_node_selected_fill, to.vm_node_selected_fill, t),
             vm_node_current_fill: mix(from.vm_node_current_fill, to.vm_node_current_fill, t),
-            vm_node_selected_border: mix(from.vm_node_selected_border, to.vm_node_selected_border, t),
+            vm_node_selected_border: mix(
+                from.vm_node_selected_border,
+                to.vm_node_selected_border,
+                t,
+            ),
             vm_node_label: mix(from.vm_node_label, to.vm_node_label, t),
             vm_node_shadow: mix(from.vm_node_shadow, to.vm_node_shadow, t),
             button_soft_fill: mix(from.button_soft_fill, to.button_soft_fill, t),
@@ -395,11 +433,19 @@ impl Theme {
             button_soft_label: mix(from.button_soft_label, to.button_soft_label, t),
             button_soft_border: mix(from.button_soft_border, to.button_soft_border, t),
             button_primary_fill: mix(from.button_primary_fill, to.button_primary_fill, t),
-            button_primary_fill_hover: mix(from.button_primary_fill_hover, to.button_primary_fill_hover, t),
+            button_primary_fill_hover: mix(
+                from.button_primary_fill_hover,
+                to.button_primary_fill_hover,
+                t,
+            ),
             button_primary_label: mix(from.button_primary_label, to.button_primary_label, t),
             button_primary_border: mix(from.button_primary_border, to.button_primary_border, t),
             button_danger_fill: mix(from.button_danger_fill, to.button_danger_fill, t),
-            button_danger_fill_hover: mix(from.button_danger_fill_hover, to.button_danger_fill_hover, t),
+            button_danger_fill_hover: mix(
+                from.button_danger_fill_hover,
+                to.button_danger_fill_hover,
+                t,
+            ),
             button_danger_label: mix(from.button_danger_label, to.button_danger_label, t),
             button_danger_border: mix(from.button_danger_border, to.button_danger_border, t),
         }
@@ -419,10 +465,10 @@ mod tests {
         )
     }
 
-    // Reference values computed by evaluating Theme.qml's JavaScript with
-    // hue=280 (the default) — guards the port against regressions.
+    // Known-good OKLCH -> sRGB reference values at hue=280 (the default) —
+    // guards the palette derivation against regressions.
     #[test]
-    fn oklch_matches_qml_reference() {
+    fn oklch_matches_reference() {
         let t = Theme::compute(280.0, true);
         // pastel(0.23, 0.015, -4.0) at hue 280 => oklch(0.23, 0.015, 276)
         assert_eq!(

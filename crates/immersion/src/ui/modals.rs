@@ -1,5 +1,5 @@
-//! Modal layer: ThemedPopup sizing/scrims (Main.qml), SettingsWindow.qml,
-//! ProjectsFolderLayoutDialog.qml, and ThemedConfirmDialog.qml.
+//! Modal layer: popup sizing/scrims, the settings window, the projects-folder
+//! layout dialog, and the confirm dialog.
 
 use gpui::{
     AnyElement, Context, ElementId, FontWeight, PathPromptOptions, SharedString, Window, div,
@@ -167,7 +167,7 @@ impl RootView {
             )
     }
 
-    // ---- SettingsWindow.qml ------------------------------------------------
+    // ---- Settings window ---------------------------------------------------
 
     fn render_settings_modal(
         &mut self,
@@ -664,7 +664,7 @@ impl RootView {
         )
     }
 
-    // ---- ProjectsFolderLayoutDialog.qml -------------------------------------
+    // ---- Projects-folder layout dialog --------------------------------------
 
     fn render_layout_dialog(
         &mut self,
@@ -895,7 +895,7 @@ impl RootView {
         )
     }
 
-    // ---- ThemedConfirmDialog.qml --------------------------------------------
+    // ---- Confirm dialog -----------------------------------------------------
 
     fn render_confirm_dialog(
         &mut self,

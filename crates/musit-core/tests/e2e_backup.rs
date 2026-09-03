@@ -1,8 +1,7 @@
 //! End-to-end test for universal backup templates + tiered compressed storage.
 //!
-//! Port of `qt-legacy/tests/e2e_backup_test.cpp`. Exercises the real
-//! production stack (discovery, watcher, snapshot service, metadata/object
-//! stores, AppBackend restore) against a fake Logic bundle:
+//! Exercises the real production stack (discovery, watcher, snapshot service,
+//! metadata/object stores, AppBackend restore) against a fake Logic bundle:
 //!   1. bundle internals (ProjectData, plists) are tracked, audio is not
 //!   2. bundle files saved together share one grouped version
 //!   3. staged copies are compacted past the 5 newest versions per file

@@ -1,5 +1,4 @@
 //! Shared helpers for comparing dotted version ids like "2", "2.1", "2.1.3".
-//! Port of `qt-legacy/src/core/VersionId.h`.
 
 pub fn key(version_id: &str) -> Vec<i64> {
     version_id

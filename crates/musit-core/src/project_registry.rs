@@ -1,7 +1,7 @@
 //! App-level config: saved projects folder, per-project notes/primary file,
-//! and app settings. Port of `qt-legacy/src/persistence/ProjectRegistry.{h,cpp}`.
+//! and app settings.
 //!
-//! Files live in the same location the Qt build used (org/app "musit"):
+//! Files live under the platform's per-user data directory (org/app "musit"):
 //!   macOS:   ~/Library/Application Support/musit/musit
 //!   Linux:   ~/.local/share/musit/musit (respecting XDG_DATA_HOME)
 //!   Windows: %APPDATA%/musit/musit

@@ -1,5 +1,4 @@
 //! RootView: owns the AppBackend, the theme, and all window-level UI state.
-//! Mirrors the responsibilities of Main.qml + QmlBackend wiring.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -8,13 +7,12 @@ use gpui::{
     App, Bounds, Context, ElementId, Entity, FocusHandle, Pixels, ScrollHandle,
     UniformListScrollHandle, Window, WindowAppearance, div, prelude::*,
 };
-use musit_core::backend::{
-    AppBackend, BackendEvent, ColorSchemeMode, PlatformHooks, VersionGraphNode,
-};
+use musit_core::backend::{AppBackend, BackendEvent, ColorSchemeMode, PlatformHooks};
 
 use crate::CloseModal;
 use crate::text_input::{InputStyle, TextInput};
 use crate::theme::Theme;
+use crate::ui::graph_layout::{self, GraphNode};
 
 /// Which combo dropdown is currently open.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,7 +51,44 @@ pub enum OnboardingStep {
 
 /// Tab colours: switching tabs eases the theme hue across instead of
 /// snapping, so the whole window shifts colour in one motion.
-const HUE_ANIM_DURATION: Duration = Duration::from_millis(500);
+const HUE_ANIM_DURATION: Duration = Duration::from_millis(280);
+/// Selection highlights cross-fade in this long: quicker than the colour
+/// shift, so clicking around never feels laggy.
+pub const SELECTION_FADE: Duration = Duration::from_millis(180);
+
+/// A selection moving from one item to another; the old one fades out while
+/// the new one fades in.
+pub struct SelectionFade<T> {
+    pub to: T,
+    pub from: T,
+    pub since: Instant,
+}
+
+impl<T: PartialEq> SelectionFade<T> {
+    pub fn running(&self) -> bool {
+        self.since.elapsed() < SELECTION_FADE
+    }
+
+    /// Eased 0..=1 progress of the fade.
+    pub fn progress(&self) -> f32 {
+        let t = (self.since.elapsed().as_secs_f32() / SELECTION_FADE.as_secs_f32()).clamp(0.0, 1.0);
+        crate::ui::controls::ease_out_cubic(t)
+    }
+
+    /// How selected `item` looks right now: fading in if it is the target,
+    /// out if it was the previous selection, otherwise its steady state.
+    pub fn weight(&self, item: &T, selected: bool) -> f32 {
+        if *item == self.to {
+            self.progress()
+        } else if *item == self.from {
+            1.0 - self.progress()
+        } else if selected {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
 
 /// Narrowest the list pane may get: its header row ("Discovered Projects" and
 /// the Sort combo) stops fitting below this.
@@ -111,12 +146,22 @@ pub struct RootView {
     pub confirm: Option<ConfirmState>,
 
     // Version manager state.
-    pub vm_graph: Vec<VersionGraphNode>,
+    pub vm_graph: Vec<GraphNode>,
     pub vm_selected_id: String,
     pub vm_graph_extent: (f32, f32),
+    /// Column count the graph was last laid out for (see `sync_graph_columns`).
+    pub vm_graph_columns: usize,
+    /// Project-row and version-node selection cross-fades in flight.
+    pub row_fade: Option<SelectionFade<i32>>,
+    pub node_fade: Option<SelectionFade<String>>,
 
     // Popup/interaction state.
     pub open_combo: Option<ComboId>,
+    /// When the open combo's list started revealing (see `COMBO_REVEAL`).
+    pub combo_opened_at: Option<Instant>,
+    /// A combo whose list is fading back out, and when that began. It keeps
+    /// rendering (without taking clicks) until the fade completes.
+    pub combo_closing: Option<(ComboId, Instant)>,
     pub hue_slider_bounds: Option<Bounds<Pixels>>,
     pub hue_dragging: bool,
     /// In-flight tab-to-tab colour shift (see `displayed_hue`).
@@ -142,7 +187,7 @@ pub struct RootView {
     /// Version-graph zoom (1.0 = 100%).
     pub graph_zoom: f32,
 
-    // Animation state (ports of QML Behavior on color/x).
+    // Animation state (colour and position transitions).
     // Switch knob/track slides: element id -> when it was last toggled.
     pub switch_anim: HashMap<ElementId, Instant>,
     // ThemedPopup enter/exit (OutCubic / InCubic): Instant-driven opacity so
@@ -260,7 +305,7 @@ impl RootView {
             });
         }
 
-        // Backend pump: replaces the Qt event loop.
+        // Backend pump.
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -311,7 +356,12 @@ impl RootView {
             vm_graph: Vec::new(),
             vm_selected_id: String::new(),
             vm_graph_extent: (0.0, 0.0),
+            vm_graph_columns: 0,
+            row_fade: None,
+            node_fade: None,
             open_combo: None,
+            combo_opened_at: None,
+            combo_closing: None,
             hue_slider_bounds: None,
             hue_dragging: false,
             hue_anim: None,
@@ -356,7 +406,7 @@ impl RootView {
 
     // ---- Backend event pump ---------------------------------------------
 
-    /// ~QmlBackend: persist debounced settings before the process exits.
+    /// Persist debounced settings before the process exits.
     pub fn flush_before_quit(&mut self) {
         self.backend.flush_pending_persist();
     }
@@ -434,7 +484,7 @@ impl RootView {
                     version_label,
                     relative_path,
                 } => {
-                    // TrayController::onProjectSaveRecorded.
+                    // Desktop notification for a recorded save.
                     if self.backend.notifications_enabled() {
                         let artifact_path =
                             musit_core::backup_template::artifact_for_path(&relative_path);
@@ -453,7 +503,7 @@ impl RootView {
 
         if sync_search {
             // Keep the search box in sync when the backend clears the
-            // filter (folder change, reset) — QML bound text both ways.
+            // filter (folder change, reset).
             let text = self.backend.search_text().to_string();
             self.search_input.update(cx, |input, cx| {
                 if input.text() != text {
@@ -520,7 +570,11 @@ impl RootView {
         let target = self.theme_target();
         // Already on its way there: leave the fade running rather than
         // restarting its clock.
-        if self.hue_anim.as_ref().is_some_and(|anim| anim.aims_at(&target)) {
+        if self
+            .hue_anim
+            .as_ref()
+            .is_some_and(|anim| anim.aims_at(&target))
+        {
             return;
         }
         if shortest_hue_delta(self.theme.hue, target.hue).abs() < 0.5
@@ -559,11 +613,15 @@ impl RootView {
         let target = self.theme_target();
         // The colour moved while a fade was running (a tab switched
         // mid-fade): begin a fresh fade from the colour on screen.
-        if self.hue_anim.as_ref().is_some_and(|anim| !anim.aims_at(&target)) {
+        if self
+            .hue_anim
+            .as_ref()
+            .is_some_and(|anim| !anim.aims_at(&target))
+        {
             self.start_hue_animation();
         }
         self.theme = match &self.hue_anim {
-            Some(anim) => Theme::lerp(&anim.from, &anim.to, self.hue_progress()),
+            Some(anim) => Theme::blend(&anim.from, &anim.to, self.hue_progress()),
             None => target,
         };
         let field = field_style(&self.theme);
@@ -610,7 +668,7 @@ impl RootView {
         if !self.settings_open || self.settings_exit_at.is_some() {
             return;
         }
-        self.open_combo = None;
+        self.close_combo();
         self.settings_exit_at = Some(Instant::now());
         cx.notify();
         Self::schedule_modal_exit(cx, |root| {
@@ -736,7 +794,13 @@ impl RootView {
     /// queued SelectedProject* events (no synchronous duplicate refresh).
     pub fn select_project(&mut self, visible_index: i32, cx: &mut Context<Self>) {
         self.pending_select_latest = true;
-        if visible_index != self.backend.selected_project_index() {
+        let previous = self.backend.selected_project_index();
+        if visible_index != previous {
+            self.row_fade = Some(SelectionFade {
+                to: visible_index,
+                from: previous,
+                since: Instant::now(),
+            });
             // A different graph: start it at the origin rather than inheriting
             // the previous project's pan.
             self.graph_scroll
@@ -747,14 +811,22 @@ impl RootView {
     }
 
     pub fn refresh_version_graph(&mut self, select_latest: bool, cx: &mut Context<Self>) {
-        self.vm_graph = self.backend.selected_project_version_graph();
+        let previous_selected = self.vm_selected_id.clone();
+        let columns = self.graph_columns();
+        self.vm_graph = self
+            .backend
+            .selected_project_version_graph()
+            .into_iter()
+            .map(GraphNode::from)
+            .collect();
+        graph_layout::layout(&mut self.vm_graph, columns);
+        self.vm_graph_columns = columns;
+        self.vm_graph_extent = graph_layout::extent(&self.vm_graph);
 
-        // applyVersionSelection
         if self.vm_graph.is_empty() {
             self.vm_selected_id = String::new();
             self.version_note_input.update(cx, |input, cx| {
                 input.set_text("", cx);
-                // VersionManagerWindow.qml: `enabled: selectedVersionId != ""`.
                 input.disabled = true;
             });
         } else {
@@ -775,38 +847,61 @@ impl RootView {
                 input.disabled = !has_selection;
             });
         }
+        self.sync_node_fade(&previous_selected);
 
-        // Graph extent (VersionManagerWindow.refreshVersionGraph).
-        if self.vm_graph.is_empty() {
-            self.vm_graph_extent = (0.0, 0.0);
-        } else {
-            let mut max_x = self.vm_graph[0].x;
-            let mut max_y = self.vm_graph[0].y;
-            for node in &self.vm_graph[1..] {
-                max_x = max_x.max(node.x);
-                max_y = max_y.max(node.y);
-            }
-            // Node coordinates are absolute (the layout already leaves a margin
-            // at the origin), so the extent is the far edge plus one pad — not
-            // the span plus two.
-            let node_half_w = 38.0;
-            let node_half_h = 23.0;
-            let viewport_pad = 32.0;
-            self.vm_graph_extent = (
-                max_x + node_half_w + viewport_pad,
-                max_y + node_half_h + viewport_pad,
-            );
-        }
         cx.notify();
     }
 
-    pub fn node_by_id(&self, version_id: &str) -> Option<&VersionGraphNode> {
+    /// Starts a node cross-fade when the selection moved to another version
+    /// of the same graph (a restore selects the restored version, say).
+    fn sync_node_fade(&mut self, previous_selected: &str) {
+        if previous_selected.is_empty()
+            || self.vm_selected_id.is_empty()
+            || previous_selected == self.vm_selected_id
+        {
+            return;
+        }
+        self.node_fade = Some(SelectionFade {
+            to: self.vm_selected_id.clone(),
+            from: previous_selected.to_string(),
+            since: Instant::now(),
+        });
+    }
+
+    /// Closes the open combo, if any, letting its list fade back out the way
+    /// it faded in.
+    pub fn close_combo(&mut self) {
+        if let Some(combo) = self.open_combo.take() {
+            self.combo_closing = Some((combo, Instant::now()));
+        }
+    }
+
+    /// Columns the graph pane fits at 100% zoom, from the viewport measured
+    /// last frame. Before the pane has been measured this is one column;
+    /// `render_graph_panel` re-flows as soon as it has a real width.
+    pub fn graph_columns(&self) -> usize {
+        graph_layout::columns_for_width(f32::from(self.graph_scroll.bounds().size.width))
+    }
+
+    /// Re-flows the graph if the pane's column count changed (window or
+    /// split resize). Positions only; the selection is untouched.
+    pub fn sync_graph_columns(&mut self) {
+        let columns = self.graph_columns();
+        if columns == self.vm_graph_columns || self.vm_graph.is_empty() {
+            return;
+        }
+        graph_layout::layout(&mut self.vm_graph, columns);
+        self.vm_graph_columns = columns;
+        self.vm_graph_extent = graph_layout::extent(&self.vm_graph);
+    }
+
+    pub fn node_by_id(&self, version_id: &str) -> Option<&GraphNode> {
         self.vm_graph
             .iter()
             .find(|node| node.version.id == version_id)
     }
 
-    pub fn current_version_node(&self) -> Option<&VersionGraphNode> {
+    pub fn current_version_node(&self) -> Option<&GraphNode> {
         self.vm_graph.iter().find(|node| node.version.is_current)
     }
 
@@ -865,6 +960,24 @@ impl RootView {
         if self.hue_animating() {
             return true;
         }
+        if self.row_fade.as_ref().is_some_and(|fade| fade.running())
+            || self.node_fade.as_ref().is_some_and(|fade| fade.running())
+        {
+            return true;
+        }
+        if self.open_combo.is_some()
+            && self
+                .combo_opened_at
+                .is_some_and(|since| since.elapsed() < crate::ui::controls::COMBO_REVEAL)
+        {
+            return true;
+        }
+        if self
+            .combo_closing
+            .is_some_and(|(_, since)| since.elapsed() < crate::ui::controls::COMBO_REVEAL)
+        {
+            return true;
+        }
         if self.settings_open && modal_opacity(self.settings_enter_at, self.settings_exit_at).1 {
             return true;
         }
@@ -883,7 +996,7 @@ impl RootView {
             self.renaming_tab = None;
             cx.notify();
         } else if self.open_combo.is_some() {
-            self.open_combo = None;
+            self.close_combo();
             cx.notify();
         } else if self.confirm.is_some() {
             self.request_close_confirm(cx);
@@ -947,7 +1060,7 @@ impl Render for RootView {
             .id("root")
             .size_full()
             .font_family(".SystemUIFont")
-            .bg(theme.app_background)
+            .bg(crate::ui::lighting::lit(theme.app_background, 0.035))
             .text_color(theme.text_primary)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::close_modal))

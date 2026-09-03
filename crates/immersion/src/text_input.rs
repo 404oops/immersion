@@ -135,7 +135,7 @@ impl TextInput {
 
     /// Click on the field's chrome (padding, empty area below the text):
     /// focus the input, and when the click missed the text itself, put the
-    /// caret at the end — Qt fields focus from anywhere in the box.
+    /// caret at the end, so the field focuses from anywhere in the box.
     pub fn handle_chrome_click(
         &mut self,
         position: Point<Pixels>,
@@ -1007,7 +1007,7 @@ impl Element for TextElement {
         };
 
         // Keep the caret visible in single-line fields by scrolling the text
-        // horizontally (Qt TextField behavior).
+        // horizontally.
         if multi_line {
             scroll_offset = px(0.0);
         } else if let Some(pos) = cursor_pos {

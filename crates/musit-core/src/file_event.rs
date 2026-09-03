@@ -1,4 +1,5 @@
-//! Port of `qt-legacy/src/core/FileEvent.h`.
+//! File change events produced by the watcher and consumed by the snapshot
+//! service.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileEventType {

@@ -1,4 +1,6 @@
-//! Platform glue (PlatformAgent + TrayController + SingleInstanceGuard in Qt).
+//! Platform glue: background-agent mode, window show/hide, status item,
+//! launch-at-login and the single-instance guard, with no-op fallbacks on
+//! platforms that have no implementation yet.
 
 pub mod single_instance;
 
@@ -31,7 +33,7 @@ pub fn show_main_window() -> bool {
 #[cfg(not(target_os = "macos"))]
 pub fn install_activation_observer(_on_activate: Box<dyn Fn()>) {}
 
-// Launch at login on Windows: HKCU Run key, like PlatformAgent_win.cpp.
+// Launch at login on Windows: HKCU Run key.
 #[cfg(target_os = "windows")]
 pub fn set_launch_at_startup(enabled: bool) {
     use std::os::windows::process::CommandExt;

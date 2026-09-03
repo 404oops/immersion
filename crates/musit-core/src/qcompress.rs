@@ -1,8 +1,11 @@
-//! Qt `qCompress`/`qUncompress`-compatible framing.
+//! Length-prefixed zlib framing for object-store blobs. The frame layout is
+//! the `qCompress` one, which is where the module and `QUncompressReader`
+//! take their names.
 //!
-//! Qt prepends a 4-byte big-endian length (the uncompressed size) to a
-//! standard zlib deflate stream. Objects written by the Qt build must stay
-//! readable here and vice versa.
+//! A frame is a 4-byte big-endian length (the uncompressed size) followed by
+//! a standard zlib deflate stream. An empty payload is framed as exactly
+//! 4 zero bytes with no zlib stream. Existing object stores on disk use this
+//! framing, so it must stay readable byte-for-byte.
 
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
@@ -27,8 +30,8 @@ pub fn q_uncompress(data: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let expected = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    // Qt's qCompress emits exactly 4 zero bytes (no zlib stream) for empty
-    // input, and qUncompress accepts that frame.
+    // An empty payload may be framed as exactly 4 zero bytes with no zlib
+    // stream; accept that frame as empty.
     if data.len() == 4 {
         return (expected == 0).then(Vec::new);
     }
@@ -75,12 +78,12 @@ impl<W: Write> Write for QCompressWriter<W> {
     }
 }
 
-/// Streaming counterpart of [`q_uncompress`]: decodes a qCompress frame from
+/// Streaming counterpart of [`q_uncompress`]: decodes a framed blob from
 /// `input` as it is read, in constant memory. Returns `None` for a frame too
 /// short to carry the length prefix, or a bare 4-byte frame whose declared
 /// size is nonzero (mirroring `q_uncompress` on the same bytes).
 pub struct QUncompressReader<R: Read> {
-    // `None` is Qt's empty frame (exactly 4 zero bytes, no zlib stream).
+    // `None` is the bare empty frame (exactly 4 zero bytes, no zlib stream).
     decoder: Option<ZlibDecoder<std::io::Chain<std::io::Cursor<[u8; 1]>, R>>>,
 }
 
@@ -125,19 +128,19 @@ mod tests {
     }
 
     #[test]
-    fn qt_empty_frame() {
-        // Qt's qCompress of empty input is exactly 4 zero bytes.
+    fn empty_frame() {
+        // The bare empty frame is exactly 4 zero bytes.
         assert_eq!(q_uncompress(&[0, 0, 0, 0]).as_deref(), Some(&[][..]));
         // A nonzero prefix with no stream is corrupt, not empty.
         assert_eq!(q_uncompress(&[0, 0, 0, 5]), None);
-        // Rust-written empty frames must stay readable too.
+        // Empty frames written by `q_compress` must stay readable too.
         let compressed = q_compress(b"", 6);
         assert_eq!(q_uncompress(&compressed).as_deref(), Some(&[][..]));
     }
 
     #[test]
-    fn known_qt_frame() {
-        // qCompress prefixes a big-endian u32 with the uncompressed size.
+    fn known_frame() {
+        // The frame starts with a big-endian u32 holding the uncompressed size.
         let compressed = q_compress(b"abc", 6);
         assert_eq!(&compressed[..4], &[0, 0, 0, 3]);
         // zlib magic follows.
@@ -163,7 +166,7 @@ mod tests {
 
     #[test]
     fn streaming_reader_handles_empty_frames() {
-        // Qt's bare empty frame.
+        // The bare empty frame.
         let mut reader = QUncompressReader::new(&[0u8, 0, 0, 0][..]).unwrap();
         let mut out = Vec::new();
         reader.read_to_end(&mut out).unwrap();
@@ -172,7 +175,8 @@ mod tests {
         assert!(QUncompressReader::new(&[0u8, 0, 0, 5][..]).is_none());
         // Too short to carry a prefix.
         assert!(QUncompressReader::new(&[0u8, 0][..]).is_none());
-        // Rust-written empty frames (prefix + empty zlib stream) decode too.
+        // Empty frames written by `q_compress` (prefix + empty zlib stream)
+        // decode too.
         let compressed = q_compress(b"", 6);
         let mut reader = QUncompressReader::new(&compressed[..]).unwrap();
         let mut out = Vec::new();

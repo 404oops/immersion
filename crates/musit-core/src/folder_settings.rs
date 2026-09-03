@@ -1,7 +1,6 @@
-//! Per-projects-folder settings (`<folder>/.immersion/settings.json`).
-//! Port of `qt-legacy/src/persistence/ProjectsFolderSettings.{h,cpp}`, plus
-//! the session bits (tab name, tab colour) that let a folder come back the
-//! way the user left it when it is re-added.
+//! Per-projects-folder settings (`<folder>/.immersion/settings.json`): the
+//! folder layout plus the session bits (tab name, tab colour) that let a
+//! folder come back the way the user left it when it is re-added.
 
 use crate::path_cleanup::join_path;
 use chrono::Utc;

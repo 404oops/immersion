@@ -1,5 +1,4 @@
 //! Scans a projects folder for supported project files/bundles.
-//! Port of `qt-legacy/src/core/ProjectDiscovery.{h,cpp}`.
 
 use crate::backup_template::{self, ProjectKind};
 use crate::folder_settings::ProjectsFolderLayout;
@@ -443,79 +442,6 @@ pub fn kind_to_string(kind: ProjectKind) -> &'static str {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn scan_directory(
-    root_folder: &str,
-    current_folder: &str,
-    state: &mut ScanState,
-    on_directory_scanned: &mut dyn FnMut(&str),
-    cancelled: Option<&AtomicBool>,
-    layout: ProjectsFolderLayout,
-) {
-    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-        return;
-    }
-
-    on_directory_scanned(current_folder);
-
-    for entry in read_entries(current_folder) {
-        if entry.is_file {
-            register_marker_project(root_folder, &entry, state);
-        }
-
-        let kind = classify_path(&entry);
-
-        if entry.is_dir && kind == ProjectKind::Unknown {
-            if project_config::is_ignored_directory_name(&entry.file_name) {
-                continue;
-            }
-
-            scan_directory(
-                root_folder,
-                &entry.absolute_path,
-                state,
-                on_directory_scanned,
-                cancelled,
-                layout,
-            );
-            continue;
-        }
-
-        if kind == ProjectKind::Unknown {
-            continue;
-        }
-
-        if layout == ProjectsFolderLayout::Files && backup_template::kind_is_bundle(kind) {
-            continue;
-        }
-
-        let folder_path = crate::path_cleanup::parent_path(&entry.absolute_path);
-        *state
-            .counts_by_folder
-            .entry(folder_path.clone())
-            .or_default()
-            .entry(kind)
-            .or_insert(0) += 1;
-        state
-            .files_by_folder
-            .entry(folder_path.clone())
-            .or_default()
-            .push(entry.file_name.clone());
-        state
-            .files_by_folder_and_kind
-            .entry(folder_path.clone())
-            .or_default()
-            .entry(kind)
-            .or_default()
-            .push(entry.file_name.clone());
-        state
-            .file_infos_by_folder
-            .entry(folder_path)
-            .or_default()
-            .insert(entry.file_name.clone(), entry.clone());
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 fn scan_loose_project_files(
     current_folder: &str,
     projects: &mut Vec<DiscoveredProject>,
@@ -794,12 +720,4 @@ pub fn discover_project_for_changed_path(
     }
 
     Some(expanded[0].clone())
-}
-
-// Unused helper retained for parity with the C++ scan entry points; the
-// public discover_all uses scan_with_progress instead.
-#[allow(dead_code)]
-fn unused(state: &mut ScanState, root: &str, layout: ProjectsFolderLayout) {
-    let mut noop = |_: &str| {};
-    scan_directory(root, root, state, &mut noop, None, layout);
 }

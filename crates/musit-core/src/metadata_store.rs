@@ -1,5 +1,4 @@
 //! Append-only JSONL version log under `.musit/versions/log.jsonl`.
-//! Port of `qt-legacy/src/persistence/MetadataStore.{h,cpp}`.
 
 use crate::file_event::{FileEvent, FileEventType};
 use crate::path_cleanup::{artifact_equals, join_path};

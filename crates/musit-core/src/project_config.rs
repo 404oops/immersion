@@ -1,4 +1,5 @@
-//! Port of `qt-legacy/src/core/ProjectConfig.{h,cpp}`.
+//! Per-project configuration: the project root, its `.musit` directory and
+//! the tracking predicate (ignored directory names + backup-template rules).
 
 use crate::backup_template;
 use crate::path_cleanup::{clean_path, join_path};

@@ -1,6 +1,5 @@
-//! Content-addressed object store under `.musit/` (SHA-256 + qCompress zlib
-//! objects plus an uncompressed staging area).
-//! Port of `qt-legacy/src/persistence/ObjectStore.{h,cpp}`.
+//! Content-addressed object store under `.musit/` (SHA-256 + `qcompress`-framed
+//! zlib objects plus an uncompressed staging area).
 
 use crate::path_cleanup::{clean_path, join_path, parent_path};
 use crate::qcompress::{QCompressWriter, QUncompressReader};
@@ -236,7 +235,7 @@ impl ObjectStore {
         (shard_dir, object_path)
     }
 
-    /// Stores the file content-addressed (SHA-256, qCompress level 6) and
+    /// Stores the file content-addressed (SHA-256, zlib level 6) and
     /// returns the hex hash. Idempotent for existing intact objects; repairs
     /// corrupt ones in place. Both passes stream in fixed-size chunks.
     pub fn store_file(&self, absolute_path: &str) -> Option<String> {

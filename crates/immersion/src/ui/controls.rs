@@ -1,17 +1,37 @@
-//! Themed controls: ports of ActionButton.qml, PanelButton.qml,
-//! ThemedSwitch.qml, ThemedSlider.qml, ThemedSpinBox.qml, ThemedComboBox.qml,
-//! and the text-field/area chrome around TextInput.
+//! Themed controls: action and panel buttons, toggle switch, hue slider,
+//! spin box, combo box, overlay scrollbar, easing helpers, and the
+//! text-field/area chrome around TextInput.
 
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Context, ElementId, Entity, MouseButton, Rgba, ScrollHandle, SharedString, Window, canvas,
-    deferred, div, point, prelude::*, px,
+    Context, ElementId, Entity, FontWeight, MouseButton, PathBuilder, Rgba, ScrollHandle,
+    SharedString, Window, canvas, deferred, div, point, prelude::*, px,
 };
 
 use crate::app::{ComboId, RootView};
 use crate::text_input::TextInput;
 use crate::theme::Theme;
+use crate::ui::lighting;
+
+/// Shared metrics: every field, combo and button in the app is this tall
+/// and this round, so rows of mixed controls line up without tuning.
+pub const CONTROL_HEIGHT: f32 = 30.0;
+pub const CONTROL_RADIUS: f32 = 6.0;
+/// A pop-up list fades and slides into place over this long.
+pub const COMBO_REVEAL: Duration = Duration::from_millis(140);
+
+/// Section label: a quiet, medium-weight line that names a region without
+/// competing with the content in it.
+pub fn caption(theme: &Theme, text: &str) -> impl IntoElement {
+    div()
+        .flex_none()
+        .text_size(px(12.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_secondary)
+        .whitespace_nowrap()
+        .child(SharedString::from(text.to_string()))
+}
 
 // ---- Overlay scrollbars -----------------------------------------------------
 
@@ -126,7 +146,7 @@ pub fn apply_scroll_drag(drag: &ScrollDrag, position: f32) {
     }
 }
 
-/// Interactive overlay scrollbar (ScrollBar.qml): draggable thumb, click on
+/// Interactive overlay scrollbar: draggable thumb, click on
 /// the track jumps. Add inside a `.relative()` wrapper around the scroll
 /// container; renders nothing while the content fits.
 pub fn scrollbar(
@@ -234,12 +254,13 @@ pub fn scrollbar(
     }
 }
 
-/// QML Easing.OutCubic.
+/// Cubic ease-out: fast start, decelerating into the end value.
 pub fn ease_out_cubic(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-/// QML Easing.InCubic (ThemedPopup exit, etc.).
+/// Cubic ease-in: slow start, accelerating into the end value (popup exit,
+/// etc.).
 pub fn ease_in_cubic(t: f32) -> f32 {
     t * t * t
 }
@@ -287,43 +308,9 @@ pub enum ButtonVariant {
 
 type ClickHandler = Box<dyn Fn(&mut RootView, &mut Window, &mut Context<RootView>) + 'static>;
 
-/// ActionButton.qml: loud accent button (project rows, settings header).
-pub fn action_button(
-    id: impl Into<ElementId>,
-    text: &str,
-    theme: &Theme,
-    _view: &RootView,
-    cx: &mut Context<RootView>,
-    on_click: impl Fn(&mut RootView, &mut Window, &mut Context<RootView>) + 'static,
-) -> impl IntoElement {
-    let theme = *theme;
-    let label: SharedString = text.to_string().into();
-    div()
-        .id(id.into())
-        .size_full()
-        .cursor_pointer()
-        .on_click(cx.listener(move |this, _event, window, cx| {
-            on_click(this, window, cx);
-        }))
-        .child(
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                // Same corner as the folder tabs and the add button it sits
-                // beside in the header.
-                .rounded(px(6.0))
-                .bg(theme.button_fill)
-                .hover(move |style| style.bg(theme.button_fill_hover))
-                .text_size(px(13.0))
-                .text_color(theme.button_label)
-                .overflow_hidden()
-                .child(label),
-        )
-}
-
-/// PanelButton.qml: soft tinted button with default/primary/danger variants.
+/// Button lit from above: gradient fill, a highlight along the top edge, a
+/// darker rim and a soft shadow. Soft is the tinted secondary button,
+/// Primary the single call to action in a group, Danger a tinted red.
 pub fn panel_button(
     id: impl Into<ElementId>,
     text: &str,
@@ -335,24 +322,22 @@ pub fn panel_button(
     on_click: impl Fn(&mut RootView, &mut Window, &mut Context<RootView>) + 'static,
 ) -> impl IntoElement {
     let theme = *theme;
-    let (fill, fill_hover, label_color, border_color) = match variant {
+    let dark = theme.is_dark_mode;
+    let (fill, fill_hover, label_color) = match variant {
         ButtonVariant::Primary => (
             theme.button_primary_fill,
             theme.button_primary_fill_hover,
             theme.button_primary_label,
-            theme.button_primary_border,
         ),
         ButtonVariant::Danger => (
             theme.button_danger_fill,
             theme.button_danger_fill_hover,
             theme.button_danger_label,
-            theme.button_danger_border,
         ),
         ButtonVariant::Soft => (
             theme.button_soft_fill,
             theme.button_soft_fill_hover,
             theme.button_soft_label,
-            theme.button_soft_border,
         ),
     };
     let label: SharedString = text.to_string().into();
@@ -360,40 +345,38 @@ pub fn panel_button(
 
     div()
         .id(id.into())
-        .h(px(38.0))
+        .h(px(CONTROL_HEIGHT))
+        .w_full()
+        .px(px(12.0))
         .flex()
-        .when(!enabled, |el| el.opacity(0.55))
+        .items_center()
+        .justify_center()
+        .rounded(px(CONTROL_RADIUS))
+        .bg(lighting::lit(fill, 0.08))
+        .border_1()
+        .border_color(lighting::rim(fill, dark))
+        .shadow(lighting::raised(dark))
+        .text_size(px(12.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(label_color)
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .when(!enabled, |el| el.opacity(0.5))
         .when(enabled, move |el| {
             el.cursor_pointer()
+                .hover(move |style| style.bg(lighting::lit(fill_hover, 0.1)))
+                .active(move |style| style.bg(lighting::lit(lighting::shade(fill, -0.06), 0.0)))
                 .on_click(cx.listener(move |this, _event, window, cx| {
                     on_click(this, window, cx);
                 }))
         })
-        .child(
-            div()
-                .h_full()
-                .w_full()
-                .px(px(12.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(8.0))
-                .bg(fill)
-                .when(enabled, |el| el.hover(move |style| style.bg(fill_hover)))
-                .text_size(px(13.0))
-                .text_color(label_color)
-                .overflow_hidden()
-                .when(!theme.is_dark_mode, |el| {
-                    el.border_1().border_color(border_color)
-                })
-                .child(label),
-        )
+        .child(label)
 }
 
-/// ThemedSwitch.qml.
+/// Toggle switch.
 ///
-/// QML Behaviors: track `color` and thumb `x` animate over 140ms with
-/// `Easing.OutCubic`. `switch_anim` records the toggle instant so the first
+/// The track colour and thumb position animate over 140ms with
+/// [`ease_out_cubic`]. `switch_anim` records the toggle instant so the first
 /// paint (and remounts) stay still — only real toggles slide.
 pub fn themed_switch(
     id: impl Into<ElementId>,
@@ -473,7 +456,7 @@ pub fn themed_switch(
         )
 }
 
-/// ThemedSpinBox.qml (editable value field + increment/decrement buttons).
+/// Spin box: editable value field + increment/decrement buttons.
 pub fn themed_spinbox(
     id_prefix: &'static str,
     value: i32,
@@ -495,9 +478,9 @@ pub fn themed_spinbox(
                        handler: ClickHandler| {
         div()
             .id(id)
-            .w(px(24.0))
-            .h(px(24.0))
-            .rounded(px(4.0))
+            .w(px(22.0))
+            .h(px(22.0))
+            .rounded(px(3.0))
             .flex()
             .items_center()
             .justify_center()
@@ -517,13 +500,14 @@ pub fn themed_spinbox(
 
     div()
         .w(px(118.0))
-        .h(px(32.0))
+        .h(px(CONTROL_HEIGHT))
         .flex_none()
-        .rounded(px(6.0))
-        .bg(theme.input_fill)
+        .rounded(px(CONTROL_RADIUS))
+        .bg(theme.input_surface)
         .border_1()
-        .border_color(theme.input_border_accent)
-        .when(!enabled, |el| el.opacity(0.55))
+        .border_color(theme.input_border)
+        .shadow(lighting::recessed(theme.is_dark_mode))
+        .when(!enabled, |el| el.opacity(0.5))
         .flex()
         .items_center()
         .justify_between()
@@ -538,7 +522,7 @@ pub fn themed_spinbox(
             }),
         ))
         .child(
-            // Direct entry, like Qt's `editable: true` spinbox.
+            // Direct entry: the value field is an editable text input.
             div()
                 .flex_1()
                 .px(px(4.0))
@@ -557,7 +541,7 @@ pub fn themed_spinbox(
         ))
 }
 
-/// ThemedTextField.qml chrome around a TextInput entity.
+/// Single-line text field: a recessed white well with a focus glow.
 pub fn text_field(
     input: &Entity<TextInput>,
     theme: &Theme,
@@ -568,17 +552,20 @@ pub fn text_field(
     let theme = *theme;
     let click_input = input.clone();
     div()
-        .h(px(30.0))
+        .h(px(CONTROL_HEIGHT))
         .w_full()
-        .px(px(10.0))
+        .px(px(9.0))
         .flex()
         .items_center()
-        .rounded(px(5.0))
-        .bg(theme.input_fill)
-        .when(focused, |el| el.border_2().border_color(theme.accent))
-        .when(!focused, |el| {
-            el.border_1().border_color(theme.input_border_accent)
+        .rounded(px(CONTROL_RADIUS))
+        .bg(theme.input_surface)
+        .border_1()
+        .border_color(if focused {
+            theme.accent
+        } else {
+            theme.input_border
         })
+        .shadow(well_shadows(&theme, focused))
         .overflow_hidden()
         .on_mouse_down(
             MouseButton::Left,
@@ -591,9 +578,18 @@ pub fn text_field(
         .child(input.clone())
 }
 
-/// ThemedTextArea.qml chrome around a multi-line TextInput entity.
-/// `height: None` makes the area fill its flex slot (min 40px) so the
-/// details panel scales with the divider instead of clipping.
+/// Recessed well, plus the accent focus glow while focused.
+fn well_shadows(theme: &Theme, focused: bool) -> Vec<gpui::BoxShadow> {
+    let mut shadows = lighting::recessed(theme.is_dark_mode);
+    if focused {
+        shadows.push(lighting::glow(theme.accent, 0.35, 3.0));
+    }
+    shadows
+}
+
+/// Text area: the same recessed well as the field, filling its flex slot
+/// (min 40px) when `height` is None so the details panel scales with the
+/// divider instead of clipping.
 pub fn text_area(
     input: &Entity<TextInput>,
     height: Option<f32>,
@@ -611,17 +607,20 @@ pub fn text_area(
         ))
         .when_some(height, |el, h| el.h(px(h)))
         .when(height.is_none(), |el| el.flex_1().min_h(px(40.0)))
-        .line_height(px(16.0))
+        .line_height(px(17.0))
         .w_full()
         .px(px(10.0))
         .py(px(8.0))
-        .rounded(px(6.0))
+        .rounded(px(CONTROL_RADIUS))
         .bg(theme.vm_input_surface)
-        .when(focused, |el| {
-            el.border_2().border_color(theme.input_border_accent)
+        .border_1()
+        .border_color(if focused {
+            theme.accent
+        } else {
+            theme.vm_border
         })
-        .when(!focused, |el| el.border_1().border_color(theme.vm_border))
-        .when(!enabled, |el| el.opacity(0.55))
+        .shadow(well_shadows(&theme, focused))
+        .when(!enabled, |el| el.opacity(0.5))
         .overflow_y_scroll()
         .when(enabled, |el| {
             el.on_mouse_down(
@@ -637,8 +636,8 @@ pub fn text_area(
 }
 
 impl RootView {
-    /// ThemedComboBox.qml. Renders the closed control and, when open, a
-    /// deferred dropdown list anchored below it.
+    /// Pop-up button: a raised control with the accent chevron chip on the
+    /// right, and a floating list when open.
     pub fn render_combo(
         &self,
         combo: ComboId,
@@ -650,7 +649,37 @@ impl RootView {
         on_select: impl Fn(&mut RootView, usize, &mut Window, &mut Context<RootView>) + 'static,
     ) -> impl IntoElement {
         let theme = self.theme;
+        let dark = theme.is_dark_mode;
         let is_open = self.open_combo == Some(combo);
+        // The list keeps rendering while it fades back out after a close.
+        let closing_since = self.combo_closing.and_then(|(closing, since)| {
+            (closing == combo && since.elapsed() < COMBO_REVEAL).then_some(since)
+        });
+        let showing = is_open || closing_since.is_some();
+        // Reveal progress of the list: opacity, and a short slide between the
+        // control and its resting place. Opening eases out, closing eases in,
+        // so both ends of the motion sit against the control.
+        let reveal = if is_open {
+            self.combo_opened_at
+                .map(|since| {
+                    ease_out_cubic(
+                        (since.elapsed().as_secs_f32() / COMBO_REVEAL.as_secs_f32())
+                            .clamp(0.0, 1.0),
+                    )
+                })
+                .unwrap_or(1.0)
+        } else if let Some(since) = closing_since {
+            1.0 - ease_in_cubic(
+                (since.elapsed().as_secs_f32() / COMBO_REVEAL.as_secs_f32()).clamp(0.0, 1.0),
+            )
+        } else {
+            1.0
+        };
+        let slide = 6.0 * (1.0 - reveal);
+        // The main-file picker lives at the bottom of the details panel, a
+        // few pixels above the window edge: its list opens upward so it is
+        // never cut off. Everything else has room below.
+        let opens_upward = matches!(combo, ComboId::PrimaryFile);
         let display: SharedString = options
             .get(current_index)
             .cloned()
@@ -658,6 +687,13 @@ impl RootView {
             .into();
         let options_owned: Vec<String> = options.to_vec();
         let on_select = std::rc::Rc::new(on_select);
+        let body_fill = if dark {
+            theme.button_soft_fill
+        } else {
+            theme.input_surface
+        };
+        let chip_fill = theme.button_fill;
+        let chevron_color: gpui::Hsla = theme.button_label.into();
 
         div()
             .relative()
@@ -666,30 +702,60 @@ impl RootView {
             .child(
                 div()
                     .id(ElementId::Name(format!("{id}-toggle").into()))
-                    .h(px(30.0))
+                    .h(px(CONTROL_HEIGHT))
                     .w_full()
                     .pl(px(10.0))
-                    .pr(px(24.0))
+                    .pr(px(28.0))
                     .flex()
                     .items_center()
-                    .rounded(px(5.0))
-                    .bg(theme.input_fill)
-                    .when(is_open, |el| el.border_2().border_color(theme.accent))
-                    .when(!is_open, |el| {
-                        el.border_1().border_color(theme.input_border_accent)
+                    .rounded(px(CONTROL_RADIUS))
+                    .bg(lighting::lit(body_fill, 0.05))
+                    .border_1()
+                    .border_color(if is_open {
+                        theme.accent
+                    } else {
+                        lighting::rim(body_fill, dark)
                     })
+                    .shadow(lighting::raised(dark))
                     .cursor_pointer()
-                    .text_size(px(12.0))
+                    .text_size(px(12.5))
                     .text_color(theme.text_primary)
+                    .whitespace_nowrap()
                     .overflow_hidden()
+                    .hover(move |style| style.bg(lighting::lit(body_fill, 0.09)))
                     .child(display)
+                    // Chevron chip: accent square with up/down arrows.
                     .child(
                         div()
                             .absolute()
-                            .right(px(10.0))
-                            .text_size(px(11.0))
-                            .text_color(theme.accent)
-                            .child("\u{25be}"),
+                            .right(px(5.0))
+                            .top(px((CONTROL_HEIGHT - 2.0 - 18.0) / 2.0))
+                            .w(px(18.0))
+                            .h(px(18.0))
+                            .rounded(px(CONTROL_RADIUS - 2.0))
+                            .bg(lighting::lit(chip_fill, 0.12))
+                            .shadow(lighting::raised(dark))
+                            .child(
+                                canvas(
+                                    |_bounds, _window, _cx| {},
+                                    move |bounds, _state, window, _cx| {
+                                        let o = bounds.origin;
+                                        let mut builder = PathBuilder::stroke(px(1.5));
+                                        // Up chevron.
+                                        builder.move_to(point(o.x + px(5.5), o.y + px(7.5)));
+                                        builder.line_to(point(o.x + px(9.0), o.y + px(4.0)));
+                                        builder.line_to(point(o.x + px(12.5), o.y + px(7.5)));
+                                        // Down chevron.
+                                        builder.move_to(point(o.x + px(5.5), o.y + px(10.5)));
+                                        builder.line_to(point(o.x + px(9.0), o.y + px(14.0)));
+                                        builder.line_to(point(o.x + px(12.5), o.y + px(10.5)));
+                                        if let Ok(path) = builder.build() {
+                                            window.paint_path(path, chevron_color);
+                                        }
+                                    },
+                                )
+                                .size_full(),
+                            ),
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         // The popup's mouse_down_out already closed the combo
@@ -700,38 +766,59 @@ impl RootView {
                             return;
                         }
                         this.combo_dismissed = None;
-                        this.open_combo = if this.open_combo == Some(combo) {
-                            None
+                        if this.open_combo == Some(combo) {
+                            this.close_combo();
                         } else {
-                            Some(combo)
-                        };
+                            this.close_combo();
+                            this.open_combo = Some(combo);
+                            this.combo_opened_at = Some(Instant::now());
+                            this.combo_closing = None;
+                        }
                         cx.notify();
                     })),
             )
-            .when(is_open, |el| {
+            .when(showing, |el| {
                 el.child(
                     deferred(
                         div()
                             .id(ElementId::Name(format!("{id}-popup").into()))
                             .absolute()
-                            .top(px(32.0))
+                            .opacity(reveal)
+                            .when(opens_upward, |el| {
+                                el.bottom(px(CONTROL_HEIGHT + 4.0 - slide))
+                            })
+                            .when(!opens_upward, |el| el.top(px(CONTROL_HEIGHT + 4.0 - slide)))
                             .left_0()
                             .w_full()
-                            .max_h(px(220.0))
-                            .p(px(3.0))
-                            .rounded(px(5.0))
-                            .bg(theme.input_fill)
+                            .max_h(px(240.0))
+                            .p(px(5.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .rounded(px(CONTROL_RADIUS + 1.0))
+                            .bg(if dark {
+                                theme.button_soft_fill
+                            } else {
+                                theme.input_surface
+                            })
                             .border_1()
-                            .border_color(theme.input_border_accent)
+                            .border_color(lighting::rim(body_fill, dark))
+                            .shadow(lighting::panel(dark))
                             .overflow_y_scroll()
-                            .occlude()
-                            .on_mouse_down_out(cx.listener(move |this, _event, _window, cx| {
-                                this.open_combo = None;
-                                // Remember which combo this mouse-down dismissed
-                                // so its own toggle's click doesn't reopen it.
-                                this.combo_dismissed = Some(combo);
-                                cx.notify();
-                            }))
+                            // A list on its way out takes no clicks and lets
+                            // them through to whatever is beneath it.
+                            .when(is_open, |el| {
+                                el.occlude().on_mouse_down_out(cx.listener(
+                                    move |this, _event, _window, cx| {
+                                        this.close_combo();
+                                        // Remember which combo this mouse-down
+                                        // dismissed so its own toggle's click
+                                        // doesn't reopen it.
+                                        this.combo_dismissed = Some(combo);
+                                        cx.notify();
+                                    },
+                                ))
+                            })
                             .children(options_owned.into_iter().enumerate().map(
                                 |(index, option)| {
                                     let on_select = on_select.clone();
@@ -742,25 +829,36 @@ impl RootView {
                                             index as u64,
                                         ))
                                         .h(px(28.0))
+                                        .flex_none()
                                         .w_full()
-                                        .pl(px(8.0))
+                                        .px(px(9.0))
                                         .flex()
                                         .items_center()
-                                        .rounded(px(4.0))
-                                        .text_size(px(12.0))
-                                        .text_color(theme.text_primary)
-                                        .when(highlighted, |elem| elem.bg(theme.selection))
-                                        .when(!highlighted, |elem| {
-                                            elem.hover(move |style| style.bg(theme.row_even))
+                                        .rounded(px(CONTROL_RADIUS - 1.0))
+                                        .text_size(px(12.5))
+                                        .text_color(if highlighted {
+                                            theme.button_label
+                                        } else {
+                                            theme.text_primary
                                         })
-                                        .cursor_pointer()
+                                        .when(highlighted, |elem| {
+                                            elem.bg(lighting::lit(theme.button_fill, 0.08))
+                                        })
+                                        .when(!highlighted, |elem| {
+                                            elem.hover(move |style| style.bg(theme.row_odd))
+                                        })
                                         .overflow_hidden()
                                         .child(SharedString::from(option))
-                                        .on_click(cx.listener(move |this, _event, window, cx| {
-                                            this.open_combo = None;
-                                            on_select(this, index, window, cx);
-                                            cx.notify();
-                                        }))
+                                        .when(is_open, |elem| {
+                                            let on_select = on_select.clone();
+                                            elem.cursor_pointer().on_click(cx.listener(
+                                                move |this, _event, window, cx| {
+                                                    this.close_combo();
+                                                    on_select(this, index, window, cx);
+                                                    cx.notify();
+                                                },
+                                            ))
+                                        })
                                 },
                             )),
                     )
@@ -769,7 +867,7 @@ impl RootView {
             })
     }
 
-    /// ThemedSlider.qml (hue slider). Bounds captured for drag math.
+    /// Hue slider. Bounds captured for drag math.
     pub fn render_hue_slider(&self, cx: &mut Context<RootView>) -> impl IntoElement {
         let theme = self.theme;
         let value = self.backend.theme_hue();

@@ -1,9 +1,8 @@
 //! musit-core: domain logic for Immersion's automatic project versioning.
 //!
-//! Faithful Rust port of the Qt/C++ core (`qt-legacy/src/core` and
-//! `qt-legacy/src/persistence`). On-disk formats (`.musit` object store,
-//! `versions/log.jsonl`, `branch-state.json`, app config JSON) are byte-level
-//! compatible with the Qt build so existing histories keep working.
+//! The on-disk formats (`.musit` object store, `versions/log.jsonl`,
+//! `branch-state.json`, app config JSON) are stable and must stay byte-level
+//! compatible so existing histories keep working.
 
 pub mod backend;
 pub mod backup_template;

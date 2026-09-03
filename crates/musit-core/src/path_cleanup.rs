@@ -1,16 +1,15 @@
-//! Path normalization helpers for stable comparisons across platforms.
-//! Port of `qt-legacy/src/core/PathCleanup.h` plus the handful of QDir
-//! helpers the C++ code relied on (cleanPath, filePath, relativeFilePath).
+//! Path normalization helpers for stable comparisons across platforms:
+//! lexical cleanup, joining, relative paths and case-aware equality.
 //!
-//! All paths in musit-core are `String`s with '/' separators, mirroring the
-//! Qt convention after `QDir::cleanPath`.
+//! All paths in musit-core are `String`s with '/' separators, normalized by
+//! [`clean_path`].
 
 use std::fs;
 use std::path::Path;
 
-/// Lexical path cleanup equivalent to `QDir::cleanPath` +
-/// `QDir::fromNativeSeparators`: '/' separators, no duplicate slashes,
-/// "." removed, ".." resolved where possible, no trailing slash except root.
+/// Lexical path cleanup: '/' separators (backslashes converted), no
+/// duplicate slashes, "." removed, ".." resolved where possible, no trailing
+/// slash except root.
 pub fn clean_path(path: &str) -> String {
     let path = path.replace('\\', "/");
     if path.is_empty() {
@@ -18,8 +17,8 @@ pub fn clean_path(path: &str) -> String {
     }
 
     let absolute = path.starts_with('/');
-    // A UNC root ("//server/share") keeps its double slash, like
-    // QDir::cleanPath on Windows; three or more slashes collapse.
+    // A UNC root ("//server/share") keeps its double slash; three or more
+    // slashes collapse.
     let unc = path.starts_with("//") && !path.starts_with("///");
     // Windows drive prefix ("C:") survives as the first component.
     let mut parts: Vec<&str> = Vec::new();
@@ -36,7 +35,7 @@ pub fn clean_path(path: &str) -> String {
                 } else if !absolute {
                     parts.push("..");
                 }
-                // Leading ".." on an absolute path is dropped, like QDir.
+                // Leading ".." on an absolute path is dropped.
             }
             other => parts.push(other),
         }
@@ -176,7 +175,7 @@ pub fn artifact_equals(a: &str, b: &str) -> bool {
     eq_with_sensitivity(left.trim(), right.trim())
 }
 
-/// `QDir(dir).filePath(name)`: joins unless `name` is already absolute.
+/// Joins `name` onto `dir` unless `name` is already absolute.
 /// A drive prefix ("X:") makes a path absolute only on Windows — on POSIX
 /// a ':' is an ordinary filename character.
 pub fn join_path(dir: &str, name: &str) -> String {
@@ -190,8 +189,8 @@ pub fn join_path(dir: &str, name: &str) -> String {
     format!("{}/{}", dir, name.replace('\\', "/"))
 }
 
-/// `QDir(dir).relativeFilePath(path)`: lexical relative path with ".."
-/// where needed. Both inputs should be absolute.
+/// Lexical relative path from `dir` to `path`, with ".." where needed. Both
+/// inputs should be absolute.
 pub fn relative_file_path(dir: &str, path: &str) -> String {
     let dir = clean_path(dir);
     let path = clean_path(path);
@@ -219,19 +218,17 @@ pub fn relative_file_path(dir: &str, path: &str) -> String {
     }
 
     if out.is_empty() {
-        // QDir::relativeFilePath returns "." for identical paths... actually
-        // it returns an empty string; callers in this codebase never hit it
-        // with identical paths except prefix checks, where "" behaves the
-        // same as Qt's result for practical purposes.
+        // Identical paths yield an empty string rather than "."; callers only
+        // hit this case in prefix checks, where "" is the expected result.
         return String::new();
     }
     out.join("/")
 }
 
 fn component_eq(a: &str, b: &str) -> bool {
-    // Qt compares path components case-insensitively only on Windows in
-    // relativeFilePath; keep exact comparison elsewhere. Drive letters on
-    // Windows also compare insensitively, which this covers.
+    // Path components compare case-insensitively only on Windows; keep exact
+    // comparison elsewhere. Drive letters on Windows also compare
+    // insensitively, which this covers.
     if cfg!(target_os = "windows") {
         a.to_lowercase() == b.to_lowercase()
     } else {

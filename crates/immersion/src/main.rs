@@ -1,4 +1,4 @@
-//! Immersion — GPUI shell for the musit core (port of the Qt/QML app).
+//! Immersion — GPUI desktop shell for the musit core.
 
 mod app;
 mod platform;
@@ -26,7 +26,8 @@ thread_local! {
     static APP_HIDDEN: Cell<bool> = const { Cell::new(false) };
 }
 
-/// TrayController::showMainWindow + PlatformAgent::presentMainWindow.
+/// Brings the main window back: leaves background-agent mode, activates the
+/// app and shows (or re-activates) the window.
 ///
 /// The window is ordered out while hidden rather than kept on screen behind a
 /// hidden app, so ordering it back in plays the system's window-open
@@ -55,10 +56,9 @@ fn main() {
         InstanceGuard::Secondary => return,
     };
 
-    // Qt starts hidden in background-agent mode when a projects folder is
-    // already configured (TrayController::attach). Only on macOS: other
-    // platforms have no status item yet, so a hidden window would be
-    // unreachable.
+    // Start hidden in background-agent mode when a projects folder is
+    // already configured. Only on macOS: other platforms have no status item
+    // yet, so a hidden window would be unreachable.
     let saved_folders = musit_core::project_registry::ProjectRegistry.load_projects_folders();
     let start_hidden = cfg!(target_os = "macos")
         && !saved_folders.is_empty()
@@ -198,7 +198,7 @@ fn main() {
 
         // Spotlight/Dock can activate the running process without triggering
         // applicationShouldHandleReopen; reveal the window on activation
-        // while it's hidden (PlatformAgent_mac parity).
+        // while it's hidden.
         {
             let async_activate: RefCell<AsyncApp> = RefCell::new(cx.to_async());
             platform::install_activation_observer(Box::new(move || {
