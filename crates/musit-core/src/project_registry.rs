@@ -11,7 +11,7 @@ use crate::backup_template::{
     UNCOMPRESSED_RECENT_VERSIONS,
 };
 use crate::object_store::write_atomically;
-use crate::path_cleanup::{clean_path, join_path, path_equals};
+use crate::path_cleanup::{clean_path, join_path, path_equals, path_key};
 use crate::project_discovery::{DiscoveredProject, known_kinds};
 use chrono::Utc;
 use serde_json::{Map, Value, json};
@@ -212,6 +212,13 @@ fn read_projects_array(file_path: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// What the registry remembers about a project beyond what a scan finds.
+#[derive(Clone, Debug, Default)]
+pub struct ProjectRecord {
+    pub note: String,
+    pub primary_project_file: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ProjectRegistry;
 
@@ -263,6 +270,75 @@ impl ProjectRegistry {
 
         let root = json!({ "projects": updated });
         write_json_atomically(&file_path, &root)
+    }
+
+    /// Saves every project of a scan in one read-modify-write of the
+    /// registry, instead of one per project.
+    pub fn save_projects(&self, projects: &[DiscoveredProject]) -> bool {
+        let dir_path = app_config_directory();
+        if dir_path.is_empty() || fs::create_dir_all(&dir_path).is_err() {
+            return false;
+        }
+
+        let file_path = self.data_file_path();
+        let mut incoming: std::collections::HashMap<String, &DiscoveredProject> = projects
+            .iter()
+            .map(|project| (path_key(&project.root_path), project))
+            .collect();
+
+        let mut updated: Vec<Value> = Vec::new();
+        for value in read_projects_array(&file_path) {
+            let obj = value.as_object().cloned().unwrap_or_default();
+            let root_path = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
+            match incoming.remove(&path_key(root_path)) {
+                Some(project) => {
+                    let note = obj.get("note").and_then(|v| v.as_str()).unwrap_or("");
+                    updated.push(project_to_json(project, note));
+                }
+                None => updated.push(Value::Object(obj)),
+            }
+        }
+        // Registry order is irrelevant to readers; keep the new entries in
+        // scan order for a stable file.
+        let mut new_entries: Vec<&DiscoveredProject> = incoming.into_values().collect();
+        new_entries.sort_by(|left, right| left.root_path.cmp(&right.root_path));
+        for project in new_entries {
+            updated.push(project_to_json(project, ""));
+        }
+
+        let root = json!({ "projects": updated });
+        write_json_atomically(&file_path, &root)
+    }
+
+    /// Note and remembered primary file of every saved project, keyed by
+    /// `path_key` of the root, from a single read of the registry.
+    pub fn load_project_records(&self) -> std::collections::HashMap<String, ProjectRecord> {
+        let mut records = std::collections::HashMap::new();
+        for value in read_projects_array(&self.data_file_path()) {
+            let Some(obj) = value.as_object() else {
+                continue;
+            };
+            let root_path = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
+            if root_path.is_empty() {
+                continue;
+            }
+            records.insert(
+                path_key(root_path),
+                ProjectRecord {
+                    note: obj
+                        .get("note")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    primary_project_file: obj
+                        .get("primary_project_file")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                },
+            );
+        }
+        records
     }
 
     pub fn load_project_note(&self, root_path: &str) -> String {

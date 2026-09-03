@@ -17,6 +17,7 @@ pub mod project_registry;
 pub mod qcompress;
 pub mod snapshot_service;
 pub mod version_id;
+pub mod versioning;
 pub mod watcher;
 
 pub use backup_template::{BackupCategory, BackupTemplate, ProjectKind};

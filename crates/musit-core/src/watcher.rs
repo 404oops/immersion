@@ -349,7 +349,7 @@ impl WorkerState {
         let Some(state) = state else {
             if self.previous.remove(relative_path).is_some() {
                 self.pending.remove(relative_path);
-                self.emit_change(FileEventType::Deleted, relative_path, sequence);
+                self.emit_change(FileEventType::Deleted, relative_path, sequence, 0);
             }
             return false;
         };
@@ -361,6 +361,7 @@ impl WorkerState {
 
         if self.pending.get(relative_path) == Some(&state) {
             let is_new = !self.previous.contains_key(relative_path);
+            let modified_ms = state.msecs_since_epoch;
             self.previous.insert(relative_path.to_string(), state);
             self.pending.remove(relative_path);
             self.emit_change(
@@ -371,6 +372,7 @@ impl WorkerState {
                 },
                 relative_path,
                 sequence,
+                modified_ms,
             );
             return false;
         }
@@ -380,12 +382,19 @@ impl WorkerState {
         true
     }
 
-    fn emit_change(&self, event_type: FileEventType, relative_path: &str, sequence: i64) {
+    fn emit_change(
+        &self,
+        event_type: FileEventType,
+        relative_path: &str,
+        sequence: i64,
+        modified_ms: i64,
+    ) {
         let event = FileEvent {
             event_type,
             relative_path: relative_path.to_string(),
             absolute_path: join_path(&self.root_path, relative_path),
             scan_sequence: sequence,
+            modified_ms,
         };
         (self.on_event)(event);
     }

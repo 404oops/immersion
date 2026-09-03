@@ -20,6 +20,9 @@ pub struct FileEvent {
     /// the same tick (e.g. several files inside a .logicx bundle written by
     /// one save) are grouped into a single version. 0 = no grouping info.
     pub scan_sequence: i64,
+    /// Modified time of the file when the watcher observed it, in
+    /// milliseconds since the Unix epoch; 0 when unknown (or deleted).
+    pub modified_ms: i64,
 }
 
 impl FileEvent {
@@ -29,6 +32,7 @@ impl FileEvent {
             absolute_path: absolute_path.into(),
             relative_path: relative_path.into(),
             scan_sequence: 0,
+            modified_ms: 0,
         }
     }
 }

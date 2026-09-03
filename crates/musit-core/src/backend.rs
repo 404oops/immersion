@@ -21,8 +21,9 @@ use crate::path_cleanup::{
 };
 use crate::project_discovery::{self, DiscoveredProject};
 use crate::project_registry::{AppSettings, ProjectRegistry, app_config_directory};
-use crate::snapshot_service::{SnapshotNotice, SnapshotService};
+use crate::snapshot_service::SnapshotNotice;
 use crate::version_id;
+use crate::versioning::{self, Job as VersioningJob, Reply as VersioningReply};
 use crate::watcher::HybridFileWatcher;
 use chrono::{DateTime, Local};
 use serde_json::{Map, Value};
@@ -31,9 +32,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 const MAX_ACTIVITY_LINES: usize = 2000;
@@ -112,6 +113,9 @@ struct FolderWorkspace {
     discovered_projects: Vec<DiscoveredProject>,
     watcher: Option<HybridFileWatcher>,
     scanning: bool,
+    /// Bumped whenever this folder's monitoring is torn down, so versioning
+    /// init replies from before that are recognised as stale.
+    monitoring_generation: u64,
 }
 
 impl FolderWorkspace {
@@ -125,6 +129,7 @@ impl FolderWorkspace {
             discovered_projects: Vec::new(),
             watcher: None,
             scanning: false,
+            monitoring_generation: 0,
         }
     }
 }
@@ -241,8 +246,8 @@ enum BackendMsg {
         directories_scanned: i32,
         scan_generation: i32,
     },
+    /// A scan partial is ready in `scan_partial_slot`.
     ProjectsUpdated {
-        partial_projects: Vec<DiscoveredProject>,
         directories_scanned: i32,
         folder_path: String,
         scan_generation: i32,
@@ -268,6 +273,8 @@ enum BackendMsg {
         project_root: String,
         notice: SnapshotNotice,
     },
+    /// A reply from the versioning thread.
+    Versioning(VersioningReply),
 }
 
 // ---- Helpers ---------------------------------------------------------------
@@ -396,7 +403,7 @@ fn mark_compressed_versions(project: &DiscoveredProject, versions: &mut [Version
     }
 }
 
-fn resolve_staged_path(project_root: &str, staged_path: &str) -> String {
+pub(crate) fn resolve_staged_path(project_root: &str, staged_path: &str) -> String {
     if staged_path.is_empty() {
         return String::new();
     }
@@ -526,7 +533,7 @@ fn compact_json_line(obj: &Map<String, Value>) -> Vec<u8> {
 /// Older watcher routing could attach a newly-created nested project to an
 /// already-known ancestor project. Move those log entries and their storage
 /// into the project's own .musit directory before baseline seeding runs.
-fn migrate_misrouted_history(source_root: &str, destination_root: &str) -> usize {
+pub(crate) fn migrate_misrouted_history(source_root: &str, destination_root: &str) -> usize {
     if path_equals(source_root, destination_root)
         || !path_is_under_root(destination_root, source_root)
     {
@@ -757,8 +764,16 @@ pub struct AppBackend {
     /// Set when an init batch blows its time budget (a project on a slow
     /// network share can take seconds for a single item): the next batch waits
     /// until then so the UI keeps a usable share of the pump.
-    monitoring_init_resume_at: Option<Instant>,
-    snapshot_service_by_root: HashMap<String, SnapshotService>,
+    /// Newest discovery partial of the running scan, overwritten by the scan
+    /// thread and taken by `handle_projects_updated`.
+    scan_partial_slot: Arc<Mutex<Option<Vec<DiscoveredProject>>>>,
+    /// Owns the snapshot services and does their file work off the UI thread.
+    versioning: versioning::Worker,
+    /// Init job currently running on the worker: (folder root, project root).
+    monitoring_init_in_flight: Option<(String, String)>,
+    /// Projects found by the watcher whose versioning is still coming up on
+    /// the worker, by `path_key` of their root: (folder root, project).
+    pending_adoptions: HashMap<String, (String, DiscoveredProject)>,
     // (mtime, len)-validated caches so version-graph refreshes don't re-hash
     // project files or re-parse log.jsonl on the UI thread unless they
     // actually changed on disk. Both are bounded (see CachedByStamp): the
@@ -785,6 +800,25 @@ impl AppBackend {
     pub fn with_platform(platform: PlatformHooks) -> Self {
         let (msg_tx, msg_rx) = mpsc::channel();
         let project_registry = ProjectRegistry;
+        let versioning = {
+            let reply_tx = msg_tx.clone();
+            // The notice sink is shared by every service (hence Sync); the
+            // sender itself is not Sync, so it sits behind a mutex.
+            let notice_tx = Mutex::new(msg_tx.clone());
+            versioning::Worker::spawn(
+                move |reply| {
+                    let _ = reply_tx.send(BackendMsg::Versioning(reply));
+                },
+                Arc::new(move |project_root: String, notice: SnapshotNotice| {
+                    if let Ok(tx) = notice_tx.lock() {
+                        let _ = tx.send(BackendMsg::Snapshot {
+                            project_root,
+                            notice,
+                        });
+                    }
+                }),
+            )
+        };
 
         let mut backend = Self {
             status_message: strings::STATUS_SELECT_PROJECTS_FOLDER.to_string(),
@@ -822,11 +856,13 @@ impl AppBackend {
             monitoring_init_queue: std::collections::VecDeque::new(),
             monitoring_init_total: 0,
             monitoring_init_done: 0,
-            monitoring_init_resume_at: None,
+            scan_partial_slot: Arc::new(Mutex::new(None)),
             file_hash_cache: std::cell::RefCell::new(HashMap::new()),
             parsed_log_cache: std::cell::RefCell::new(HashMap::new()),
             cache_use_counter: std::cell::Cell::new(0),
-            snapshot_service_by_root: HashMap::new(),
+            versioning,
+            monitoring_init_in_flight: None,
+            pending_adoptions: HashMap::new(),
             canonical_root_by_key: HashMap::new(),
             platform,
             msg_tx,
@@ -1181,17 +1217,11 @@ impl AppBackend {
                 }
             }
             BackendMsg::ProjectsUpdated {
-                partial_projects,
                 directories_scanned,
                 folder_path,
                 scan_generation,
             } => {
-                self.handle_projects_updated(
-                    partial_projects,
-                    directories_scanned,
-                    &folder_path,
-                    scan_generation,
-                );
+                self.handle_projects_updated(directories_scanned, &folder_path, scan_generation);
             }
             BackendMsg::ScanCompleted {
                 projects,
@@ -1209,6 +1239,7 @@ impl AppBackend {
                 );
             }
             BackendMsg::WatcherEvent { watch_root, event } => {
+                self.note_primary_file_change(&watch_root, &event);
                 // Resolve a newly-created nested project before an ancestor
                 // project gets a chance to claim the event.
                 let mut owned_by_nested_project = false;
@@ -1268,6 +1299,119 @@ impl AppBackend {
                 }
                 SnapshotNotice::Error(error) => {
                     self.append_activity(&format!("[{}] {}", now_human(), error));
+                }
+            },
+            BackendMsg::Versioning(reply) => self.handle_versioning_reply(reply),
+        }
+    }
+
+    fn handle_versioning_reply(&mut self, reply: VersioningReply) {
+        match reply {
+            VersioningReply::InitDone {
+                folder_root,
+                generation,
+                project_root,
+                ok,
+                seeded,
+                migrated,
+            } => {
+                // A reply from before the folder's monitoring was torn down
+                // (rescan, removal) must not resurrect it: the worker has
+                // already dropped that service again.
+                let current_generation = self
+                    .workspace_index_by_root(&folder_root)
+                    .map(|index| self.workspaces[index].monitoring_generation);
+                if current_generation != Some(generation) {
+                    self.pending_adoptions.remove(&path_key(&project_root));
+                    self.advance_monitoring_init();
+                    return;
+                }
+                if self
+                    .monitoring_init_in_flight
+                    .as_ref()
+                    .is_some_and(|(_, root)| path_equals(root, &project_root))
+                {
+                    self.monitoring_init_in_flight = None;
+                }
+                if migrated > 0 {
+                    self.append_activity(&format!(
+                        "[{}] migrated {} snapshot entries into {}",
+                        now_human(),
+                        migrated,
+                        project_root
+                    ));
+                }
+                if ok {
+                    self.canonical_root_by_key
+                        .insert(path_key(&project_root), project_root.clone());
+                    if seeded {
+                        self.append_debug_activity(&format!(
+                            "[{}] seeded initial version v1 for {}",
+                            now_human(),
+                            project_root
+                        ));
+                    }
+                    if path_equals(&project_root, &self.project_root) {
+                        self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+                    }
+                } else {
+                    self.append_debug_activity(&format!(
+                        "[{}] failed to initialize versioning for {}",
+                        now_human(),
+                        project_root
+                    ));
+                }
+                if let Some((adoption_folder, adopted)) =
+                    self.pending_adoptions.remove(&path_key(&project_root))
+                    && ok
+                    && let Some(index) = self.workspace_index_by_root(&adoption_folder)
+                {
+                    self.publish_adopted_project(index, adopted);
+                }
+
+                // A folder is watchable as soon as *its* projects are done —
+                // waiting for the whole queue would leave healthy folders
+                // unwatched behind one that is crawling over the network.
+                let folder_pending = self
+                    .monitoring_init_queue
+                    .iter()
+                    .any(|(root, _)| path_equals(root, &folder_root));
+                if !folder_pending {
+                    self.start_watcher_for_folder(&folder_root);
+                }
+                if self.monitoring_init_queue.is_empty() {
+                    self.monitoring_init_total = 0;
+                    self.monitoring_init_done = 0;
+                    self.start_watchers_when_ready();
+                } else {
+                    self.advance_monitoring_init();
+                }
+            }
+            VersioningReply::RestoreDone {
+                project_root,
+                project_name,
+                version_id,
+                result,
+            } => match result {
+                Ok(()) => {
+                    self.status_message =
+                        format!("Restored {project_name} to version {version_id}");
+                    self.push_event(BackendEvent::StatusMessageChanged);
+                    self.append_activity(&format!(
+                        "[{}] restored {} to version {}",
+                        now_human(),
+                        project_name,
+                        version_id
+                    ));
+                    if path_equals(&project_root, &self.project_root) {
+                        // Hand the restored file to the DAW, as before.
+                        let selected = self.selected_project_index;
+                        self.open_project(selected);
+                    }
+                    self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+                }
+                Err(message) => {
+                    self.append_activity(&format!("[{}] {}", now_human(), message));
                 }
             },
         }
@@ -1448,13 +1592,10 @@ impl AppBackend {
     }
 
     fn apply_snapshot_retention_to_services(&mut self, compact_existing: bool) {
-        let retention = self.snapshot_retention;
-        for service in self.snapshot_service_by_root.values_mut() {
-            service.set_uncompressed_recent_versions(retention);
-            if compact_existing {
-                service.compact_all_staged_copies();
-            }
-        }
+        self.versioning.send(VersioningJob::SetRetention {
+            retention: self.snapshot_retention,
+            compact_existing,
+        });
     }
 
     pub fn log_level(&self) -> &'static str {
@@ -1709,14 +1850,23 @@ impl AppBackend {
     }
 
     fn apply_saved_primary_file_overrides(&self, projects: &mut [DiscoveredProject]) {
+        if projects.is_empty() {
+            return;
+        }
+        // One read of the registry for the batch, however many projects.
+        let records = self.project_registry.load_project_records();
         for project in projects.iter_mut() {
-            let saved_primary = self
-                .project_registry
-                .load_project_primary_file(&project.root_path);
-            if saved_primary.is_empty() || !project_contains_file(project, &saved_primary) {
+            let Some(saved_primary) = records
+                .get(&path_key(&project.root_path))
+                .map(|record| record.primary_project_file.as_str())
+                .filter(|saved| !saved.is_empty())
+            else {
+                continue;
+            };
+            if !project_contains_file(project, saved_primary) {
                 continue;
             }
-            project.primary_project_file = saved_primary;
+            project.primary_project_file = saved_primary.to_string();
         }
     }
 
@@ -1886,6 +2036,8 @@ impl AppBackend {
         self.last_scan_status_directories = 0;
         let cancel_flag = Arc::new(AtomicBool::new(false));
         self.scan_cancel_flag = Some(cancel_flag.clone());
+        let partial_slot: Arc<Mutex<Option<Vec<DiscoveredProject>>>> = Arc::new(Mutex::new(None));
+        self.scan_partial_slot = partial_slot.clone();
 
         self.stop_monitoring_for_folder(&clean);
         // The previous results stay on screen until this scan delivers its
@@ -1925,8 +2077,13 @@ impl AppBackend {
                     });
                 };
                 let mut on_progress = |partial: &[DiscoveredProject], scanned: i32| {
+                    // One slot rather than a queue of cumulative copies: a
+                    // stalled UI reads the newest partial and the older ones
+                    // are already gone.
+                    if let Ok(mut slot) = partial_slot.lock() {
+                        *slot = Some(partial.to_vec());
+                    }
                     let _ = progress_tx.send(BackendMsg::ProjectsUpdated {
-                        partial_projects: partial.to_vec(),
                         directories_scanned: scanned,
                         folder_path: progress_folder.clone(),
                         scan_generation,
@@ -2004,7 +2161,6 @@ impl AppBackend {
 
     fn handle_projects_updated(
         &mut self,
-        partial_projects: Vec<DiscoveredProject>,
         directories_scanned: i32,
         folder_path: &str,
         scan_generation: i32,
@@ -2012,6 +2168,14 @@ impl AppBackend {
         if scan_generation != self.active_scan_generation {
             return;
         }
+        // The newest partial only: stale ones were overwritten in the slot
+        // while this thread was busy, so nothing accumulates.
+        let partial_projects = self
+            .scan_partial_slot
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+            .unwrap_or_default();
 
         let Some(index) = self.workspace_index_by_root(folder_path) else {
             return;
@@ -2126,12 +2290,17 @@ impl AppBackend {
         }
 
         self.persist_projects_folders();
-        for project in self.workspaces[workspace_index].discovered_projects.clone() {
-            self.project_registry.save_project(&project);
-            self.project_notes.insert(
-                project.root_path.clone(),
-                self.project_registry.load_project_note(&project.root_path),
-            );
+        // One registry write for the whole scan and one read for the notes,
+        // not one of each per project.
+        self.project_registry
+            .save_projects(&self.workspaces[workspace_index].discovered_projects);
+        let records = self.project_registry.load_project_records();
+        for project in &self.workspaces[workspace_index].discovered_projects {
+            let note = records
+                .get(&path_key(&project.root_path))
+                .map(|record| record.note.clone())
+                .unwrap_or_default();
+            self.project_notes.insert(project.root_path.clone(), note);
             self.project_primary_files.insert(
                 project.root_path.clone(),
                 project.primary_project_file.clone(),
@@ -2539,6 +2708,9 @@ impl AppBackend {
 
     // ---- Restore / notes / delete -------------------------------------------
 
+    /// Restores a version. The file work runs on the versioning thread;
+    /// `true` means the restore was accepted, and its outcome arrives as an
+    /// activity line, a status message and a graph refresh.
     pub fn restore_version_by_id(&mut self, version_id_str: &str) -> bool {
         if version_id_str.is_empty() {
             return false;
@@ -2546,152 +2718,31 @@ impl AppBackend {
         let Some(project) = self.visible_project(self.selected_project_index).cloned() else {
             return false;
         };
-        let artifact_path = join_path(&project.root_path, &project.primary_project_file);
-
-        // If the on-disk state matches no snapshot (e.g. the watcher has not
-        // seen the latest save yet), snapshot it now so the restore cannot
-        // silently destroy the user's most recent work.
+        if !self
+            .canonical_root_by_key
+            .contains_key(&path_key(&project.root_path))
         {
-            let pre_restore_versions = self.get_project_versions(self.selected_project_index);
-            let any_current = pre_restore_versions.iter().any(|v| v.is_current);
-            if !any_current && Path::new(&artifact_path).exists() {
-                if let Some(service) = self
-                    .snapshot_service_by_root
-                    .get_mut(&path_key(&project.root_path))
-                {
-                    service.snapshot_path_now(&artifact_path, &project.primary_project_file);
-                }
-            }
+            self.append_activity(&format!(
+                "[{}] restore failed: versioning is still initializing for {}",
+                now_human(),
+                project.name
+            ));
+            return false;
         }
 
         let versions = self.get_project_versions(self.selected_project_index);
-        let Some(selected_version) = versions.iter().find(|v| v.id == version_id_str) else {
+        let Some(version) = versions.iter().find(|v| v.id == version_id_str).cloned() else {
             return false;
         };
-
-        // A version may span several files (bundle internals saved together).
-        // Materialize every file into a temp next to its destination first,
-        // so nothing is touched unless the whole version is available;
-        // recent versions come from staged copies, compacted ones are
-        // decompressed from the object store.
-        let object_store = ObjectStore::new(join_path(&project.root_path, ".musit"));
-
-        struct PendingRestore {
-            destination_path: String,
-            temp_path: String,
-            relative_path: String,
-        }
-        let mut pending: Vec<PendingRestore> = Vec::new();
-
-        let cleanup_temps = |pending: &[PendingRestore]| {
-            for item in pending {
-                let _ = fs::remove_file(&item.temp_path);
-            }
-        };
-
-        for file_entry in &selected_version.files {
-            let relative_path = file_entry.path.clone();
-            let destination_path = join_path(&project.root_path, &relative_path);
-
-            if fs::create_dir_all(parent_path(&destination_path)).is_err() {
-                cleanup_temps(&pending);
-                self.append_activity(&format!(
-                    "[{}] restore failed: could not create folder for {}",
-                    now_human(),
-                    destination_path
-                ));
-                return false;
-            }
-
-            let temp_path = format!("{destination_path}.musit-restore.tmp");
-            let _ = fs::remove_file(&temp_path);
-
-            let staged_path = resolve_staged_path(&project.root_path, &file_entry.staged_path);
-            let object_hash = &file_entry.object_hash;
-
-            let mut materialized = false;
-            if !staged_path.is_empty() && Path::new(&staged_path).exists() {
-                materialized = fs::copy(&staged_path, &temp_path).is_ok();
-            }
-            if !materialized && !object_hash.is_empty() {
-                materialized = object_store.extract_object(object_hash, &temp_path);
-            }
-
-            if !materialized {
-                let _ = fs::remove_file(&temp_path);
-                cleanup_temps(&pending);
-                self.append_activity(&format!(
-                    "[{}] restore failed: staged snapshot missing for {} (v{})",
-                    now_human(),
-                    project.name,
-                    version_id_str
-                ));
-                return false;
-            }
-
-            pending.push(PendingRestore {
-                destination_path,
-                temp_path,
-                relative_path,
-            });
-        }
-
-        if pending.is_empty() {
-            return false;
-        }
-
-        // All temps are ready; swap them in.
-        for item in &pending {
-            if Path::new(&item.destination_path).exists()
-                && fs::remove_file(&item.destination_path).is_err()
-            {
-                cleanup_temps(&pending);
-                self.append_activity(&format!(
-                    "[{}] restore failed: could not replace {}",
-                    now_human(),
-                    item.destination_path
-                ));
-                return false;
-            }
-
-            if fs::rename(&item.temp_path, &item.destination_path).is_err() {
-                // The complete data is still in the temp file; try a plain
-                // copy as a last resort before giving up.
-                if fs::copy(&item.temp_path, &item.destination_path).is_err() {
-                    self.append_activity(&format!(
-                        "[{}] restore failed: copy failed from {} to {}",
-                        now_human(),
-                        item.temp_path,
-                        item.destination_path
-                    ));
-                    return false;
-                }
-                let _ = fs::remove_file(&item.temp_path);
-            }
-        }
-
-        if let Some(service) = self
-            .snapshot_service_by_root
-            .get_mut(&path_key(&project.root_path))
-        {
-            for item in &pending {
-                service.suppress_next_events_for_path(&item.relative_path, 1);
-            }
-            service.set_branch_base_for_artifact(&project.primary_project_file, version_id_str);
-        }
-
-        self.status_message = format!("Restored {} to version {}", project.name, version_id_str);
-        self.push_event(BackendEvent::StatusMessageChanged);
-        self.append_activity(&format!(
-            "[{}] restored {} to version {}",
-            now_human(),
-            project.name,
-            version_id_str
-        ));
-
-        let selected = self.selected_project_index;
-        self.open_project(selected);
-        self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+        // If the on-disk state matches no snapshot (e.g. the watcher has not
+        // seen the latest save yet), the worker snapshots it first so the
+        // restore cannot silently destroy the user's most recent work.
+        let needs_pre_snapshot = !versions.iter().any(|v| v.is_current);
+        self.versioning.send(VersioningJob::Restore {
+            project,
+            version,
+            needs_pre_snapshot,
+        });
         true
     }
 
@@ -3170,26 +3221,46 @@ impl AppBackend {
 
     // ---- Visible projects -----------------------------------------------------
 
-    fn effective_last_opened(
-        &self,
-        project: &DiscoveredProject,
-        allow_file_stat_fallback: bool,
-    ) -> Option<SystemTime> {
+    /// When the project was last opened: the time recorded when it was
+    /// opened from here, else the primary file's modified time as the scan
+    /// saw it (kept fresh by the watcher). Never touches the filesystem,
+    /// which matters when the folder is on a network share.
+    fn effective_last_opened(&self, project: &DiscoveredProject) -> Option<SystemTime> {
         if let Some(explicit) = self
             .last_opened_at_by_project_root
             .get(&path_key(&project.root_path))
         {
             return Some(*explicit);
         }
+        project.primary_file_modified
+    }
 
-        if !allow_file_stat_fallback || project.primary_project_file.is_empty() {
-            return None;
+    /// Keeps the list's modified times fresh without stat calls: the watcher
+    /// already knows the new time of every file it reports.
+    fn note_primary_file_change(&mut self, watch_root: &str, event: &FileEvent) {
+        if event.modified_ms <= 0 {
+            return;
         }
-
-        let project_file_path = join_path(&project.root_path, &project.primary_project_file);
-        fs::metadata(&project_file_path)
-            .ok()
-            .and_then(|m| m.modified().ok())
+        let Some(index) = self.workspace_index_by_root(watch_root) else {
+            return;
+        };
+        let modified = std::time::UNIX_EPOCH + Duration::from_millis(event.modified_ms as u64);
+        let mut changed = false;
+        for project in &mut self.workspaces[index].discovered_projects {
+            if project.primary_project_file.is_empty() {
+                continue;
+            }
+            let primary = join_path(&project.root_path, &project.primary_project_file);
+            if path_equals(&primary, &event.absolute_path)
+                && project.primary_file_modified != Some(modified)
+            {
+                project.primary_file_modified = Some(modified);
+                changed = true;
+            }
+        }
+        if changed && index as i32 == self.active_workspace {
+            self.rebuild_visible_projects();
+        }
     }
 
     fn rebuild_visible_projects(&mut self) {
@@ -3215,28 +3286,19 @@ impl AppBackend {
         }
 
         let sort_mode = self.sort_mode;
-        let is_scanning = self.is_scanning_projects();
-        // Decorate-sort-undecorate: one stat per project instead of
-        // O(n log n) stats inside the comparator; the display pass below
-        // reuses the same values.
-        let opened_display: Vec<Option<SystemTime>> = projects
+        // No filesystem access here: modified times came with the scan and
+        // the watcher keeps them current, so rebuilding the list is free
+        // even when the folder sits on a slow share.
+        let opened: Vec<Option<SystemTime>> = projects
             .iter()
-            .map(|project| self.effective_last_opened(project, true))
+            .map(|project| self.effective_last_opened(project))
             .collect();
-        let opened_sort: Vec<Option<SystemTime>> = if is_scanning {
-            projects
-                .iter()
-                .map(|project| self.effective_last_opened(project, false))
-                .collect()
-        } else {
-            opened_display.clone()
-        };
         visible.sort_by(|&left, &right| {
             let l = &projects[left];
             let r = &projects[right];
 
             if sort_mode == SortMode::LastOpened {
-                match (opened_sort[left], opened_sort[right]) {
+                match (opened[left], opened[right]) {
                     (Some(_), None) => return std::cmp::Ordering::Less,
                     (None, Some(_)) => return std::cmp::Ordering::Greater,
                     (Some(lo), Some(ro)) if lo != ro => return ro.cmp(&lo),
@@ -3277,7 +3339,7 @@ impl AppBackend {
             Vec::with_capacity(self.visible_project_indexes.len());
         for &index in &self.visible_project_indexes {
             let project = &projects[index];
-            let effective_last_opened = opened_display[index];
+            let effective_last_opened = opened[index];
             let parent = parent_path(&project.root_path);
             items.push(ProjectListItem {
                 name: project.name.clone(),
@@ -3351,162 +3413,62 @@ impl AppBackend {
         self.monitoring_init_queue = mine.into_iter().chain(others).collect();
     }
 
-    /// Removes the snapshot services of every project under `folder_root`.
     fn drop_services_under(&mut self, folder_root: &str) {
-        let doomed: Vec<String> = self
-            .canonical_root_by_key
-            .iter()
-            .filter(|(_, root)| path_is_under_root(root, folder_root))
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in doomed {
-            self.snapshot_service_by_root.remove(&key);
-            self.canonical_root_by_key.remove(&key);
-        }
+        self.canonical_root_by_key
+            .retain(|_, root| !path_is_under_root(root, folder_root));
+        self.versioning.send(VersioningJob::DropUnder {
+            folder_root: folder_root.to_string(),
+        });
     }
 
-    /// Initializes queued projects for up to ~30ms, then yields so the UI
-    /// stays responsive and the progress status actually renders.
+    /// Hands the next queued project to the versioning thread, one at a
+    /// time so the queue order (the active folder first) still holds; the
+    /// reply drives the next step and the status line.
     fn advance_monitoring_init(&mut self) {
-        if self.monitoring_init_queue.is_empty() {
+        if self.monitoring_init_in_flight.is_some() {
             return;
         }
-        let budget = Duration::from_millis(30);
-        let now = Instant::now();
-        if self
-            .monitoring_init_resume_at
-            .is_some_and(|resume_at| resume_at > now)
-        {
+        let Some((folder_root, project)) = self.monitoring_init_queue.pop_front() else {
             return;
-        }
-        self.monitoring_init_resume_at = None;
-
-        let started = now;
-        while let Some((folder_root, project)) = self.monitoring_init_queue.pop_front() {
-            self.monitoring_init_done += 1;
-            let done = self.monitoring_init_done;
-            let total = self.monitoring_init_total.max(done);
-            self.set_status_for_folder(
-                &folder_root,
-                format!("Initializing versioning ({done}/{total})..."),
-            );
-            self.init_monitoring_for_project(&folder_root, &project);
-
-            // A folder is watchable as soon as *its* projects are initialized —
-            // waiting for the whole queue would leave healthy folders unwatched
-            // behind one that is crawling over the network.
-            if !self
-                .monitoring_init_queue
-                .iter()
-                .any(|(root, _)| path_equals(root, &folder_root))
-            {
-                self.start_watcher_for_folder(&folder_root);
-            }
-
-            if started.elapsed() >= budget && !self.monitoring_init_queue.is_empty() {
-                // Yield for as long as we overran, so one very slow project
-                // costs the UI at most half of its frames rather than all.
-                let overrun = started.elapsed().saturating_sub(budget);
-                if overrun > Duration::from_millis(1) {
-                    self.monitoring_init_resume_at =
-                        Some(Instant::now() + overrun.min(Duration::from_millis(250)));
-                }
-                return;
-            }
-        }
-        self.monitoring_init_total = 0;
-        self.monitoring_init_done = 0;
-        self.monitoring_init_resume_at = None;
-        self.start_watchers_when_ready();
+        };
+        self.monitoring_init_done += 1;
+        let done = self.monitoring_init_done;
+        let total = self.monitoring_init_total.max(done);
+        self.set_status_for_folder(
+            &folder_root,
+            format!("Initializing versioning ({done}/{total})..."),
+        );
+        self.monitoring_init_in_flight = Some((folder_root.clone(), project.root_path.clone()));
+        self.send_init_job(&folder_root, &project);
     }
 
-    fn init_monitoring_for_project(
-        &mut self,
-        folder_root: &str,
-        project: &DiscoveredProject,
-    ) -> bool {
-        let folder_projects: Vec<DiscoveredProject> = self
-            .workspace_index_by_root(folder_root)
-            .map(|i| self.workspaces[i].discovered_projects.clone())
-            .unwrap_or_default();
+    /// Queues one project's versioning set-up on the worker: history
+    /// migration from enclosing projects, store init and seeding, all of
+    /// which touch the (possibly remote) project folder.
+    fn send_init_job(&mut self, folder_root: &str, project: &DiscoveredProject) {
         let mut ancestor_roots: Vec<String> = vec![folder_root.to_string()];
-        for candidate in &folder_projects {
-            if !path_equals(&candidate.root_path, &project.root_path)
-                && path_is_under_root(&project.root_path, &candidate.root_path)
-            {
-                ancestor_roots.push(candidate.root_path.clone());
-            }
-        }
-        ancestor_roots.dedup();
-        {
-            let mut seen: Vec<String> = Vec::new();
-            for root in &ancestor_roots {
-                if !seen.contains(root) {
-                    seen.push(root.clone());
+        if let Some(index) = self.workspace_index_by_root(folder_root) {
+            for candidate in &self.workspaces[index].discovered_projects {
+                if !path_equals(&candidate.root_path, &project.root_path)
+                    && path_is_under_root(&project.root_path, &candidate.root_path)
+                    && !ancestor_roots.contains(&candidate.root_path)
+                {
+                    ancestor_roots.push(candidate.root_path.clone());
                 }
             }
-            ancestor_roots = seen;
         }
         ancestor_roots.sort_by(|left, right| right.len().cmp(&left.len()));
-        for ancestor_root in &ancestor_roots {
-            let migrated = migrate_misrouted_history(ancestor_root, &project.root_path);
-            if migrated > 0 {
-                self.append_activity(&format!(
-                    "[{}] migrated {} snapshot entries into {}",
-                    now_human(),
-                    migrated,
-                    project.root_path
-                ));
-            }
-        }
-
-        let mut snapshot_service = SnapshotService::new();
-        if !snapshot_service.set_project_root(&project.root_path) {
-            self.append_debug_activity(&format!(
-                "[{}] failed to initialize versioning for {}",
-                now_human(),
-                project.root_path
-            ));
-            return false;
-        }
-
-        snapshot_service.set_uncompressed_recent_versions(self.snapshot_retention);
-
-        let notice_tx = self.msg_tx.clone();
-        let notice_root = project.root_path.clone();
-        snapshot_service.set_notice_sink(move |notice| {
-            let _ = notice_tx.send(BackendMsg::Snapshot {
-                project_root: notice_root.clone(),
-                notice,
-            });
+        let generation = self
+            .workspace_index_by_root(folder_root)
+            .map(|index| self.workspaces[index].monitoring_generation)
+            .unwrap_or(0);
+        self.versioning.send(VersioningJob::Init {
+            folder_root: folder_root.to_string(),
+            generation,
+            project: project.clone(),
+            ancestor_roots,
+            retention: self.snapshot_retention,
         });
-
-        let root_key = path_key(&project.root_path);
-        self.canonical_root_by_key
-            .insert(root_key.clone(), project.root_path.clone());
-        self.snapshot_service_by_root
-            .insert(root_key.clone(), snapshot_service);
-
-        let primary_file = project.primary_project_file.clone();
-        if !primary_file.is_empty() {
-            let service = self
-                .snapshot_service_by_root
-                .get_mut(&root_key)
-                .expect("service just inserted");
-            if !service.has_version_for_artifact(&primary_file) {
-                let absolute_primary_path = join_path(&project.root_path, &primary_file);
-                let seeded = service.snapshot_path_now(&absolute_primary_path, &primary_file);
-                if seeded {
-                    self.append_debug_activity(&format!(
-                        "[{}] seeded initial version v1 for {}",
-                        now_human(),
-                        absolute_primary_path
-                    ));
-                }
-            }
-        }
-
-        true
     }
 
     /// Starts a watcher for every workspace that has monitored projects but
@@ -3594,7 +3556,17 @@ impl AppBackend {
             if let Some(watcher) = self.workspaces[index].watcher.take() {
                 watcher.stop_watching();
             }
+            self.workspaces[index].monitoring_generation += 1;
         }
+        if self
+            .monitoring_init_in_flight
+            .as_ref()
+            .is_some_and(|(folder, _)| path_equals(folder, folder_root))
+        {
+            self.monitoring_init_in_flight = None;
+        }
+        self.pending_adoptions
+            .retain(|_, (folder, _)| !path_equals(folder, folder_root));
         let before = self.monitoring_init_queue.len();
         self.monitoring_init_queue
             .retain(|(root, _)| !path_equals(root, folder_root));
@@ -3604,9 +3576,10 @@ impl AppBackend {
         if self.monitoring_init_queue.is_empty() {
             self.monitoring_init_total = 0;
             self.monitoring_init_done = 0;
-            self.monitoring_init_resume_at = None;
         }
         self.drop_services_under(folder_root);
+        // Another folder's init may have been waiting behind the cancelled one.
+        self.advance_monitoring_init();
     }
 
     fn stop_monitoring(&mut self) {
@@ -3619,9 +3592,13 @@ impl AppBackend {
         self.monitoring_init_queue.clear();
         self.monitoring_init_total = 0;
         self.monitoring_init_done = 0;
-        self.monitoring_init_resume_at = None;
-        self.snapshot_service_by_root.clear();
+        for workspace in &mut self.workspaces {
+            workspace.monitoring_generation += 1;
+        }
+        self.monitoring_init_in_flight = None;
+        self.pending_adoptions.clear();
         self.canonical_root_by_key.clear();
+        self.versioning.send(VersioningJob::DropAll);
         self.append_activity(&format!(
             "[{}] monitoring stopped",
             Local::now().format("%Y-%m-%dT%H:%M:%S")
@@ -3650,6 +3627,10 @@ impl AppBackend {
         false
     }
 
+    /// A project the watcher found after the scan. Its versioning is set up
+    /// on the worker first; the project is published (listed, saved) once
+    /// that is done, so the main view never sees a project without its
+    /// baseline. Returns true when the event was consumed.
     fn adopt_discovered_project(
         &mut self,
         workspace_index: usize,
@@ -3663,18 +3644,30 @@ impl AppBackend {
         self.apply_saved_primary_file_overrides(&mut adopted_projects);
         let adopted = adopted_projects.remove(0);
         let folder_root = self.workspaces[workspace_index].root.clone();
+        let key = path_key(&adopted.root_path);
 
-        // Initialize storage and seed/migrate history first. Publishing the
-        // project afterwards guarantees the main view observes a usable
-        // project.
-        if !self
-            .snapshot_service_by_root
-            .contains_key(&path_key(&adopted.root_path))
-            && !self.init_monitoring_for_project(&folder_root, &adopted)
-        {
-            return false;
+        if self.canonical_root_by_key.contains_key(&key) {
+            return self.publish_adopted_project(workspace_index, adopted);
         }
+        if self.pending_adoptions.contains_key(&key) {
+            // Already on its way; the events that follow will be routed once
+            // the project is published.
+            return true;
+        }
+        self.pending_adoptions
+            .insert(key, (folder_root.clone(), adopted.clone()));
+        self.monitoring_init_total += 1;
+        self.monitoring_init_queue.push_back((folder_root, adopted));
+        self.advance_monitoring_init();
+        true
+    }
 
+    /// Lists, saves and announces a project whose versioning is ready.
+    fn publish_adopted_project(
+        &mut self,
+        workspace_index: usize,
+        adopted: DiscoveredProject,
+    ) -> bool {
         self.workspaces[workspace_index]
             .discovered_projects
             .push(adopted.clone());
@@ -3735,10 +3728,9 @@ impl AppBackend {
 
         let mut matched_root_key = String::new();
         let mut matched_length = -1i64;
-        for root_key in self.snapshot_service_by_root.keys() {
-            let Some(canonical_root) = self.canonical_root_by_key.get(root_key) else {
-                continue;
-            };
+        // Only projects whose versioning is up (the worker reported InitDone)
+        // are routing targets.
+        for (root_key, canonical_root) in &self.canonical_root_by_key {
             if canonical_root.is_empty()
                 || !path_is_under_root(&normalized_absolute_path, canonical_root)
             {
@@ -3766,11 +3758,10 @@ impl AppBackend {
         let mut translated_event = event.clone();
         translated_event.relative_path =
             relative_file_path(&canonical_root, &normalized_absolute_path);
-
-        let Some(service) = self.snapshot_service_by_root.get_mut(&matched_root_key) else {
-            return false;
-        };
-        service.on_file_event(&translated_event);
+        self.versioning.send(VersioningJob::FileEvent {
+            root_key: matched_root_key,
+            event: translated_event,
+        });
         true
     }
 }

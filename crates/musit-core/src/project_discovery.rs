@@ -24,6 +24,9 @@ pub struct DiscoveredProject {
     pub project_files: Vec<String>,
     pub type_counts: HashMap<ProjectKind, i32>,
     pub total_project_files: i32,
+    /// Modified time of the primary file as the scan saw it (kept fresh by
+    /// the watcher afterwards), so listing and sorting never stat files.
+    pub primary_file_modified: Option<SystemTime>,
 }
 
 impl Default for ProjectKind {
@@ -270,6 +273,9 @@ fn build_projects_from_state(state: &ScanState) -> Vec<DiscoveredProject> {
         } else {
             selected_primary
         };
+        project.primary_file_modified = infos
+            .get(&project.primary_project_file)
+            .and_then(|info| info.modified);
         project.total_project_files = project.project_files.len() as i32;
 
         projects.push(project);
@@ -497,6 +503,7 @@ fn scan_loose_project_files(
             root_path: crate::path_cleanup::parent_path(&entry.absolute_path),
             name: complete_base_name(&entry.file_name).to_string(),
             kind,
+            primary_file_modified: entry.modified,
             ..Default::default()
         };
         if project.name.is_empty() {

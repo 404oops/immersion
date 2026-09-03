@@ -388,6 +388,7 @@ impl SnapshotService {
                 absolute_path: absolute_path.to_string(),
                 relative_path: relative_path.to_string(),
                 scan_sequence: self.synthetic_scan_sequence,
+                modified_ms: 0,
             };
             return self.create_snapshot(&event, true);
         }
@@ -411,6 +412,7 @@ impl SnapshotService {
                 absolute_path: file_absolute_path,
                 relative_path: file_relative_path,
                 scan_sequence: batch_sequence,
+                modified_ms: 0,
             };
             any_succeeded = self.create_snapshot(&event, true) || any_succeeded;
         }

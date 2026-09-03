@@ -492,6 +492,16 @@ fn e2e_backup() {
     );
 
     // ---- Event-triggered rediscovery of a new project ----
+    // Seeding runs on the versioning thread, so the first version can show
+    // up a tick before the watcher is started; files created in that gap
+    // would land in the watcher's baseline instead of raising events.
+    assert!(
+        wait_for(&mut backend, WAIT, |backend| {
+            backend.take_events();
+            backend.status_message().starts_with("Monitoring:")
+        }),
+        "rediscovery: watcher running before the new project is created"
+    );
     let project_root2 = format!("{projects_root}/OtherSong");
     let bundle_root2 = format!("{project_root2}/Another.logicx");
     let project_data_path2 = format!("{bundle_root2}/Alternatives/000/ProjectData");
@@ -593,7 +603,15 @@ fn e2e_backup() {
     // ---- Restore of a compacted version (object-store path) ----
     backend.set_selected_project_index(0);
     let restored = backend.restore_version_by_id("1");
-    assert!(restored, "restore: compacted v1 restore reported success");
+    assert!(restored, "restore: compacted v1 restore was accepted");
+    // The file work runs on the versioning thread; wait for it to land.
+    assert!(
+        wait_for(&mut backend, Duration::from_secs(10), |_| {
+            read_file(&project_data_path) == b"projectdata v1"
+                && read_file(&plist_path) == b"plist v1"
+        }),
+        "restore: files restored to v1"
+    );
     assert_eq!(
         read_file(&project_data_path),
         b"projectdata v1",
