@@ -6,9 +6,9 @@ use crate::path_cleanup::{artifact_equals, join_path};
 use crate::version_id;
 use chrono::Utc;
 use serde_json::{Map, Value, json};
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
 
 fn top_level_version(version_id: &str) -> i32 {
     let first_segment = version_id.split('.').next().unwrap_or("");
@@ -70,29 +70,45 @@ impl MetadataStore {
         join_path(&self.musit_root, "versions/log.jsonl")
     }
 
-    /// Iterates parsed JSON objects of the log, in append order.
-    pub fn read_log_lines(&self) -> Vec<Map<String, Value>> {
-        let log_path = self.log_path();
-        if !Path::new(&log_path).exists() {
-            return Vec::new();
-        }
-        // Read as bytes and decode per line: one torn append with invalid
-        // UTF-8 must lose only that line, not silently empty the whole log
-        // (which would restart version numbering and corrupt the graph).
-        let Ok(contents) = fs::read(&log_path) else {
-            return Vec::new();
+    /// Streams parsed JSON objects of the log, in append order, without
+    /// materializing the whole file: the log is re-scanned on every version
+    /// computation, so this pass must stay constant-memory.
+    ///
+    /// Reads bytes and decodes per line: one torn append with invalid UTF-8
+    /// must lose only that line, not silently empty the whole log (which
+    /// would restart version numbering and corrupt the graph).
+    fn for_each_log_line(&self, mut visit: impl FnMut(Map<String, Value>)) {
+        let Ok(file) = fs::File::open(self.log_path()) else {
+            return;
         };
-        contents
-            .split(|byte| *byte == b'\n')
-            .filter_map(|line| std::str::from_utf8(line).ok())
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter_map(|value| match value {
-                Value::Object(map) => Some(map),
-                _ => None,
-            })
-            .collect()
+        let mut reader = std::io::BufReader::new(file);
+        let mut raw: Vec<u8> = Vec::new();
+        loop {
+            raw.clear();
+            match std::io::BufRead::read_until(&mut reader, b'\n', &mut raw) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+            let Ok(text) = std::str::from_utf8(&raw) else {
+                continue;
+            };
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(text) {
+                visit(map);
+            }
+        }
+    }
+
+    /// Parsed JSON objects of the log, in append order. Prefer
+    /// `for_each_log_line` internally; this materializes every line.
+    pub fn read_log_lines(&self) -> Vec<Map<String, Value>> {
+        let mut lines = Vec::new();
+        self.for_each_log_line(|obj| lines.push(obj));
+        lines
     }
 
     /// Versions are numbered per artifact (a project file, or a bundle root
@@ -106,14 +122,14 @@ impl MetadataStore {
         let mut max_top_level = 0i32;
         let mut max_child_for_base = 0i32;
 
-        for obj in self.read_log_lines() {
+        self.for_each_log_line(|obj| {
             if !artifact_equals(&artifact_of_log_line(&obj), artifact) {
-                continue;
+                return;
             }
 
             let staged_path = obj.get("staged").and_then(|v| v.as_str()).unwrap_or("");
             if staged_path.is_empty() {
-                continue;
+                return;
             }
 
             running_ordinal += 1;
@@ -135,7 +151,7 @@ impl MetadataStore {
             if child > max_child_for_base {
                 max_child_for_base = child;
             }
-        }
+        });
 
         if !branch_base_version.is_empty() {
             return format!("{branch_base_version}.{}", max_child_for_base + 1);
@@ -209,19 +225,16 @@ impl MetadataStore {
         }
 
         // Append order == chronological order, so "newest" is the tail.
-        let staged_paths_in_order: Vec<String> = self
-            .read_log_lines()
-            .into_iter()
-            .filter(|obj| obj.get("path").and_then(|v| v.as_str()) == Some(relative_path))
-            .filter_map(|obj| {
-                let staged = obj.get("staged").and_then(|v| v.as_str()).unwrap_or("");
-                if staged.is_empty() {
-                    None
-                } else {
-                    Some(staged.to_string())
-                }
-            })
-            .collect();
+        let mut staged_paths_in_order: Vec<String> = Vec::new();
+        self.for_each_log_line(|obj| {
+            if obj.get("path").and_then(|v| v.as_str()) != Some(relative_path) {
+                return;
+            }
+            let staged = obj.get("staged").and_then(|v| v.as_str()).unwrap_or("");
+            if !staged.is_empty() {
+                staged_paths_in_order.push(staged.to_string());
+            }
+        });
 
         let excess = staged_paths_in_order.len() as i64 - keep_count as i64;
         if excess <= 0 {
@@ -236,12 +249,13 @@ impl MetadataStore {
         }
 
         let mut paths: Vec<String> = Vec::new();
-        for obj in self.read_log_lines() {
+        let mut seen: HashSet<String> = HashSet::new();
+        self.for_each_log_line(|obj| {
             let path = obj.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            if !path.is_empty() && !paths.iter().any(|existing| existing == path) {
+            if !path.is_empty() && seen.insert(path.to_string()) {
                 paths.push(path.to_string());
             }
-        }
+        });
         paths
     }
 
@@ -252,14 +266,14 @@ impl MetadataStore {
 
         let mut running_ordinal = 0i64;
         let mut latest_version_id = String::new();
-        for obj in self.read_log_lines() {
+        self.for_each_log_line(|obj| {
             if !artifact_equals(&artifact_of_log_line(&obj), artifact) {
-                continue;
+                return;
             }
 
             let staged_path = obj.get("staged").and_then(|v| v.as_str()).unwrap_or("");
             if staged_path.is_empty() {
-                continue;
+                return;
             }
 
             running_ordinal += 1;
@@ -273,7 +287,7 @@ impl MetadataStore {
             {
                 latest_version_id = candidate_version;
             }
-        }
+        });
 
         latest_version_id
     }

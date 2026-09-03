@@ -47,7 +47,12 @@ fn state_of(path: &Path) -> Option<FileState> {
     })
 }
 
-fn scan_tree_state(root: &str, current: &str, out: &mut HashMap<String, FileState>) {
+fn scan_tree_state(
+    root: &str,
+    current: &str,
+    config: &ProjectConfig,
+    out: &mut HashMap<String, FileState>,
+) {
     let Ok(entries) = fs::read_dir(current) else {
         return;
     };
@@ -65,7 +70,15 @@ fn scan_tree_state(root: &str, current: &str, out: &mut HashMap<String, FileStat
             if project_config::is_ignored_directory_name(&name) {
                 continue;
             }
-            scan_tree_state(root, &absolute, out);
+            scan_tree_state(root, &absolute, config, out);
+            continue;
+        }
+        let relative = relative_file_path(root, &absolute);
+        // Only tracked files are worth remembering: `mark_dirty_relative`
+        // gates every event on `should_track`, so an untracked entry can
+        // never produce output — it would only hold memory (a projects
+        // folder full of samples/renders dwarfs its tracked files).
+        if !config.should_track(&relative) {
             continue;
         }
         let Ok(metadata) = entry.metadata() else {
@@ -77,7 +90,6 @@ fn scan_tree_state(root: &str, current: &str, out: &mut HashMap<String, FileStat
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        let relative = relative_file_path(root, &absolute);
         out.insert(
             relative,
             FileState {
@@ -104,6 +116,9 @@ struct WorkerState {
     project_config: ProjectConfig,
     scan_sequence: i64,
     dirty_relative: HashSet<String>,
+    /// Last observed state per TRACKED file (scan_tree_state filters by
+    /// should_track, and only tracked paths ever get marked dirty), so the
+    /// map stays proportional to project files, not folder contents.
     previous: HashMap<String, FileState>,
     pending: HashMap<String, FileState>,
     debounce_deadline: Option<Instant>,
@@ -134,7 +149,12 @@ impl WorkerState {
 
         let timer = Instant::now();
         let mut baseline = HashMap::new();
-        scan_tree_state(&self.root_path, &self.root_path, &mut baseline);
+        scan_tree_state(
+            &self.root_path,
+            &self.root_path,
+            &self.project_config,
+            &mut baseline,
+        );
         self.previous = baseline;
         self.log("baseline", self.previous.len(), timer.elapsed().as_millis());
 
@@ -228,7 +248,12 @@ impl WorkerState {
         };
 
         let mut current_subtree = HashMap::new();
-        scan_tree_state(&self.root_path, &normalized_dir, &mut current_subtree);
+        scan_tree_state(
+            &self.root_path,
+            &normalized_dir,
+            &self.project_config,
+            &mut current_subtree,
+        );
 
         let keys: Vec<String> = current_subtree.keys().cloned().collect();
         for key in keys {
@@ -261,13 +286,18 @@ impl WorkerState {
         }
 
         let mut current = HashMap::new();
-        scan_tree_state(&self.root_path, &self.root_path, &mut current);
+        scan_tree_state(
+            &self.root_path,
+            &self.root_path,
+            &self.project_config,
+            &mut current,
+        );
 
+        // Both maps hold only tracked paths (filtered during the scan), so
+        // no per-entry should_track re-check is needed here.
         let changed: Vec<String> = current
             .iter()
-            .filter(|(path, state)| {
-                self.project_config.should_track(path) && self.previous.get(*path) != Some(*state)
-            })
+            .filter(|(path, state)| self.previous.get(*path) != Some(*state))
             .map(|(path, _)| path.clone())
             .collect();
         for path in changed {
@@ -277,7 +307,7 @@ impl WorkerState {
         let deleted: Vec<String> = self
             .previous
             .keys()
-            .filter(|path| !current.contains_key(*path) && self.project_config.should_track(path))
+            .filter(|path| !current.contains_key(*path))
             .cloned()
             .collect();
         for path in deleted {
@@ -479,5 +509,29 @@ impl Drop for HybridFileWatcher {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn baseline_scan_holds_only_tracked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = clean_path(&dir.path().to_string_lossy());
+        std::fs::write(dir.path().join("song.als"), b"project").unwrap();
+        std::fs::write(dir.path().join("bounce.wav"), b"audio").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"text").unwrap();
+
+        let config = ProjectConfig::new(root.clone());
+        let mut out = HashMap::new();
+        scan_tree_state(&root, &root, &config, &mut out);
+
+        assert!(out.contains_key("song.als"));
+        // Untracked files can never emit events (mark_dirty_relative filters
+        // by should_track), so the baseline must not spend memory on them.
+        assert!(!out.contains_key("bounce.wav"));
+        assert!(!out.contains_key("notes.txt"));
     }
 }

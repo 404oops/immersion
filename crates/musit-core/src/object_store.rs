@@ -3,48 +3,53 @@
 //! Port of `qt-legacy/src/persistence/ObjectStore.{h,cpp}`.
 
 use crate::path_cleanup::{clean_path, join_path, parent_path};
-use crate::qcompress::{q_compress, q_uncompress};
+use crate::qcompress::{QCompressWriter, QUncompressReader};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Write;
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Atomic write via temp file + rename, the QSaveFile equivalent.
-pub fn write_atomically(file_path: &str, bytes: &[u8]) -> bool {
-    let parent = parent_path(file_path);
-    if parent.is_empty() {
-        return false;
-    }
-    // Exclusive-create a unique temp file next to the target so we never
-    // truncate or follow a pre-existing path.
-    let mut temp = None;
+/// Chunk size for streaming reads; objects and staged copies can be tens of
+/// megabytes, and none of the paths below may buffer a whole file.
+const STREAM_BUFFER_BYTES: usize = 256 * 1024;
+
+/// Exclusive-creates a unique temp file next to `target_path` so we never
+/// truncate or follow a pre-existing path.
+fn create_exclusive_temp(target_path: &str) -> Option<(String, fs::File)> {
     for attempt in 0..16u32 {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
-        let candidate = format!("{file_path}.tmp{}-{nanos}-{attempt}", std::process::id());
+        let candidate = format!("{target_path}.tmp{}-{nanos}-{attempt}", std::process::id());
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&candidate)
         {
-            Ok(file) => {
-                temp = Some((candidate, file));
-                break;
-            }
+            Ok(file) => return Some((candidate, file)),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => return false,
+            Err(_) => return None,
         }
     }
-    let Some((temp_path, mut file)) = temp else {
+    None
+}
+
+/// Atomic write via temp file + rename, the QSaveFile equivalent. `write`
+/// streams the content into the temp file and reports success.
+pub fn write_atomically_with(file_path: &str, write: impl FnOnce(&mut fs::File) -> bool) -> bool {
+    let parent = parent_path(file_path);
+    if parent.is_empty() {
+        return false;
+    }
+    let Some((temp_path, mut file)) = create_exclusive_temp(file_path) else {
         return false;
     };
     // Data must reach disk before the rename makes the file visible, or a
     // crash can leave a visible-but-truncated object (QSaveFile::commit gave
     // the same guarantee).
-    let written = file.write_all(bytes).is_ok() && file.sync_all().is_ok();
+    let written = write(&mut file) && file.sync_all().is_ok();
     drop(file);
     if !written || fs::rename(&temp_path, file_path).is_err() {
         let _ = fs::remove_file(&temp_path);
@@ -58,15 +63,33 @@ pub fn write_atomically(file_path: &str, bytes: &[u8]) -> bool {
     true
 }
 
-fn compressed_object_matches_hash(compressed: &[u8], hash_hex: &str) -> bool {
-    if compressed.len() < 4 || hash_hex.len() != 64 {
+/// Atomic write of an in-memory buffer; see [`write_atomically_with`].
+pub fn write_atomically(file_path: &str, bytes: &[u8]) -> bool {
+    write_atomically_with(file_path, |file| file.write_all(bytes).is_ok())
+}
+
+/// Streams the object file through decompression, comparing the content's
+/// SHA-256 — constant memory regardless of object size.
+fn object_file_matches_hash(object_path: &str, hash_hex: &str) -> bool {
+    if hash_hex.len() != 64 {
         return false;
     }
-    let Some(decompressed) = q_uncompress(compressed) else {
+    let Ok(file) = fs::File::open(object_path) else {
         return false;
     };
-    let actual_hash = hex_lower(&Sha256::digest(&decompressed));
-    actual_hash == hash_hex
+    let Some(mut decoder) = QUncompressReader::new(BufReader::new(file)) else {
+        return false;
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; STREAM_BUFFER_BYTES];
+    loop {
+        match decoder.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buffer[..n]),
+            Err(_) => return false,
+        }
+    }
+    hex_lower(&hasher.finalize()) == hash_hex
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -118,7 +141,12 @@ impl ObjectStore {
             return None;
         }
 
-        let bytes = fs::read(absolute_path).ok()?;
+        // Open before creating any directories: an unreadable or vanished
+        // source must fail with zero filesystem side effects.
+        let mut source = fs::File::open(absolute_path).ok()?;
+        if !source.metadata().ok()?.is_file() {
+            return None;
+        }
 
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -132,7 +160,15 @@ impl ObjectStore {
         let target_file_path = join_path(&target_dir_path, &normalized_relative);
         fs::create_dir_all(parent_path(&target_file_path)).ok()?;
 
-        if fs::write(&target_file_path, &bytes).is_err() {
+        // Stream instead of round-tripping the whole file through memory.
+        // File::create (not fs::copy) so the staged copy gets default
+        // writable permissions: compaction and restore-temp cleanup delete
+        // staged copies, which a copied read-only attribute would break.
+        let Ok(mut target) = fs::File::create(&target_file_path) else {
+            return None;
+        };
+        if std::io::copy(&mut source, &mut target).is_err() {
+            drop(target);
             let _ = fs::remove_file(&target_file_path);
             return None;
         }
@@ -156,55 +192,132 @@ impl ObjectStore {
         ))
     }
 
-    /// Decompresses the object with the given hash to `dest_path`. Used to
-    /// restore versions whose uncompressed staged copy has been compacted.
+    /// Decompresses the object with the given hash to `dest_path`, verifying
+    /// the content hash as it streams (temp file + rename, so a corrupt
+    /// object never leaves partial output at `dest_path`). Used to restore
+    /// versions whose uncompressed staged copy has been compacted.
     pub fn extract_object(&self, object_hash: &str, dest_path: &str) -> bool {
         let Some(object_path) = self.object_path_for_hash(object_hash) else {
             return false;
         };
-
-        let Ok(compressed) = fs::read(&object_path) else {
-            return false;
-        };
-        if !compressed_object_matches_hash(&compressed, object_hash) {
+        if object_hash.len() != 64 {
             return false;
         }
-        let Some(decompressed) = q_uncompress(&compressed) else {
+
+        let Ok(file) = fs::File::open(&object_path) else {
+            return false;
+        };
+        let Some(mut decoder) = QUncompressReader::new(BufReader::new(file)) else {
             return false;
         };
 
-        if fs::write(dest_path, &decompressed).is_err() {
-            let _ = fs::remove_file(dest_path);
-            return false;
-        }
-        true
+        write_atomically_with(dest_path, |dest| {
+            let mut hasher = Sha256::new();
+            let mut buffer = vec![0u8; STREAM_BUFFER_BYTES];
+            loop {
+                match decoder.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        hasher.update(&buffer[..n]);
+                        if dest.write_all(&buffer[..n]).is_err() {
+                            return false;
+                        }
+                    }
+                    Err(_) => return false,
+                }
+            }
+            hex_lower(&hasher.finalize()) == object_hash
+        })
+    }
+
+    fn object_shard_and_path(&self, hash_hex: &str) -> (String, String) {
+        let shard_dir = join_path(&self.musit_root, &format!("objects/{}", &hash_hex[..2]));
+        let object_path = join_path(&shard_dir, &format!("{}.z", &hash_hex[2..]));
+        (shard_dir, object_path)
     }
 
     /// Stores the file content-addressed (SHA-256, qCompress level 6) and
     /// returns the hex hash. Idempotent for existing intact objects; repairs
-    /// corrupt ones in place.
+    /// corrupt ones in place. Both passes stream in fixed-size chunks.
     pub fn store_file(&self, absolute_path: &str) -> Option<String> {
-        let bytes = fs::read(absolute_path).ok()?;
-
-        let hash_hex = hex_lower(&Sha256::digest(&bytes));
-        let shard = &hash_hex[..2];
-        let file_part = &hash_hex[2..];
-
-        let shard_dir = join_path(&self.musit_root, &format!("objects/{shard}"));
-        fs::create_dir_all(&shard_dir).ok()?;
-
-        let object_path = join_path(&shard_dir, &format!("{file_part}.z"));
-        if Path::new(&object_path).exists() {
-            if let Ok(existing) = fs::read(&object_path) {
-                if compressed_object_matches_hash(&existing, &hash_hex) {
-                    return Some(hash_hex);
-                }
+        // Pass 1: hash only, so re-storing already-present content (every
+        // unchanged file of a bundle baseline) stays a read-only operation —
+        // no compression, no temp write, no fsync.
+        let mut source = fs::File::open(absolute_path).ok()?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0u8; STREAM_BUFFER_BYTES];
+        loop {
+            match source.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => hasher.update(&buffer[..n]),
+                Err(_) => return None,
             }
         }
+        let hash_hex = hex_lower(&hasher.finalize());
+        let (_, object_path) = self.object_shard_and_path(&hash_hex);
+        if Path::new(&object_path).exists() && object_file_matches_hash(&object_path, &hash_hex) {
+            return Some(hash_hex);
+        }
 
-        let compressed = q_compress(&bytes, 6);
-        if !write_atomically(&object_path, &compressed) {
+        // Pass 2: compress into a temp file while re-hashing. The object's
+        // content-addressed name isn't known until the bytes are read, so
+        // the temp is renamed into place (or discarded) afterwards. The
+        // re-hash keeps content addressing honest if the file changed
+        // between the passes: the object is stored under the hash of the
+        // bytes actually compressed.
+        let mut source = fs::File::open(absolute_path).ok()?;
+        let source_len = source.metadata().ok()?.len();
+
+        let objects_dir = join_path(&self.musit_root, "objects");
+        fs::create_dir_all(&objects_dir).ok()?;
+        let (temp_path, mut temp_file) =
+            create_exclusive_temp(&join_path(&objects_dir, "incoming"))?;
+
+        let discard_temp = |temp_path: &str| {
+            let _ = fs::remove_file(temp_path);
+        };
+
+        let mut hasher = Sha256::new();
+        let streamed = (|| {
+            let mut writer = QCompressWriter::new(&mut temp_file, source_len, 6).ok()?;
+            loop {
+                match source.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        hasher.update(&buffer[..n]);
+                        writer.write_all(&buffer[..n]).ok()?;
+                    }
+                    Err(_) => return None,
+                }
+            }
+            writer.finish().ok()?;
+            Some(())
+        })();
+        // Same durability contract as write_atomically: data reaches disk
+        // before the rename makes the object visible.
+        let flushed = streamed.is_some() && temp_file.sync_all().is_ok();
+        drop(temp_file);
+        if !flushed {
+            discard_temp(&temp_path);
             return None;
+        }
+
+        let hash_hex = hex_lower(&hasher.finalize());
+        let (shard_dir, object_path) = self.object_shard_and_path(&hash_hex);
+        if Path::new(&object_path).exists() && object_file_matches_hash(&object_path, &hash_hex) {
+            discard_temp(&temp_path);
+            return Some(hash_hex);
+        }
+
+        if fs::create_dir_all(&shard_dir).is_err() || fs::rename(&temp_path, &object_path).is_err()
+        {
+            discard_temp(&temp_path);
+            return None;
+        }
+        // Best-effort: persist the rename itself.
+        #[cfg(unix)]
+        if let Ok(dir) = fs::File::open(&shard_dir) {
+            let _ = dir.sync_all();
         }
 
         Some(hash_hex)
@@ -234,6 +347,125 @@ mod tests {
     }
 
     #[test]
+    fn extract_rejects_corrupt_object_without_touching_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let musit_root = dir.path().join(".musit");
+        let store = ObjectStore::new(musit_root.to_string_lossy().to_string());
+        assert!(store.init());
+
+        let source = dir.path().join("file.als");
+        fs::write(&source, b"project bytes").unwrap();
+        let hash = store.store_file(source.to_str().unwrap()).unwrap();
+
+        // Corrupt the stored object in place.
+        let object_path = store.object_path_for_hash(&hash).unwrap();
+        fs::write(&object_path, b"\x00\x00\x00\x0dgarbage").unwrap();
+
+        let dest = dir.path().join("restored.als");
+        fs::write(&dest, b"pre-existing").unwrap();
+        assert!(!store.extract_object(&hash, dest.to_str().unwrap()));
+        // A failed restore must leave any existing destination intact.
+        assert_eq!(fs::read(&dest).unwrap(), b"pre-existing");
+
+        // store_file repairs the corrupt object in place.
+        let repaired = store.store_file(source.to_str().unwrap()).unwrap();
+        assert_eq!(repaired, hash);
+        assert!(store.extract_object(&hash, dest.to_str().unwrap()));
+        assert_eq!(fs::read(&dest).unwrap(), b"project bytes");
+    }
+
+    #[test]
+    fn store_and_extract_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let musit_root = dir.path().join(".musit");
+        let store = ObjectStore::new(musit_root.to_string_lossy().to_string());
+        assert!(store.init());
+
+        let source = dir.path().join("empty.als");
+        fs::write(&source, b"").unwrap();
+        let hash = store.store_file(source.to_str().unwrap()).unwrap();
+        // Storing the same content again hits the intact-object fast path.
+        assert_eq!(store.store_file(source.to_str().unwrap()).unwrap(), hash);
+
+        let dest = dir.path().join("restored.als");
+        assert!(store.extract_object(&hash, dest.to_str().unwrap()));
+        assert_eq!(fs::read(&dest).unwrap(), b"");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn staged_copy_of_read_only_source_is_writable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let musit_root = dir.path().join(".musit");
+        let store = ObjectStore::new(musit_root.to_string_lossy().to_string());
+        assert!(store.init());
+
+        let source = dir.path().join("locked.als");
+        fs::write(&source, b"project bytes").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o444)).unwrap();
+
+        let staged = store
+            .stage_file(source.to_str().unwrap(), "locked.als")
+            .unwrap();
+        // Compaction deletes staged copies later; a copied read-only
+        // attribute would break that (and restores) on Windows.
+        let mode = fs::metadata(&staged).unwrap().permissions().mode();
+        assert_ne!(mode & 0o200, 0, "staged copy must stay owner-writable");
+        assert_eq!(fs::read(&staged).unwrap(), b"project bytes");
+    }
+
+    #[test]
+    fn re_store_of_existing_object_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let musit_root = dir.path().join(".musit");
+        let store = ObjectStore::new(musit_root.to_string_lossy().to_string());
+        assert!(store.init());
+
+        let source = dir.path().join("file.als");
+        fs::write(&source, b"project bytes").unwrap();
+        let hash = store.store_file(source.to_str().unwrap()).unwrap();
+        let object_path = store.object_path_for_hash(&hash).unwrap();
+        let modified_before = fs::metadata(&object_path).unwrap().modified().unwrap();
+
+        // The dedupe fast path must not rewrite the object or leak temps.
+        assert_eq!(store.store_file(source.to_str().unwrap()).unwrap(), hash);
+        let modified_after = fs::metadata(&object_path).unwrap().modified().unwrap();
+        assert_eq!(modified_before, modified_after);
+        let objects_dir = musit_root.join("objects");
+        let stray: Vec<String> = std::fs::read_dir(&objects_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(stray.is_empty(), "leaked temp files: {stray:?}");
+    }
+
+    #[test]
+    fn failed_stage_leaves_no_staging_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let musit_root = dir.path().join(".musit");
+        let store = ObjectStore::new(musit_root.to_string_lossy().to_string());
+        assert!(store.init());
+
+        // Missing source: must fail before creating any staging dirs.
+        let missing = dir.path().join("gone.als");
+        assert!(
+            store
+                .stage_file(missing.to_str().unwrap(), "sub/dir/gone.als")
+                .is_none()
+        );
+        let staging = musit_root.join("staging");
+        assert_eq!(
+            fs::read_dir(&staging).unwrap().count(),
+            0,
+            "failed stage must not leave timestamped staging dirs"
+        );
+    }
+
+    #[test]
     fn stage_rejects_escapes() {
         let dir = tempfile::tempdir().unwrap();
         let store = ObjectStore::new(dir.path().to_string_lossy().to_string());
@@ -248,3 +480,4 @@ mod tests {
         assert!(store.stage_file(source.to_str().unwrap(), "/abs").is_none());
     }
 }
+

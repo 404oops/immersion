@@ -443,6 +443,32 @@ fn artifact_set_contains(artifacts: &HashSet<String>, candidate: &str) -> bool {
         .any(|artifact| artifact_equals(artifact, candidate))
 }
 
+/// One hashed file's cache entry costs ~200 bytes; this cap keeps the cache
+/// around 1 MB while still covering every file of any realistic project.
+const FILE_HASH_CACHE_CAP: usize = 4096;
+/// Parsed-log entries hold a project's whole version list, so far fewer fit.
+const PARSED_LOG_CACHE_CAP: usize = 16;
+
+/// A cached value validated by the source file's (mtime, len), aged by a
+/// shared use counter so stale projects fall out of the bounded caches.
+struct CachedByStamp<T> {
+    stamp: (Option<SystemTime>, u64),
+    last_used: u64,
+    value: T,
+}
+
+/// Drops the least-recently-used half of `map` (called only at the cap, so
+/// the sort runs rarely and over at most a few thousand entries).
+fn evict_lru_half<T>(map: &mut HashMap<String, CachedByStamp<T>>) {
+    if map.is_empty() {
+        return;
+    }
+    let mut ages: Vec<u64> = map.values().map(|entry| entry.last_used).collect();
+    ages.sort_unstable();
+    let cutoff = ages[ages.len() / 2];
+    map.retain(|_, entry| entry.last_used > cutoff);
+}
+
 fn read_log_raw_lines(log_path: &str) -> Option<Vec<Vec<u8>>> {
     let contents = fs::read(log_path).ok()?;
     let mut lines: Vec<Vec<u8>> = Vec::new();
@@ -719,10 +745,12 @@ pub struct AppBackend {
     snapshot_service_by_root: HashMap<String, SnapshotService>,
     // (mtime, len)-validated caches so version-graph refreshes don't re-hash
     // project files or re-parse log.jsonl on the UI thread unless they
-    // actually changed on disk.
-    file_hash_cache: std::cell::RefCell<HashMap<String, ((Option<SystemTime>, u64), String)>>,
-    parsed_log_cache:
-        std::cell::RefCell<HashMap<String, ((Option<SystemTime>, u64), Vec<VersionEntry>)>>,
+    // actually changed on disk. Both are bounded (see CachedByStamp): the
+    // least-recently-used half is dropped at the cap, so a long session
+    // across many projects can't accumulate entries forever.
+    file_hash_cache: std::cell::RefCell<HashMap<String, CachedByStamp<String>>>,
+    parsed_log_cache: std::cell::RefCell<HashMap<String, CachedByStamp<Vec<VersionEntry>>>>,
+    cache_use_counter: std::cell::Cell<u64>,
     // pathKey(root) -> root as discovered (hash keys may be lowercased).
     canonical_root_by_key: HashMap<String, String>,
 
@@ -781,6 +809,7 @@ impl AppBackend {
             monitoring_init_resume_at: None,
             file_hash_cache: std::cell::RefCell::new(HashMap::new()),
             parsed_log_cache: std::cell::RefCell::new(HashMap::new()),
+            cache_use_counter: std::cell::Cell::new(0),
             snapshot_service_by_root: HashMap::new(),
             canonical_root_by_key: HashMap::new(),
             platform,
@@ -1043,6 +1072,11 @@ impl AppBackend {
         }
         self.stop_monitoring_for_folder(&root);
         self.workspaces.remove(index as usize);
+        // The caches hold entries keyed by paths under the removed folder;
+        // they are stamp-validated, so a wholesale clear is safe and refills
+        // on demand for the folders that remain.
+        self.file_hash_cache.borrow_mut().clear();
+        self.parsed_log_cache.borrow_mut().clear();
         self.persist_projects_folders();
         self.project_registry.save_projects_folder_name(&root, "");
 
@@ -2187,21 +2221,40 @@ impl AppBackend {
 
     // ---- Versions -----------------------------------------------------------
 
+    /// Monotonic age stamp shared by both bounded caches.
+    fn next_cache_use(&self) -> u64 {
+        let next = self.cache_use_counter.get() + 1;
+        self.cache_use_counter.set(next);
+        next
+    }
+
     /// SHA-256 of a file, reused from cache while (mtime, len) is unchanged.
     fn cached_file_sha256(&self, path: &str) -> String {
         let Ok(meta) = fs::metadata(path) else {
             return String::new();
         };
         let stamp = (meta.modified().ok(), meta.len());
-        if let Some((cached_stamp, hash)) = self.file_hash_cache.borrow().get(path) {
-            if *cached_stamp == stamp {
-                return hash.clone();
-            }
+        if let Some(entry) = self.file_hash_cache.borrow_mut().get_mut(path)
+            && entry.stamp == stamp
+        {
+            entry.last_used = self.next_cache_use();
+            return entry.value.clone();
         }
         let hash = sha256_file_hex(path);
-        self.file_hash_cache
-            .borrow_mut()
-            .insert(path.to_string(), (stamp, hash.clone()));
+        let mut cache = self.file_hash_cache.borrow_mut();
+        // Evict only when the insert would grow the map: a stale-stamp
+        // replacement at the cap must not purge unrelated entries.
+        if !cache.contains_key(path) && cache.len() >= FILE_HASH_CACHE_CAP {
+            evict_lru_half(&mut cache);
+        }
+        cache.insert(
+            path.to_string(),
+            CachedByStamp {
+                stamp,
+                last_used: self.next_cache_use(),
+                value: hash.clone(),
+            },
+        );
         hash
     }
 
@@ -2223,15 +2276,19 @@ impl AppBackend {
         };
         let stamp = (meta.modified().ok(), meta.len());
         let cache_key = format!("{log_path}\u{0}{primary_file}");
-        if let Some((cached_stamp, cached)) = self.parsed_log_cache.borrow().get(&cache_key) {
-            if *cached_stamp == stamp {
-                return cached.clone();
-            }
+        if let Some(entry) = self.parsed_log_cache.borrow_mut().get_mut(&cache_key)
+            && entry.stamp == stamp
+        {
+            entry.last_used = self.next_cache_use();
+            return entry.value.clone();
         }
 
-        let Some(raw_lines) = read_log_raw_lines(log_path) else {
+        // Stream the log line by line instead of loading it whole: version
+        // logs can reach megabytes and this runs on the UI thread.
+        let Ok(file) = fs::File::open(log_path) else {
             return Vec::new();
         };
+        let mut reader = std::io::BufReader::new(file);
 
         // One entry per version. Bundle saves write several log lines (one
         // per internal file) sharing a version id; they are folded into one
@@ -2239,9 +2296,17 @@ impl AppBackend {
         let mut versions: Vec<VersionEntry> = Vec::new();
         let mut version_index_by_id: HashMap<String, usize> = HashMap::new();
         let mut legacy_count = 0i64;
+        let mut raw: Vec<u8> = Vec::new();
 
-        for raw in &raw_lines {
-            let Some(obj) = parse_log_line(raw) else {
+        loop {
+            raw.clear();
+            match std::io::BufRead::read_until(&mut reader, b'\n', &mut raw) {
+                Ok(0) => break,
+                Ok(_) => {}
+                // A torn read must not get cached as the log's parsed state.
+                Err(_) => return Vec::new(),
+            }
+            let Some(obj) = parse_log_line(&raw) else {
                 continue;
             };
 
@@ -2286,9 +2351,19 @@ impl AppBackend {
             versions.push(version);
         }
 
-        self.parsed_log_cache
-            .borrow_mut()
-            .insert(cache_key, (stamp, versions.clone()));
+        let mut cache = self.parsed_log_cache.borrow_mut();
+        // As above: never evict for a replacement of an existing key.
+        if !cache.contains_key(&cache_key) && cache.len() >= PARSED_LOG_CACHE_CAP {
+            evict_lru_half(&mut cache);
+        }
+        cache.insert(
+            cache_key,
+            CachedByStamp {
+                stamp,
+                last_used: self.next_cache_use(),
+                value: versions.clone(),
+            },
+        );
         versions
     }
 
@@ -2850,6 +2925,8 @@ impl AppBackend {
         self.project_notes.clear();
         self.project_primary_files.clear();
         self.last_opened_at_by_project_root.clear();
+        self.file_hash_cache.borrow_mut().clear();
+        self.parsed_log_cache.borrow_mut().clear();
 
         self.theme_hue = 280.0;
         self.theme_hue_persist_deadline = None;
