@@ -9,7 +9,7 @@ use gpui::{
     uniform_list,
 };
 
-use crate::app::{ComboId, ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView};
+use crate::app::{ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView};
 use crate::ui::controls::{
     ButtonVariant, CONTROL_HEIGHT, CONTROL_RADIUS, ScrollAxis, caption, lerp_rgba, panel_button,
     scrollbar, text_field,
@@ -166,7 +166,6 @@ impl RootView {
                                 ButtonVariant::Soft,
                                 true,
                                 &theme,
-                                self,
                                 cx,
                                 |this, w, cx| {
                                     this.open_settings(w, cx);
@@ -673,7 +672,6 @@ impl RootView {
                             .gap(px(8.0))
                             .child(caption(&theme, "Sort by"))
                             .child(self.render_combo(
-                                ComboId::SortMain,
                                 "sort-main",
                                 sort_index,
                                 &sort_options,

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/musit-core", "crates/immersion"]
+members = ["crates/musit-core", "crates/immersion", "crates/vampir"]
 resolver = "2"
 
 [workspace.package]
@@ -7,6 +7,9 @@ version = "0.2.0"
 edition = "2024"
 
 [workspace.dependencies]
+# Pinned by Cargo.lock; declared here so every crate resolves the same copy.
+gpui = { git = "https://github.com/zed-industries/zed", branch = "main" }
+unicode-segmentation = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

@@ -5,25 +5,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, Context, ElementId, Entity, FocusHandle, Pixels, ScrollHandle,
-    UniformListScrollHandle, Window, WindowAppearance, div, prelude::*,
+    App, Bounds, Context, Entity, FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle,
+    Window, WindowAppearance, div, prelude::*,
 };
 use musit_core::backend::{AppBackend, BackendEvent, ColorSchemeMode, PlatformHooks};
 
 use crate::CloseModal;
-use crate::text_input::{InputStyle, TextInput};
 use crate::theme::Theme;
 use crate::ui::graph_layout::{self, GraphNode, Placement};
-
-/// Which combo dropdown is currently open.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ComboId {
-    SortMain,
-    SortSettings,
-    LogLevel,
-    ColorScheme,
-    PrimaryFile,
-}
+use vampir::text_input::{InputStyle, TextInput};
+use vampir::{ControlHost, ControlState};
 
 /// Pending confirm dialog (ThemedConfirmDialog).
 pub struct ConfirmState {
@@ -222,19 +213,10 @@ pub struct RootView {
     /// found nothing, so it is not retried. One small PNG per DAW type.
     pub file_icons: HashMap<String, Option<Arc<gpui::Image>>>,
 
-    // Popup/interaction state.
-    pub open_combo: Option<ComboId>,
-    /// When the open combo's list started revealing (see `COMBO_REVEAL`).
-    pub combo_opened_at: Option<Instant>,
-    /// A combo whose list is fading back out, and when that began. It keeps
-    /// rendering (without taking clicks) until the fade completes.
-    pub combo_closing: Option<(ComboId, Instant)>,
-    /// When `combo_dismissed` was set. The release that should clear it can
-    /// land on an occluding surface and never reach the root, so the marker
-    /// also expires on its own.
-    pub combo_dismissed_at: Option<Instant>,
-    pub hue_slider_bounds: Option<Bounds<Pixels>>,
-    pub hue_dragging: bool,
+    /// Everything the vampir controls keep between frames: which pop-up is
+    /// open and how far into its fade, the switch and disclosure timers, and
+    /// any scrollbar or slider drag.
+    pub controls: ControlState,
     /// In-flight tab-to-tab colour shift (see `displayed_hue`).
     pub hue_anim: Option<HueAnim>,
     pub split_bounds: Option<Bounds<Pixels>>,
@@ -247,9 +229,6 @@ pub struct RootView {
     pub details_fraction: f32,
     /// Some while the first-run wizard is showing.
     pub onboarding: Option<OnboardingStep>,
-    /// Combo just closed by its popup's mouse-down-out; the toggle's click
-    /// for that same gesture must not reopen it.
-    pub combo_dismissed: Option<ComboId>,
     /// Next event-driven graph refresh should select the latest version.
     pub pending_select_latest: bool,
     /// Folder tab currently being renamed inline (double-click a tab).
@@ -259,8 +238,6 @@ pub struct RootView {
     pub graph_zoom: f32,
 
     // Animation state (colour and position transitions).
-    // Switch knob/track slides: element id -> when it was last toggled.
-    pub switch_anim: HashMap<ElementId, Instant>,
     // ThemedPopup enter/exit (OutCubic / InCubic): Instant-driven opacity so
     // frame requests stop when the transition finishes (no stuck 60Hz redraw).
     pub settings_enter_at: Option<Instant>,
@@ -277,7 +254,38 @@ pub struct RootView {
     pub tabs_scroll: ScrollHandle,
     pub graph_scroll: ScrollHandle,
     pub layout_dialog_scroll: ScrollHandle,
-    pub scroll_drag: Option<crate::ui::controls::ScrollDrag>,
+}
+
+impl ControlHost for RootView {
+    fn control_state(&self) -> &ControlState {
+        &self.controls
+    }
+
+    fn control_state_mut(&mut self) -> &mut ControlState {
+        &mut self.controls
+    }
+
+    /// The only vampir track in this window is the theme hue slider.
+    fn track_dragged(&mut self, id: vampir::ComboId, at: gpui::Point<f32>, cx: &mut Context<Self>) {
+        if id == crate::ui::controls::HUE_SLIDER {
+            self.set_hue_from_ratio(at.x, cx);
+        }
+    }
+
+    /// Scrollbar tracks block the mouse, so while the pointer is over one the
+    /// root sees neither moves nor releases. They forward both here.
+    fn forwarded_mouse_move(
+        &mut self,
+        event: &gpui::MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.global_mouse_move(event, cx);
+    }
+
+    fn forwarded_mouse_up(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.global_mouse_up(cx);
+    }
 }
 
 impl RootView {
@@ -439,11 +447,7 @@ impl RootView {
             row_fade: None,
             node_fade: None,
             file_icons: HashMap::new(),
-            open_combo: None,
-            combo_opened_at: None,
-            combo_closing: None,
-            hue_slider_bounds: None,
-            hue_dragging: false,
+            controls: ControlState::new(),
             hue_anim: None,
             split_bounds: None,
             split_dragging: false,
@@ -451,13 +455,10 @@ impl RootView {
             list_split_dragging: false,
             details_fraction: 0.3,
             onboarding: None,
-            combo_dismissed: None,
-            combo_dismissed_at: None,
             pending_select_latest: false,
             renaming_tab: None,
             tab_name_input,
             graph_zoom: 1.0,
-            switch_anim: HashMap::new(),
             settings_enter_at: None,
             layout_enter_at: None,
             confirm_enter_at: None,
@@ -470,7 +471,6 @@ impl RootView {
             tabs_scroll: ScrollHandle::new(),
             graph_scroll: ScrollHandle::new(),
             layout_dialog_scroll: ScrollHandle::new(),
-            scroll_drag: None,
         };
 
         // First run (no folders yet): show the onboarding wizard. A saved
@@ -520,7 +520,7 @@ impl RootView {
                     // While dragging the hue slider the synchronous update
                     // already recomputed the theme; skip the echo. Every other
                     // source (switching tabs, most of all) eases across.
-                    if !self.hue_dragging {
+                    if !self.controls.is_dragging(crate::ui::controls::HUE_SLIDER) {
                         self.start_hue_animation();
                         recompute_theme = true;
                     }
@@ -736,7 +736,7 @@ impl RootView {
     fn schedule_modal_exit(cx: &mut Context<Self>, finish: impl FnOnce(&mut RootView) + 'static) {
         cx.spawn(async move |this, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(crate::theme::MODAL_EXIT_DURATION_MS))
+                .timer(vampir::easing::MODAL_EXIT)
                 .await;
             this.update(cx, |root, cx| {
                 finish(root);
@@ -1070,9 +1070,7 @@ impl RootView {
     /// Closes the open combo, if any, letting its list fade back out the way
     /// it faded in.
     pub fn close_combo(&mut self) {
-        if let Some(combo) = self.open_combo.take() {
-            self.combo_closing = Some((combo, Instant::now()));
-        }
+        self.controls.close_combo();
     }
 
     /// Pane width for the layout, measured last frame (zero before the first
@@ -1157,13 +1155,8 @@ impl RootView {
     pub fn ui_animating(&self) -> bool {
         use crate::ui::controls::modal_opacity;
 
-        const SWITCH_MAX: Duration = Duration::from_millis(140);
-
-        if self
-            .switch_anim
-            .values()
-            .any(|since| since.elapsed() < SWITCH_MAX)
-        {
+        // Switch slides and pop-up reveals.
+        if self.controls.animating() {
             return true;
         }
         if self.hue_animating() {
@@ -1171,19 +1164,6 @@ impl RootView {
         }
         if self.row_fade.as_ref().is_some_and(|fade| fade.running())
             || self.node_fade.as_ref().is_some_and(|fade| fade.running())
-        {
-            return true;
-        }
-        if self.open_combo.is_some()
-            && self
-                .combo_opened_at
-                .is_some_and(|since| since.elapsed() < crate::ui::controls::COMBO_REVEAL)
-        {
-            return true;
-        }
-        if self
-            .combo_closing
-            .is_some_and(|(_, since)| since.elapsed() < crate::ui::controls::COMBO_REVEAL)
         {
             return true;
         }
@@ -1204,7 +1184,7 @@ impl RootView {
             // Escape cancels an inline tab rename.
             self.renaming_tab = None;
             cx.notify();
-        } else if self.open_combo.is_some() {
+        } else if self.controls.open_combo.is_some() {
             self.close_combo();
             cx.notify();
         } else if self.confirm.is_some() {
@@ -1294,23 +1274,17 @@ impl Render for RootView {
 }
 
 impl RootView {
-    pub fn update_hue_from_mouse(&mut self, position: gpui::Point<Pixels>, cx: &mut Context<Self>) {
-        if let Some(bounds) = self.hue_slider_bounds {
-            let width = f32::from(bounds.size.width);
-            if width > 0.0 {
-                let x = f32::from(position.x) - f32::from(bounds.origin.x);
-                let ratio = (x / width).clamp(0.0, 1.0);
-                // Cap below 360: set_theme_hue wraps modulo 360, which would
-                // snap the thumb from the right edge back to the left.
-                let value = (ratio * 360.0).round().min(359.0) as f64;
-                if (self.backend.theme_hue() - value).abs() < 0.5 {
-                    return;
-                }
-                self.hue_anim = None;
-                self.backend.set_theme_hue(value);
-                self.recompute_theme(cx);
-            }
+    /// Applies a hue-slider position, `ratio` running 0..=1 along its track.
+    fn set_hue_from_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
+        // Cap below 360: set_theme_hue wraps modulo 360, which would snap
+        // the thumb from the right edge back to the left.
+        let value = (ratio * 360.0).round().min(359.0) as f64;
+        if (self.backend.theme_hue() - value).abs() < 0.5 {
+            return;
         }
+        self.hue_anim = None;
+        self.backend.set_theme_hue(value);
+        self.recompute_theme(cx);
     }
 
     /// Shared drag tracking. Attached to the root AND to occluding modal
@@ -1318,11 +1292,10 @@ impl RootView {
     /// mouse-move stream the hue-slider drag depends on.
     /// Whether any press-and-move gesture is in flight.
     fn dragging_anything(&self) -> bool {
-        self.hue_dragging
-            || self.split_dragging
+        self.split_dragging
             || self.list_split_dragging
             || self.graph_pan.is_some()
-            || self.scroll_drag.is_some()
+            || self.controls.dragging_anything()
     }
 
     pub fn global_mouse_move(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
@@ -1337,11 +1310,8 @@ impl RootView {
             return;
         }
 
-        let mut dirty = false;
-        if self.hue_dragging {
-            self.update_hue_from_mouse(event.position, cx);
-            dirty = true;
-        }
+        // Scrollbar thumbs and the hue slider are the toolkit's own drags.
+        let mut dirty = vampir::continue_drags(self, event.position, cx);
         if self.split_dragging {
             self.update_split_from_mouse(event.position);
             dirty = true;
@@ -1385,15 +1355,6 @@ impl RootView {
                 }
                 dirty = true;
             }
-        }
-        if let Some(drag) = &self.scroll_drag {
-            use crate::ui::controls::{ScrollAxis, apply_scroll_drag};
-            let position = match drag.axis {
-                ScrollAxis::Vertical => f32::from(event.position.y),
-                ScrollAxis::Horizontal => f32::from(event.position.x),
-            };
-            apply_scroll_drag(drag, position);
-            dirty = true;
         }
         if dirty {
             cx.notify();
@@ -1442,10 +1403,8 @@ impl RootView {
     }
 
     pub fn global_mouse_up(&mut self, cx: &mut Context<Self>) {
-        if self.hue_dragging {
-            self.hue_dragging = false;
+        if self.controls.is_dragging(crate::ui::controls::HUE_SLIDER) {
             self.backend.flush_pending_theme_hue_persist();
-            cx.notify();
         }
         if self.split_dragging {
             self.split_dragging = false;
@@ -1476,13 +1435,15 @@ impl RootView {
             self.list_split_dragging = false;
             cx.notify();
         }
-        if self.scroll_drag.take().is_some() {
+        // Ends the toolkit's drags and clears the dismissed-combo marker: one
+        // not consumed by its toggle (the click landed elsewhere) must not
+        // eat a later toggle click. Only a drag that was actually running
+        // needs a repaint; every click in the window comes through here.
+        let was_dragging = self.controls.dragging_anything();
+        vampir::end_drags(self, cx);
+        if was_dragging {
             cx.notify();
         }
-        // A dismissed-combo marker not consumed by its toggle (e.g. the
-        // click landed elsewhere) must not eat a later toggle click.
-        self.combo_dismissed = None;
-        self.combo_dismissed_at = None;
     }
 
     fn update_split_from_mouse(&mut self, position: gpui::Point<Pixels>) {

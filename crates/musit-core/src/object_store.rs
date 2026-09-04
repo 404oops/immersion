@@ -479,4 +479,3 @@ mod tests {
         assert!(store.stage_file(source.to_str().unwrap(), "/abs").is_none());
     }
 }
-

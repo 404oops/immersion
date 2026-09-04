@@ -1,101 +1,23 @@
 //! OKLCH-based theme palette.
 //!
-//! All colors are derived from a single base hue (degrees) plus a light/dark
-//! flag, through an OKLCH -> linear sRGB -> sRGB pipeline (standard OKLab
-//! matrix constants; lightness and the linear channels are clamped).
+//! Every colour is derived from a single base hue in degrees plus a
+//! light/dark flag. The maths lives in the vampir toolkit; this is the
+//! app's own, larger set of roles built on top of it, and the mapping down
+//! to the twenty-odd colours the toolkit's controls actually paint.
 
 use gpui::Rgba;
 
-fn clamp01(v: f64) -> f64 {
-    v.clamp(0.0, 1.0)
-}
+pub use vampir::color::{argb, mix, oklch_to_color};
+
+const WHITE: Rgba = vampir::color::WHITE;
+const TRANSPARENT: Rgba = vampir::color::TRANSPARENT;
 
 fn clamp(v: f64, min_v: f64, max_v: f64) -> f64 {
     v.clamp(min_v, max_v)
 }
 
-#[allow(dead_code)]
-pub fn srgb_to_linear(v: f64) -> f64 {
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-pub fn linear_to_srgb(v: f64) -> f64 {
-    let c = clamp01(v);
-    if c <= 0.0031308 {
-        12.92 * c
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-#[allow(dead_code)]
-pub fn relative_luminance(color: Rgba) -> f64 {
-    let r = srgb_to_linear(color.r as f64);
-    let g = srgb_to_linear(color.g as f64);
-    let b = srgb_to_linear(color.b as f64);
-    0.2126 * r + 0.7152 * g + 0.0722 * b
-}
-
-/// OKLCH -> sRGB. Lightness is clamped to [0, 1] and chroma to >= 0; the
-/// linear channels are clamped before gamma encoding.
-pub fn oklch_to_color(l_in: f64, c_in: f64, h_degrees: f64) -> Rgba {
-    let l = clamp01(l_in);
-    let c = c_in.max(0.0);
-    let hr = (h_degrees % 360.0) * std::f64::consts::PI / 180.0;
-
-    let a_ = c * hr.cos();
-    let b_ = c * hr.sin();
-
-    let l_ = l + 0.3963377774 * a_ + 0.2158037573 * b_;
-    let m_ = l - 0.1055613458 * a_ - 0.0638541728 * b_;
-    let s_ = l - 0.0894841775 * a_ - 1.2914855480 * b_;
-
-    let l3 = l_ * l_ * l_;
-    let m3 = m_ * m_ * m_;
-    let s3 = s_ * s_ * s_;
-
-    let r_lin = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
-    let g_lin = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
-    let b_lin = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
-
-    Rgba {
-        r: linear_to_srgb(r_lin) as f32,
-        g: linear_to_srgb(g_lin) as f32,
-        b: linear_to_srgb(b_lin) as f32,
-        a: 1.0,
-    }
-}
-
-/// `0xAARRGGBB` literal helper (alpha in the top byte).
-const fn argb(hex: u32) -> Rgba {
-    Rgba {
-        r: ((hex >> 16) & 0xff) as f32 / 255.0,
-        g: ((hex >> 8) & 0xff) as f32 / 255.0,
-        b: (hex & 0xff) as f32 / 255.0,
-        a: ((hex >> 24) & 0xff) as f32 / 255.0,
-    }
-}
-
-const WHITE: Rgba = Rgba {
-    r: 1.0,
-    g: 1.0,
-    b: 1.0,
-    a: 1.0,
-};
-const TRANSPARENT: Rgba = Rgba {
-    r: 0.0,
-    g: 0.0,
-    b: 0.0,
-    a: 0.0,
-};
-
-/// Modal animation — opacity fade only (GPUI has no transform scale).
-pub const MODAL_ENTER_DURATION_MS: u64 = 220;
-pub const MODAL_EXIT_DURATION_MS: u64 = 160;
+/// Modal animation — opacity fade only (GPUI has no transform scale). The
+/// durations live in `vampir::easing`, which drives the fades.
 pub const MODAL_PANEL_RADIUS: f32 = 10.0;
 pub const MODAL_EDGE_PADDING: f32 = 48.0;
 
@@ -313,22 +235,6 @@ impl Theme {
     }
 }
 
-/// Blends two colours in linear-light sRGB (matching the OKLCH pipeline's
-/// working space more closely than a raw sRGB mix).
-fn mix(from: Rgba, to: Rgba, t: f32) -> Rgba {
-    let channel = |a: f32, b: f32| {
-        let a = srgb_to_linear(a as f64);
-        let b = srgb_to_linear(b as f64);
-        linear_to_srgb(a + (b - a) * t as f64) as f32
-    };
-    Rgba {
-        r: channel(from.r, to.r),
-        g: channel(from.g, to.g),
-        b: channel(from.b, to.b),
-        a: from.a + (to.a - from.a) * t,
-    }
-}
-
 impl Theme {
     /// Cross-fades two palettes. Sweeping the hue instead would travel around
     /// the colour wheel and paint every hue in between — going from orange to
@@ -452,9 +358,50 @@ impl Theme {
     }
 }
 
+impl Theme {
+    /// The subset of this palette the vampir controls paint with.
+    ///
+    /// Cheap enough to call per element: it is a copy of twenty-odd f32
+    /// colours, next to nothing beside building the element itself.
+    pub fn palette(&self) -> vampir::Palette {
+        vampir::Palette {
+            is_dark: self.is_dark_mode,
+            accent: self.accent,
+
+            text_primary: self.text_primary,
+            text_secondary: self.text_secondary,
+
+            field_surface: self.input_surface,
+            field_border: self.input_border,
+            field_border_strong: self.input_border_accent,
+
+            area_surface: self.vm_input_surface,
+            area_border: self.vm_border,
+
+            row_hover: self.row_odd,
+
+            control_fill: self.button_fill,
+            control_label: self.button_label,
+
+            soft_fill: self.button_soft_fill,
+            soft_fill_hover: self.button_soft_fill_hover,
+            soft_label: self.button_soft_label,
+
+            primary_fill: self.button_primary_fill,
+            primary_fill_hover: self.button_primary_fill_hover,
+            primary_label: self.button_primary_label,
+
+            danger_fill: self.button_danger_fill,
+            danger_fill_hover: self.button_danger_fill_hover,
+            danger_label: self.button_danger_label,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vampir::color::relative_luminance;
 
     fn hex(c: Rgba) -> String {
         format!(

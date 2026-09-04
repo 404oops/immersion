@@ -7,7 +7,7 @@ use gpui::{
     SharedString, Window, canvas, div, fill, img, point, prelude::*, px, size,
 };
 
-use crate::app::{ComboId, RootView};
+use crate::app::RootView;
 use crate::theme::{MONO_FONT, Theme};
 use crate::ui::controls::{
     ButtonVariant, CONTROL_HEIGHT, ScrollAxis, caption, lerp_rgba, panel_button, scrollbar,
@@ -797,7 +797,6 @@ impl RootView {
                                                     .child(detail_key(&theme, "File"))
                                                     .child(div().flex_1().min_w_0().child(
                                                         self.render_combo(
-                                                            ComboId::PrimaryFile,
                                                             "primary-file",
                                                             primary_index,
                                                             &files,
@@ -865,7 +864,6 @@ impl RootView {
                                     ButtonVariant::Soft,
                                     true,
                                     &theme,
-                                    self,
                                     cx,
                                     |this, _w, cx| {
                                         let note = this.project_note_input.read(cx).text();
@@ -968,7 +966,6 @@ impl RootView {
                                         ButtonVariant::Danger,
                                         has_selection,
                                         &theme,
-                                        self,
                                         cx,
                                         |this, w, cx| {
                                             this.take_modal_focus(w, cx);
@@ -988,7 +985,6 @@ impl RootView {
                                         ButtonVariant::Soft,
                                         has_selection,
                                         &theme,
-                                        self,
                                         cx,
                                         |this, _w, cx| {
                                             let note = this.version_note_input.read(cx).text();
@@ -1005,7 +1001,6 @@ impl RootView {
                                         ButtonVariant::Primary,
                                         has_selection,
                                         &theme,
-                                        self,
                                         cx,
                                         |this, _w, cx| {
                                             let version_id = this.vm_selected_id.clone();

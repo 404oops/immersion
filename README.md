@@ -20,6 +20,10 @@ folder, choose its layout, then optionally add more folders.
   framing), version metadata log.
 - `crates/immersion` — GPUI desktop app and platform glue (menu bar status
   item, notifications, launch-at-login, single instance).
+- `crates/vampir` — the widget toolkit the app is built from: buttons,
+  fields, pop-ups, menus, tabs, dialogs and a text input, over a small OKLCH
+  palette. It depends on nothing but GPUI, so it can be used on its own; see
+  `crates/vampir/AGENTS.md`.
 
 ## Build & run
 

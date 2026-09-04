@@ -11,9 +11,10 @@ winresource = "0.1"
 
 [dependencies]
 musit-core = { path = "../musit-core" }
-gpui = { git = "https://github.com/zed-industries/zed", branch = "main" }
+vampir = { path = "../vampir" }
+gpui.workspace = true
 gpui_platform = { git = "https://github.com/zed-industries/zed", branch = "main", features = ["font-kit", "runtime_shaders"] }
-unicode-segmentation = "1"
+unicode-segmentation.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

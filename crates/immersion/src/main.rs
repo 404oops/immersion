@@ -2,7 +2,6 @@
 
 mod app;
 mod platform;
-mod text_input;
 mod theme;
 mod ui;
 
@@ -16,7 +15,7 @@ use gpui::{
 use gpui_platform::application;
 
 use crate::platform::single_instance::{self, InstanceGuard};
-use crate::text_input as ti;
+use vampir::text_input as ti;
 
 actions!(immersion, [Quit, CloseModal]);
 

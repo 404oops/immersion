@@ -69,7 +69,6 @@ impl RootView {
                 ButtonVariant::Primary,
                 true,
                 theme,
-                self,
                 cx,
                 |this, _w, cx| {
                     this.prompt_for_onboarding_folder(cx);
@@ -135,7 +134,6 @@ impl RootView {
                 ButtonVariant::Soft,
                 true,
                 theme,
-                self,
                 cx,
                 |this, _w, cx| {
                     this.onboarding = Some(OnboardingStep::Welcome);
@@ -212,7 +210,6 @@ impl RootView {
                             ButtonVariant::Soft,
                             true,
                             theme,
-                            self,
                             cx,
                             |this, _w, cx| {
                                 let folder = this.backend.projects_folder_path().to_string();
@@ -229,7 +226,6 @@ impl RootView {
                         ButtonVariant::Soft,
                         true,
                         theme,
-                        self,
                         cx,
                         |this, _w, cx| {
                             this.prompt_for_onboarding_folder(cx);
@@ -241,7 +237,6 @@ impl RootView {
                         ButtonVariant::Primary,
                         true,
                         theme,
-                        self,
                         cx,
                         |this, _w, cx| {
                             if this.backend.has_projects_folder() {

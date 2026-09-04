@@ -2617,6 +2617,7 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-segmentation",
+ "vampir",
  "windows 0.62.2",
  "winresource",
 ]
@@ -5914,6 +5915,14 @@ dependencies = [
  "sval_json",
  "sval_ref",
  "sval_serde",
+]
+
+[[package]]
+name = "vampir"
+version = "0.2.0"
+dependencies = [
+ "gpui",
+ "unicode-segmentation",
 ]
 
 [[package]]

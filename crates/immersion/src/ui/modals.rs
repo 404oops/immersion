@@ -6,7 +6,7 @@ use gpui::{
     prelude::*, px,
 };
 
-use crate::app::{ComboId, ConfirmAction, ConfirmState, RootView};
+use crate::app::{ConfirmAction, ConfirmState, RootView};
 use crate::theme::MODAL_EDGE_PADDING;
 use crate::theme::MODAL_PANEL_RADIUS;
 use crate::ui::controls::{
@@ -254,7 +254,6 @@ impl RootView {
                         ButtonVariant::Soft,
                         true,
                         &theme,
-                        self,
                         cx,
                         |this, _w, cx| {
                             this.request_close_settings(cx);
@@ -307,7 +306,6 @@ impl RootView {
                                                 ButtonVariant::Primary,
                                                 true,
                                                 &theme,
-                                                self,
                                                 cx,
                                                 |this, _window, cx| {
                                                     this.prompt_for_projects_folder(cx);
@@ -341,7 +339,6 @@ impl RootView {
                                                     ButtonVariant::Soft,
                                                     !folder_path.is_empty(),
                                                     &theme,
-                                                    self,
                                                     cx,
                                                     |this, window, cx| {
                                                         this.open_layout_dialog_for_current_folder(window, cx);
@@ -392,7 +389,6 @@ impl RootView {
                                             .gap(px(8.0))
                                             .child(section_label("Default sort mode"))
                                             .child(self.render_combo(
-                                                ComboId::SortSettings,
                                                 "sort-settings",
                                                 sort_index,
                                                 &sort_options,
@@ -420,7 +416,6 @@ impl RootView {
                                                 "Debug adds scan and watcher detail to the log, and shows where things are stored on disk.",
                                             ))
                                             .child(self.render_combo(
-                                                ComboId::LogLevel,
                                                 "log-level",
                                                 log_index,
                                                 &log_options,
@@ -522,7 +517,6 @@ impl RootView {
                                             .gap(px(8.0))
                                             .child(section_label("Appearance"))
                                             .child(self.render_combo(
-                                                ComboId::ColorScheme,
                                                 "color-scheme",
                                                 scheme_index,
                                                 &scheme_options,
@@ -609,7 +603,6 @@ impl RootView {
                                                         ButtonVariant::Soft,
                                                         true,
                                                         &theme,
-                                                        self,
                                                         cx,
                                                         |this, _w, cx| {
                                                             this.prompt_export_activity_log(cx);
@@ -621,7 +614,6 @@ impl RootView {
                                                         ButtonVariant::Danger,
                                                         true,
                                                         &theme,
-                                                        self,
                                                         cx,
                                                         |this, w, cx| {
                                                             this.take_modal_focus(w, cx);
@@ -864,7 +856,6 @@ impl RootView {
                                 ButtonVariant::Soft,
                                 true,
                                 &theme,
-                                self,
                                 cx,
                                 |this, _w, cx| {
                                     this.request_close_layout(cx);
@@ -876,7 +867,6 @@ impl RootView {
                                 ButtonVariant::Primary,
                                 true,
                                 &theme,
-                                self,
                                 cx,
                                 |this, _w, cx| {
                                     this.layout_dialog_confirm(cx);
@@ -949,7 +939,6 @@ impl RootView {
                         ButtonVariant::Soft,
                         true,
                         &theme,
-                        self,
                         cx,
                         |this, _w, cx| {
                             this.request_close_confirm(cx);
@@ -965,7 +954,6 @@ impl RootView {
                         },
                         true,
                         &theme,
-                        self,
                         cx,
                         |this, _w, cx| {
                             this.run_confirm_action(cx);

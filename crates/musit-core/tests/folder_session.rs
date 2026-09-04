@@ -69,7 +69,10 @@ fn folder_session_survives_removal_and_re_adding() {
     );
 
     let saved = folder_settings::load(&root);
-    assert_eq!(saved.name, "Late Night Beats", "name is saved in the folder");
+    assert_eq!(
+        saved.name, "Late Night Beats",
+        "name is saved in the folder"
+    );
     assert_eq!(saved.hue, Some(212.0), "colour is saved in the folder");
 
     // ---- Remove the tab: the folder is forgotten by the app ----

@@ -1,0 +1,9 @@
+[package]
+name = "vampir"
+version.workspace = true
+edition.workspace = true
+description = "Lit GPUI controls: buttons, fields, pop-ups, menus and a text input, over a small colour palette."
+
+[dependencies]
+gpui.workspace = true
+unicode-segmentation.workspace = true
