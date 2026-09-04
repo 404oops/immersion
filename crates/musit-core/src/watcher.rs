@@ -29,10 +29,24 @@ struct FileState {
     msecs_since_epoch: i64,
 }
 
-fn state_of(path: &Path) -> Option<FileState> {
-    let metadata = fs::symlink_metadata(path).ok()?;
+/// What a look at a path found.
+enum Observed {
+    File(FileState),
+    /// The path is gone (or is no longer a file).
+    Missing,
+    /// The look itself failed: the volume may be busy or disconnected, and
+    /// the path must not be treated as deleted on that basis.
+    Unknown,
+}
+
+fn state_of(path: &Path) -> Observed {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Observed::Missing,
+        Err(_) => return Observed::Unknown,
+    };
     if !metadata.is_file() {
-        return None;
+        return Observed::Missing;
     }
     let msecs = metadata
         .modified()
@@ -40,21 +54,25 @@ fn state_of(path: &Path) -> Option<FileState> {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    Some(FileState {
+    Observed::File(FileState {
         size: metadata.len(),
         msecs_since_epoch: msecs,
     })
 }
 
+/// Collects the state of every tracked file under `current`. Returns false
+/// when any directory could not be read, so callers can tell a genuinely
+/// empty tree from one the filesystem would not show them.
 fn scan_tree_state(
     root: &str,
     current: &str,
     config: &ProjectConfig,
     out: &mut HashMap<String, FileState>,
-) {
+) -> bool {
     let Ok(entries) = fs::read_dir(current) else {
-        return;
+        return false;
     };
+    let mut complete = true;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let Ok(file_type) = entry.file_type() else {
@@ -69,7 +87,7 @@ fn scan_tree_state(
             if project_config::is_ignored_directory_name(&name) {
                 continue;
             }
-            scan_tree_state(root, &absolute, config, out);
+            complete &= scan_tree_state(root, &absolute, config, out);
             continue;
         }
         let relative = relative_file_path(root, &absolute);
@@ -97,6 +115,7 @@ fn scan_tree_state(
             },
         );
     }
+    complete
 }
 
 enum Msg {
@@ -114,6 +133,9 @@ struct WorkerState {
     canonical_root: String,
     project_config: ProjectConfig,
     scan_sequence: i64,
+    /// The next batch continues the save the last one was still watching
+    /// settle, so it keeps the same sequence.
+    continuing_batch: bool,
     dirty_relative: HashSet<String>,
     /// Last observed state per TRACKED file (scan_tree_state filters by
     /// should_track, and only tracked paths ever get marked dirty), so the
@@ -145,16 +167,22 @@ impl WorkerState {
         self.pending.clear();
         self.dirty_relative.clear();
         self.scan_sequence = 0;
+        self.continuing_batch = false;
 
         let timer = Instant::now();
         let mut baseline = HashMap::new();
-        scan_tree_state(
+        let complete = scan_tree_state(
             &self.root_path,
             &self.root_path,
             &self.project_config,
             &mut baseline,
         );
         self.previous = baseline;
+        // An unreadable tree would look like an empty project and turn every
+        // file into a "created" event later; reconcile again shortly instead.
+        if !complete {
+            self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
+        }
         self.log("baseline", self.previous.len(), timer.elapsed().as_millis());
 
         self.safety_deadline = Some(Instant::now() + SAFETY_SCAN);
@@ -247,7 +275,7 @@ impl WorkerState {
         };
 
         let mut current_subtree = HashMap::new();
-        scan_tree_state(
+        let complete = scan_tree_state(
             &self.root_path,
             &normalized_dir,
             &self.project_config,
@@ -257,6 +285,11 @@ impl WorkerState {
         let keys: Vec<String> = current_subtree.keys().cloned().collect();
         for key in keys {
             self.mark_dirty_relative(key);
+        }
+
+        // A listing that failed part-way says nothing about what is missing.
+        if !complete {
+            return;
         }
 
         let missing: Vec<String> = self
@@ -285,7 +318,7 @@ impl WorkerState {
         }
 
         let mut current = HashMap::new();
-        scan_tree_state(
+        let complete = scan_tree_state(
             &self.root_path,
             &self.root_path,
             &self.project_config,
@@ -303,6 +336,11 @@ impl WorkerState {
             self.mark_dirty_relative(path);
         }
 
+        // Only a complete listing can tell us something is gone: a share
+        // that stalled would otherwise look like every file being deleted.
+        if !complete {
+            return;
+        }
         let deleted: Vec<String> = self
             .previous
             .keys()
@@ -322,7 +360,14 @@ impl WorkerState {
 
         let timer = Instant::now();
 
-        self.scan_sequence += 1;
+        // A file still being written re-arms the batch, and the files that
+        // settled earlier belong to the same save as the ones that settle in
+        // that follow-up pass. Keeping the sequence for a continuation is
+        // what lets the snapshot service record them as one version instead
+        // of splitting a project across two.
+        if !self.continuing_batch {
+            self.scan_sequence += 1;
+        }
         let sequence = self.scan_sequence;
         let batch: Vec<String> = self.dirty_relative.drain().collect();
         let batch_len = batch.len();
@@ -336,6 +381,7 @@ impl WorkerState {
 
         self.log("debounce", batch_len, timer.elapsed().as_millis());
 
+        self.continuing_batch = needs_another_pass;
         if needs_another_pass {
             self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
         }
@@ -344,14 +390,18 @@ impl WorkerState {
     /// Returns true when the path still needs another stabilization pass.
     fn observe_path(&mut self, relative_path: &str, sequence: i64) -> bool {
         let absolute_path = join_path(&self.root_path, relative_path);
-        let state = state_of(Path::new(&absolute_path));
-
-        let Some(state) = state else {
-            if self.previous.remove(relative_path).is_some() {
-                self.pending.remove(relative_path);
-                self.emit_change(FileEventType::Deleted, relative_path, sequence, 0);
+        let state = match state_of(Path::new(&absolute_path)) {
+            Observed::File(state) => state,
+            Observed::Missing => {
+                if self.previous.remove(relative_path).is_some() {
+                    self.pending.remove(relative_path);
+                    self.emit_change(FileEventType::Deleted, relative_path, sequence, 0);
+                }
+                return false;
             }
-            return false;
+            // The volume would not answer. Say nothing and look again on the
+            // next pass rather than record a deletion that never happened.
+            Observed::Unknown => return true,
         };
 
         if self.previous.get(relative_path) == Some(&state) {
@@ -418,6 +468,7 @@ impl HybridFileWatcher {
                     canonical_root: String::new(),
                     project_config: ProjectConfig::default(),
                     scan_sequence: 0,
+                    continuing_batch: false,
                     dirty_relative: HashSet::new(),
                     previous: HashMap::new(),
                     pending: HashMap::new(),

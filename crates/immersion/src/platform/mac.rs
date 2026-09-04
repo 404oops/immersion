@@ -447,3 +447,93 @@ fn uuid_string() -> String {
         .unwrap_or(0);
     format!("musit-{nanos}-{}", std::process::id())
 }
+
+/// The document icon macOS shows for files with `extension`, rendered to a
+/// square PNG of `size_px` pixels. The lookup goes by content type, so it
+/// never touches a file (which may sit on a slow share) and costs one call
+/// per extension. DAW formats are mostly undeclared, dynamic types that
+/// still carry their app's document icon, so "unknown" is detected by
+/// comparing against the generic document icon; None then, so the UI keeps
+/// its own tile.
+pub fn file_type_icon_png(extension: &str, size_px: usize) -> Option<Vec<u8>> {
+    if extension.is_empty() || size_px == 0 {
+        return None;
+    }
+    let icon = render_type_icon_png(extension, size_px)?;
+    let generic = render_type_icon_png("immersion-unclaimed-type-probe", size_px)?;
+    if icon == generic { None } else { Some(icon) }
+}
+
+fn render_type_icon_png(extension: &str, size_px: usize) -> Option<Vec<u8>> {
+    use objc2_app_kit::{
+        NSBitmapImageRep, NSCalibratedRGBColorSpace, NSCompositingOperation, NSGraphicsContext,
+        NSWorkspace,
+    };
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use objc2_uniform_type_identifiers::UTType;
+
+    let _mtm = MainThreadMarker::new()?;
+
+    let content_type = UTType::typeWithFilenameExtension(&NSString::from_str(extension))?;
+    let icon = NSWorkspace::sharedWorkspace().iconForContentType(&content_type);
+
+    let side = size_px as isize;
+    let rep = unsafe {
+        NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            std::ptr::null_mut(),
+            side,
+            side,
+            8,
+            4,
+            true,
+            false,
+            NSCalibratedRGBColorSpace,
+            0,
+            0,
+        )
+    }?;
+    let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep)?;
+    let rect = NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(size_px as f64, size_px as f64),
+    );
+    NSGraphicsContext::saveGraphicsState_class();
+    NSGraphicsContext::setCurrentContext(Some(&context));
+    icon.drawInRect_fromRect_operation_fraction(
+        rect,
+        NSRect::ZERO,
+        NSCompositingOperation::Copy,
+        1.0,
+    );
+    context.flushGraphics();
+    NSGraphicsContext::restoreGraphicsState_class();
+
+    // Read the pixels back: 8-bit RGBA, premultiplied (the default drawing
+    // format), possibly with padded rows.
+    let bytes_per_row = rep.bytesPerRow().max(0) as usize;
+    let data = rep.bitmapData();
+    if data.is_null() || bytes_per_row < size_px * 4 {
+        return None;
+    }
+    let mut rgba = vec![0u8; size_px * size_px * 4];
+    for y in 0..size_px {
+        let row = unsafe { std::slice::from_raw_parts(data.add(y * bytes_per_row), size_px * 4) };
+        rgba[y * size_px * 4..(y + 1) * size_px * 4].copy_from_slice(row);
+    }
+    unpremultiply(&mut rgba);
+    super::icon_pixels::trimmed_png(size_px as u32, size_px as u32, &rgba)
+}
+
+/// Premultiplied RGBA to straight alpha, as PNG expects.
+fn unpremultiply(rgba: &mut [u8]) {
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = pixel[3] as u32;
+        if alpha == 0 || alpha == 255 {
+            continue;
+        }
+        for channel in &mut pixel[..3] {
+            *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
+        }
+    }
+}

@@ -8,6 +8,18 @@ use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+/// Serializes every write to a version log. Snapshots are appended on the
+/// versioning thread while deletes and note edits rewrite the whole file
+/// from the UI thread; without this an append landing between the read and
+/// the rename would be dropped, taking a just-recorded version with it.
+/// Writes are rare and short, so one lock for all projects is enough.
+pub fn log_write_guard() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = LOCK.get_or_init(|| Mutex::new(()));
+    lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn top_level_version(version_id: &str) -> i32 {
     let first_segment = version_id.split('.').next().unwrap_or("");
@@ -76,9 +88,17 @@ impl MetadataStore {
     /// Reads bytes and decodes per line: one torn append with invalid UTF-8
     /// must lose only that line, not silently empty the whole log (which
     /// would restart version numbering and corrupt the graph).
-    fn for_each_log_line(&self, mut visit: impl FnMut(Map<String, Value>)) {
-        let Ok(file) = fs::File::open(self.log_path()) else {
-            return;
+    /// Visits every parseable line of the log. Returns false when the log
+    /// exists but could not be read to the end: callers that number versions
+    /// must not treat a truncated read as "this is all the history", or they
+    /// will hand out an id that is already taken.
+    fn for_each_log_line(&self, mut visit: impl FnMut(Map<String, Value>)) -> bool {
+        let path = self.log_path();
+        let file = match fs::File::open(&path) {
+            Ok(file) => file,
+            // No log yet is a complete read of an empty history; anything
+            // else (permissions, a share that dropped) is not.
+            Err(error) => return error.kind() == std::io::ErrorKind::NotFound,
         };
         let mut reader = std::io::BufReader::new(file);
         let mut raw: Vec<u8> = Vec::new();
@@ -87,7 +107,7 @@ impl MetadataStore {
             match std::io::BufRead::read_until(&mut reader, b'\n', &mut raw) {
                 Ok(0) => break,
                 Ok(_) => {}
-                Err(_) => break,
+                Err(_) => return false,
             }
             let Ok(text) = std::str::from_utf8(&raw) else {
                 continue;
@@ -100,6 +120,7 @@ impl MetadataStore {
                 visit(map);
             }
         }
+        true
     }
 
     /// Parsed JSON objects of the log, in append order. Prefer
@@ -112,16 +133,19 @@ impl MetadataStore {
 
     /// Versions are numbered per artifact (a project file, or a bundle root
     /// like "Song.logicx" whose internal files share one version per save).
+    /// The next version id for an artifact, or None when the log could not
+    /// be read in full: numbering from a partial read would reuse an id that
+    /// already exists and make two different snapshots share a version.
     pub fn next_version_id_for_artifact(
         &self,
         artifact: &str,
         branch_base_version: &str,
-    ) -> String {
+    ) -> Option<String> {
         let mut running_ordinal = 0i64;
         let mut max_top_level = 0i32;
         let mut max_child_for_base = 0i32;
 
-        self.for_each_log_line(|obj| {
+        let complete = self.for_each_log_line(|obj| {
             if !artifact_equals(&artifact_of_log_line(&obj), artifact) {
                 return;
             }
@@ -152,10 +176,13 @@ impl MetadataStore {
             }
         });
 
-        if !branch_base_version.is_empty() {
-            return format!("{branch_base_version}.{}", max_child_for_base + 1);
+        if !complete {
+            return None;
         }
-        (max_top_level + 1).to_string()
+        if !branch_base_version.is_empty() {
+            return Some(format!("{branch_base_version}.{}", max_child_for_base + 1));
+        }
+        Some((max_top_level + 1).to_string())
     }
 
     /// Appends one snapshot line. version_id/parent_version are pre-allocated
@@ -200,6 +227,7 @@ impl MetadataStore {
             }
         }
 
+        let _guard = log_write_guard();
         let Ok(mut log_file) = OpenOptions::new()
             .create(true)
             .append(true)
@@ -212,7 +240,16 @@ impl MetadataStore {
             "{}\n",
             serde_json::to_string(&Value::Object(line)).expect("json line serializes")
         );
-        log_file.write_all(encoded.as_bytes()).is_ok()
+        // A half-written line would be concatenated with the next append and
+        // make both unparseable, so a failure rewinds the file to the length
+        // it had. The flush is what makes the entry survive a power loss with
+        // the object it refers to.
+        let length_before = log_file.metadata().map(|meta| meta.len()).unwrap_or(0);
+        if log_file.write_all(encoded.as_bytes()).is_err() {
+            let _ = log_file.set_len(length_before);
+            return false;
+        }
+        log_file.sync_all().is_ok()
     }
 
     /// Staged paths (as stored in the log) of all but the `keep_count` most
@@ -258,14 +295,16 @@ impl MetadataStore {
         paths
     }
 
-    pub fn latest_staged_version_for_artifact(&self, artifact: &str) -> String {
+    /// The newest version id of an artifact, or None when the log could not
+    /// be read in full (see [`Self::next_version_id_for_artifact`]).
+    pub fn latest_staged_version_for_artifact(&self, artifact: &str) -> Option<String> {
         if self.musit_root.is_empty() || artifact.is_empty() {
-            return String::new();
+            return Some(String::new());
         }
 
         let mut running_ordinal = 0i64;
         let mut latest_version_id = String::new();
-        self.for_each_log_line(|obj| {
+        let complete = self.for_each_log_line(|obj| {
             if !artifact_equals(&artifact_of_log_line(&obj), artifact) {
                 return;
             }
@@ -288,6 +327,10 @@ impl MetadataStore {
             }
         });
 
-        latest_version_id
+        if complete {
+            Some(latest_version_id)
+        } else {
+            None
+        }
     }
 }

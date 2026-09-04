@@ -761,7 +761,15 @@ impl RootView {
                         // The popup's mouse_down_out already closed the combo
                         // for this same click (the toggle is outside the
                         // popup); don't immediately reopen it.
-                        if this.combo_dismissed.take() == Some(combo) {
+                        // The marker expires by itself: the release that
+                        // clears it may have landed on an occluding surface
+                        // and never reached the root handler.
+                        let dismissed_recently = this
+                            .combo_dismissed_at
+                            .is_some_and(|since| since.elapsed() < COMBO_REVEAL);
+                        let dismissed = this.combo_dismissed.take();
+                        this.combo_dismissed_at = None;
+                        if dismissed_recently && dismissed == Some(combo) {
                             cx.notify();
                             return;
                         }
@@ -815,6 +823,7 @@ impl RootView {
                                         // dismissed so its own toggle's click
                                         // doesn't reopen it.
                                         this.combo_dismissed = Some(combo);
+                                        this.combo_dismissed_at = Some(Instant::now());
                                         cx.notify();
                                     },
                                 ))

@@ -537,7 +537,10 @@ fn e2e_backup() {
             wait_for(&mut backend, WAIT, |backend| {
                 backend.take_events();
                 versions = backend.get_project_versions(0);
-                version_by_id(&versions, &save_id).is_some()
+                // One save writes both bundle files, and each file is its own
+                // appended line, so the version is only complete once both
+                // have landed.
+                version_by_id(&versions, &save_id).is_some_and(|v| v.files.len() == 2)
             }),
             "watcher: version {save} never appeared"
         );
@@ -559,15 +562,15 @@ fn e2e_backup() {
     }
 
     // ---- Compaction ----
-    assert_eq!(
-        count_staged_files_named(&project_root, "ProjectData"),
-        backup_template::UNCOMPRESSED_RECENT_VERSIONS as usize,
-        "compaction: exactly 5 staged ProjectData copies remain"
-    );
-    assert_eq!(
-        count_staged_files_named(&project_root, "Metadata.plist"),
-        backup_template::UNCOMPRESSED_RECENT_VERSIONS as usize,
-        "compaction: exactly 5 staged plist copies remain"
+    // A version becomes visible when its line is appended; compaction of the
+    // older staged copies follows a moment later on the versioning thread.
+    let keep = backup_template::UNCOMPRESSED_RECENT_VERSIONS as usize;
+    assert!(
+        wait_for(&mut backend, WAIT, |_| {
+            count_staged_files_named(&project_root, "ProjectData") == keep
+                && count_staged_files_named(&project_root, "Metadata.plist") == keep
+        }),
+        "compaction: exactly 5 staged copies remain per file"
     );
 
     {
@@ -588,16 +591,15 @@ fn e2e_backup() {
         );
     }
 
+    // Compaction runs on the versioning thread, so this is a wait, not an
+    // immediate assertion.
     backend.set_snapshot_retention(2);
-    assert_eq!(
-        count_staged_files_named(&project_root, "ProjectData"),
-        2,
-        "retention change: existing ProjectData copies compact immediately"
-    );
-    assert_eq!(
-        count_staged_files_named(&project_root, "Metadata.plist"),
-        2,
-        "retention change: existing plist copies compact immediately"
+    assert!(
+        wait_for(&mut backend, WAIT, |_| {
+            count_staged_files_named(&project_root, "ProjectData") == 2
+                && count_staged_files_named(&project_root, "Metadata.plist") == 2
+        }),
+        "retention change: existing staged copies compact down to the new limit"
     );
 
     // ---- Restore of a compacted version (object-store path) ----
@@ -664,7 +666,9 @@ fn e2e_backup() {
         wait_for(&mut backend, WAIT, |backend| {
             backend.take_events();
             versions = backend.get_project_versions(0);
-            version_by_id(&versions, "1.1").is_some()
+            // Both bundle files land as separate appends; wait for the whole
+            // version rather than its first line.
+            version_by_id(&versions, "1.1").is_some_and(|v| v.files.len() == 2)
         }),
         "branch: save after restore creates version 1.1"
     );

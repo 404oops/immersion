@@ -12,6 +12,28 @@ use crate::backup_template::{
 };
 use crate::object_store::write_atomically;
 use crate::path_cleanup::{clean_path, join_path, path_equals, path_key};
+
+/// Registry entries are identified by folder *and* main project file: the
+/// "Files" layout puts several projects in one folder, and keying on the
+/// folder alone would let them overwrite each other.
+fn record_key(root_path: &str, primary_file: &str) -> String {
+    format!(
+        "{}\u{0}{}",
+        path_key(root_path),
+        primary_file.to_lowercase()
+    )
+}
+
+/// The key of a stored entry, whose main file may be missing in files
+/// written by older versions.
+fn record_key_of(obj: &Map<String, Value>) -> String {
+    let root_path = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
+    let primary = obj
+        .get("primary_project_file")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    record_key(root_path, primary)
+}
 use crate::project_discovery::{DiscoveredProject, known_kinds};
 use chrono::Utc;
 use serde_json::{Map, Value, json};
@@ -283,14 +305,18 @@ impl ProjectRegistry {
         let file_path = self.data_file_path();
         let mut incoming: std::collections::HashMap<String, &DiscoveredProject> = projects
             .iter()
-            .map(|project| (path_key(&project.root_path), project))
+            .map(|project| {
+                (
+                    record_key(&project.root_path, &project.primary_project_file),
+                    project,
+                )
+            })
             .collect();
 
         let mut updated: Vec<Value> = Vec::new();
         for value in read_projects_array(&file_path) {
             let obj = value.as_object().cloned().unwrap_or_default();
-            let root_path = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
-            match incoming.remove(&path_key(root_path)) {
+            match incoming.remove(&record_key_of(&obj)) {
                 Some(project) => {
                     let note = obj.get("note").and_then(|v| v.as_str()).unwrap_or("");
                     updated.push(project_to_json(project, note));
@@ -323,7 +349,7 @@ impl ProjectRegistry {
                 continue;
             }
             records.insert(
-                path_key(root_path),
+                record_key_of(obj),
                 ProjectRecord {
                     note: obj
                         .get("note")
@@ -341,13 +367,13 @@ impl ProjectRegistry {
         records
     }
 
-    pub fn load_project_note(&self, root_path: &str) -> String {
+    pub fn load_project_note(&self, root_path: &str, primary_file: &str) -> String {
+        let wanted = record_key(root_path, primary_file);
         for value in read_projects_array(&self.data_file_path()) {
             let Some(obj) = value.as_object() else {
                 continue;
             };
-            let candidate = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
-            if path_equals(candidate, root_path) {
+            if record_key_of(obj) == wanted {
                 return obj
                     .get("note")
                     .and_then(|v| v.as_str())
@@ -358,17 +384,19 @@ impl ProjectRegistry {
         String::new()
     }
 
-    pub fn save_project_note(&self, root_path: &str, note: &str) -> bool {
-        self.update_project_field(root_path, "note", note)
+    pub fn save_project_note(&self, root_path: &str, primary_file: &str, note: &str) -> bool {
+        self.update_project_field(root_path, primary_file, "note", note)
     }
 
-    pub fn load_project_primary_file(&self, root_path: &str) -> String {
+    /// The main file remembered for a project, looked up by the project it
+    /// was discovered as.
+    pub fn load_project_primary_file(&self, root_path: &str, discovered_primary: &str) -> String {
+        let wanted = record_key(root_path, discovered_primary);
         for value in read_projects_array(&self.data_file_path()) {
             let Some(obj) = value.as_object() else {
                 continue;
             };
-            let candidate = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
-            if path_equals(candidate, root_path) {
+            if record_key_of(obj) == wanted {
                 return obj
                     .get("primary_project_file")
                     .and_then(|v| v.as_str())
@@ -379,11 +407,27 @@ impl ProjectRegistry {
         String::new()
     }
 
-    pub fn save_project_primary_file(&self, root_path: &str, primary_file: &str) -> bool {
-        self.update_project_field(root_path, "primary_project_file", primary_file)
+    pub fn save_project_primary_file(
+        &self,
+        root_path: &str,
+        discovered_primary: &str,
+        primary_file: &str,
+    ) -> bool {
+        self.update_project_field(
+            root_path,
+            discovered_primary,
+            "primary_project_file",
+            primary_file,
+        )
     }
 
-    fn update_project_field(&self, root_path: &str, field: &str, value: &str) -> bool {
+    fn update_project_field(
+        &self,
+        root_path: &str,
+        primary_file: &str,
+        field: &str,
+        value: &str,
+    ) -> bool {
         let dir_path = app_config_directory();
         if dir_path.is_empty() || fs::create_dir_all(&dir_path).is_err() {
             return false;
@@ -394,10 +438,10 @@ impl ProjectRegistry {
         let trimmed = value.trim();
         let mut updated = false;
         let mut rewritten: Vec<Value> = Vec::new();
+        let wanted = record_key(root_path, primary_file);
         for item in projects {
             let mut obj = item.as_object().cloned().unwrap_or_default();
-            let candidate = obj.get("root_path").and_then(|v| v.as_str()).unwrap_or("");
-            if path_equals(candidate, root_path) {
+            if record_key_of(&obj) == wanted {
                 if trimmed.is_empty() {
                     obj.remove(field);
                 } else {

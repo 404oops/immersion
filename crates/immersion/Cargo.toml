@@ -37,11 +37,19 @@ objc2-app-kit = { version = "0.3", features = [
     "NSEvent",
     "NSCell",
     "NSRunningApplication",
+    "NSWorkspace",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImageRep",
+    "NSBitmapImageRep",
+    "objc2-uniform-type-identifiers",
 ] }
+objc2-uniform-type-identifiers = { version = "0.3", features = ["UTType"] }
 objc2-foundation = { version = "0.3", features = [
     "NSString",
     "NSBundle",
     "NSData",
+    "NSDictionary",
     "NSError",
     "NSGeometry",
     "NSObject",
@@ -60,3 +68,19 @@ objc2-user-notifications = { version = "0.3", features = [
 ] }
 objc2-service-management = { version = "0.3", features = ["SMAppService"] }
 block2 = "0.6"
+# PNG encoding for OS type icons (platform/icon_pixels.rs); already in the
+# tree via gpui.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Shell type icons (platform/win.rs). `windows` is already in the tree via
+# gpui; `image` too, and only its PNG encoder is enabled here.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+image = { version = "0.25", default-features = false, features = ["png"] }

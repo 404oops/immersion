@@ -242,7 +242,11 @@ impl SnapshotService {
             remove_empty_parent_dirs(&parent_path(staged_path), &staging_root);
         };
 
-        let Some(object_hash) = self.object_store.store_file(&event.absolute_path) else {
+        // Stored from the staged copy, not from the original: the DAW may
+        // write again while this runs, and a version whose object holds
+        // different bytes than its staged copy would restore differently
+        // before and after compaction.
+        let Some(object_hash) = self.object_store.store_file(&staged_path) else {
             discard_staged_copy(&staged_path, &self.project_config.musit_path());
             self.emit(SnapshotNotice::Error(format!(
                 "Failed to store {label}object for {}",
@@ -262,6 +266,9 @@ impl SnapshotService {
         let version_id: String;
         let parent_version: String;
 
+        // Files of one save share a scan sequence, including the ones that
+        // needed extra passes to stop changing (the watcher keeps the
+        // sequence for those), so they land in a single version.
         let group_hit = event.scan_sequence != 0
             && self
                 .active_group_by_artifact
@@ -278,9 +285,20 @@ impl SnapshotService {
                 .get(&artifact)
                 .cloned()
                 .unwrap_or_default();
-            let latest_staged_version = self
+            // A log that cannot be read in full would produce a version id
+            // that is already in use, so the snapshot is abandoned with the
+            // staged copy removed; the next save tries again.
+            let Some(latest_staged_version) = self
                 .metadata_store
-                .latest_staged_version_for_artifact(&artifact);
+                .latest_staged_version_for_artifact(&artifact)
+            else {
+                discard_staged_copy(&staged_path, &self.project_config.musit_path());
+                self.emit(SnapshotNotice::Error(format!(
+                    "Could not read the version log for {}; save not recorded",
+                    event.relative_path
+                )));
+                return false;
+            };
             let branch_base_version =
                 resolve_branch_base_version(&explicit_branch_base, &latest_staged_version);
             if !explicit_branch_base.is_empty() && explicit_branch_base == latest_staged_version {
@@ -288,9 +306,18 @@ impl SnapshotService {
                 self.save_branch_state();
             }
 
-            version_id = self
+            let Some(next_version_id) = self
                 .metadata_store
-                .next_version_id_for_artifact(&artifact, &branch_base_version);
+                .next_version_id_for_artifact(&artifact, &branch_base_version)
+            else {
+                discard_staged_copy(&staged_path, &self.project_config.musit_path());
+                self.emit(SnapshotNotice::Error(format!(
+                    "Could not read the version log for {}; save not recorded",
+                    event.relative_path
+                )));
+                return false;
+            };
+            version_id = next_version_id;
             parent_version = branch_base_version;
             self.active_group_by_artifact.insert(
                 artifact.clone(),
@@ -424,10 +451,11 @@ impl SnapshotService {
         if artifact.is_empty() {
             return false;
         }
-        !self
-            .metadata_store
+        // An unreadable log is treated as "has history", so seeding cannot
+        // add a duplicate first version on top of one that already exists.
+        self.metadata_store
             .latest_staged_version_for_artifact(artifact)
-            .is_empty()
+            .is_none_or(|latest| !latest.is_empty())
     }
 
     pub fn suppress_next_events_for_path(&mut self, relative_path: &str, count: i32) {
@@ -455,10 +483,9 @@ impl SnapshotService {
     }
 
     pub fn on_file_event(&mut self, event: &FileEvent) {
-        if matches!(
-            event.event_type,
-            FileEventType::Created | FileEventType::Modified
-        ) {
+        // Deletions count too: replacing a file briefly removes it, and that
+        // gap must not be recorded as the user deleting their project.
+        {
             if let Some(&pending) = self.suppressed_events_by_path.get(&event.relative_path) {
                 if pending > 0 {
                     let remaining = pending - 1;

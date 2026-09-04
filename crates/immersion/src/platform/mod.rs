@@ -7,12 +7,28 @@ pub mod single_instance;
 #[cfg(target_os = "macos")]
 pub mod mac;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub mod icon_pixels;
+
+#[cfg(target_os = "windows")]
+pub mod win;
+
+#[cfg(target_os = "windows")]
+pub use win::file_type_icon_png;
+
 #[cfg(target_os = "macos")]
 pub use mac::{
-    adopt_main_window, hide_main_window, install_activation_observer, install_status_item,
-    is_launch_at_startup_supported, set_background_agent_mode, set_dock_icon_if_unbundled,
-    set_launch_at_startup, show_main_window, show_notification,
+    adopt_main_window, file_type_icon_png, hide_main_window, install_activation_observer,
+    install_status_item, is_launch_at_startup_supported, set_background_agent_mode,
+    set_dock_icon_if_unbundled, set_launch_at_startup, show_main_window, show_notification,
 };
+
+/// OS document icon for a file extension as PNG bytes. macOS and Windows
+/// have implementations; elsewhere the UI keeps its monogram tiles.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub fn file_type_icon_png(_extension: &str, _size_px: usize) -> Option<Vec<u8>> {
+    None
+}
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_background_agent_mode(_enabled: bool) {}

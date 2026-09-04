@@ -4,8 +4,9 @@
 
 use chrono::{Datelike, Local, NaiveDateTime};
 use gpui::{
-    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, Rgba, SharedString, Window,
-    canvas, div, linear_color_stop, linear_gradient, prelude::*, px, relative, uniform_list,
+    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, ObjectFit, Rgba, SharedString,
+    Window, canvas, div, img, linear_color_stop, linear_gradient, prelude::*, px, relative,
+    uniform_list,
 };
 
 use crate::app::{ComboId, ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView};
@@ -325,12 +326,21 @@ impl RootView {
         let tabs = self.backend.folder_tabs();
         let active = self.backend.active_folder_index();
         let renaming = self.renaming_tab;
+        let dragged_tab = self
+            .tab_drag
+            .as_ref()
+            .filter(|drag| drag.moved)
+            .map(|drag| drag.index);
+        // Stale bounds would misplace a drag that starts before the strip is
+        // drawn again; they are refilled by the canvases below.
+        self.tab_bounds.truncate(tabs.len());
 
         tabs.iter()
             .enumerate()
             .map(|(index, tab)| {
                 let selected = index as i32 == active;
                 let is_renaming = renaming == Some(index as i32);
+                let dragging = dragged_tab == Some(index as i32);
                 let label = tab.name.clone();
                 let confirm_name = tab.name.clone();
                 let status = tab.status.clone();
@@ -348,10 +358,36 @@ impl RootView {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_pointer()
+                    // Report where this tab landed, so dragging one knows
+                    // when the pointer has reached a neighbour.
+                    .child({
+                        let weak = cx.entity().downgrade();
+                        canvas(
+                            move |bounds, _window, cx| {
+                                if let Some(root) = weak.upgrade() {
+                                    root.update(cx, |root, _| {
+                                        if root.tab_bounds.len() <= index {
+                                            root.tab_bounds.resize(index + 1, bounds);
+                                        }
+                                        root.tab_bounds[index] = bounds;
+                                    });
+                                }
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full()
+                    })
                     // The active segment is raised out of the track.
                     .when(selected, |el| {
                         el.bg(lighting::lit(segment_fill, 0.05))
                             .shadow(lighting::raised(theme.is_dark_mode))
+                    })
+                    // The tab under the pointer lifts while it is dragged.
+                    .when(dragging, |el| {
+                        el.bg(lighting::lit(segment_fill, 0.1))
+                            .shadow(lighting::raised(theme.is_dark_mode))
+                            .cursor(gpui::CursorStyle::ClosedHand)
                     })
                     .when(!selected, |el| {
                         el.hover(move |style| {
@@ -361,7 +397,9 @@ impl RootView {
                             })
                         })
                     })
-                    // Click selects; double-click renames inline.
+                    // A press arms a drag: moving sideways rearranges the
+                    // tabs, releasing without moving switches to this one
+                    // (see `global_mouse_up`). Double-click renames inline.
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -369,6 +407,7 @@ impl RootView {
                                 return;
                             }
                             if event.click_count >= 2 {
+                                this.tab_drag = None;
                                 this.renaming_tab = Some(index as i32);
                                 let name = tab_name.clone();
                                 this.tab_name_input
@@ -378,8 +417,11 @@ impl RootView {
                                 window.focus(&focus, cx);
                             } else {
                                 this.renaming_tab = None;
-                                this.pending_select_latest = true;
-                                this.backend.set_active_folder_index(index as i32);
+                                this.tab_drag = Some(crate::app::TabDrag {
+                                    index: index as i32,
+                                    start_mouse: event.position,
+                                    moved: false,
+                                });
                             }
                             cx.notify();
                         }),
@@ -674,6 +716,17 @@ impl RootView {
                                     theme.row_odd
                                 };
                                 let on_accent = theme.button_label;
+                                // Warm the icon cache for the rows about to be
+                                // built: one OS lookup per new extension.
+                                let files: Vec<String> = range
+                                    .clone()
+                                    .filter_map(|index| {
+                                        this.backend.projects().get(index).map(|p| p.file.clone())
+                                    })
+                                    .collect();
+                                for file in &files {
+                                    this.file_icon(file);
+                                }
                                 range
                                     .map(|index| {
                                         let Some(project) = this.backend.projects().get(index)
@@ -718,6 +771,7 @@ impl RootView {
                                             project.kind.clone()
                                         };
                                         let monogram = kind_monogram(&kind);
+                                        let icon = this.cached_file_icon(&project.file);
                                         let mut file_line = project.file.clone();
                                         if let Some(hint) =
                                             location_hint(&project.path, &folder_root, &name)
@@ -773,12 +827,23 @@ impl RootView {
                                                             },
                                                         ),
                                                     )
-                                                    // Kind monogram: a solid square with two
-                                                    // letters, like an app icon.
-                                                    .child(
-                                                        div()
-                                                            .w(px(30.0))
-                                                            .h(px(30.0))
+                                                    // The DAW's own document icon when the OS
+                                                    // has one; otherwise a monogram tile.
+                                                    .child(match icon {
+                                                        Some(icon) => div()
+                                                            .w(px(34.0))
+                                                            .h(px(34.0))
+                                                            .flex_none()
+                                                            .child(
+                                                                img(icon)
+                                                                    .w(px(34.0))
+                                                                    .h(px(34.0))
+                                                                    .object_fit(ObjectFit::Contain),
+                                                            )
+                                                            .into_any_element(),
+                                                        None => div()
+                                                            .w(px(34.0))
+                                                            .h(px(34.0))
                                                             .flex_none()
                                                             .rounded(px(8.0))
                                                             .bg(lighting::lit(tile_fill, 0.14))
@@ -792,8 +857,9 @@ impl RootView {
                                                                     .font_weight(FontWeight::SEMIBOLD)
                                                                     .text_color(on_accent)
                                                                     .child(SharedString::from(monogram)),
-                                                            ),
-                                                    )
+                                                            )
+                                                            .into_any_element(),
+                                                    })
                                                     // Name with the last-opened date, then the
                                                     // file (and location, when it adds anything).
                                                     .child(

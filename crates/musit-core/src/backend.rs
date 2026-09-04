@@ -134,14 +134,14 @@ impl FolderWorkspace {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VersionFileEntry {
     pub path: String,
     pub staged_path: String,
     pub object_hash: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct VersionEntry {
     pub id: String,
     pub label: String,
@@ -373,7 +373,7 @@ fn files_are_identical(left_path: &str, right_path: &str) -> bool {
     }
 }
 
-fn sha256_file_hex(file_path: &str) -> String {
+pub(crate) fn sha256_file_hex(file_path: &str) -> String {
     let Ok(mut file) = fs::File::open(file_path) else {
         return String::new();
     };
@@ -390,10 +390,145 @@ fn sha256_file_hex(file_path: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Marks the version whose files match what is on disk, using `hash_of` to
+/// read content hashes so each caller can bring its own cache.
+pub(crate) fn mark_current_version_with(
+    project: &DiscoveredProject,
+    versions: &mut [VersionEntry],
+    mut hash_of: impl FnMut(&str) -> String,
+) {
+    let mut current_version_id = String::new();
+    for version in versions.iter() {
+        let mut all_match = !version.files.is_empty();
+        for file_entry in &version.files {
+            let disk_path = join_path(&project.root_path, &file_entry.path);
+            if !Path::new(&disk_path).exists() {
+                all_match = false;
+                break;
+            }
+
+            let disk_hash = hash_of(&disk_path);
+
+            let mut matches = false;
+            if !disk_hash.is_empty() && !file_entry.object_hash.is_empty() {
+                matches = file_entry.object_hash.eq_ignore_ascii_case(&disk_hash);
+            }
+
+            if !matches {
+                let staged = resolve_staged_path(&project.root_path, &file_entry.staged_path);
+                if !staged.is_empty() && Path::new(&staged).exists() {
+                    matches = files_are_identical(&disk_path, &staged);
+                }
+            }
+
+            if !matches {
+                all_match = false;
+                break;
+            }
+        }
+
+        if all_match
+            && (current_version_id.is_empty()
+                || version_id::less_than(&current_version_id, &version.id))
+        {
+            current_version_id = version.id.clone();
+        }
+    }
+
+    // If the on-disk file matches no snapshot, no version is marked current.
+    // Claiming the latest one is current would mislead the user into
+    // believing their working state is already versioned.
+    if !current_version_id.is_empty() {
+        for version in versions.iter_mut() {
+            version.is_current = version.id == current_version_id;
+        }
+    }
+}
+
+/// Reads one project's version entries from its log. Streams line by
+/// line: version logs can reach megabytes, and this runs wherever a
+/// version list is needed, including the versioning thread.
+pub(crate) fn parse_versions_from_log(log_path: &str, primary_file: &str) -> Vec<VersionEntry> {
+    // Stream the log line by line instead of loading it whole: version
+    // logs can reach megabytes and this runs on the UI thread.
+    let Ok(file) = fs::File::open(log_path) else {
+        return Vec::new();
+    };
+    let mut reader = std::io::BufReader::new(file);
+
+    // One entry per version. Bundle saves write several log lines (one
+    // per internal file) sharing a version id; they are folded into one
+    // entry whose "files" list holds every file of that save.
+    let mut versions: Vec<VersionEntry> = Vec::new();
+    let mut version_index_by_id: HashMap<String, usize> = HashMap::new();
+    // Lines written before version ids existed are numbered by their
+    // position among the artifact's saves, exactly as the writer numbers
+    // them when handing out the next id. Counting only the version-less
+    // lines instead would give one of them an id an explicit version
+    // already uses, and the two saves would be shown, and restored, as one.
+    let mut running_ordinal = 0i64;
+    let mut raw: Vec<u8> = Vec::new();
+
+    loop {
+        raw.clear();
+        match std::io::BufRead::read_until(&mut reader, b'\n', &mut raw) {
+            Ok(0) => break,
+            Ok(_) => {}
+            // A torn read must not get cached as the log's parsed state.
+            Err(_) => return Vec::new(),
+        }
+        let Some(obj) = parse_log_line(&raw) else {
+            continue;
+        };
+
+        let staged_path = json_str(&obj, "staged");
+        if !artifact_equals(&artifact_of_log_line(&obj), primary_file) || staged_path.is_empty() {
+            continue;
+        }
+
+        running_ordinal += 1;
+        let mut version_id = json_str(&obj, "version").to_string();
+        if version_id.is_empty() {
+            version_id = running_ordinal.to_string();
+        }
+
+        let file_entry = VersionFileEntry {
+            path: json_str(&obj, "path").to_string(),
+            staged_path: staged_path.to_string(),
+            object_hash: json_str(&obj, "object").to_string(),
+        };
+
+        if let Some(&index) = version_index_by_id.get(&version_id) {
+            let version = &mut versions[index];
+            version.files.push(file_entry);
+            if version.note.is_empty() {
+                version.note = json_str(&obj, "note").to_string();
+            }
+            continue;
+        }
+
+        let version = VersionEntry {
+            id: version_id.clone(),
+            label: version_label_from_id(&version_id),
+            full_label: format!("v{version_id}"),
+            timestamp: humanize_timestamp(json_str(&obj, "ts")),
+            note: json_str(&obj, "note").to_string(),
+            parent: json_str(&obj, "parent").to_string(),
+            is_current: false,
+            is_compressed: false,
+            files: vec![file_entry],
+        };
+        version_index_by_id.insert(version_id, versions.len());
+        versions.push(version);
+    }
+
+    versions
+}
+
 /// A version is compressed once compaction has removed its staged copies:
 /// no file of the version still has one on disk, so restoring it
 /// decompresses from the object store instead of copying a staged file.
-fn mark_compressed_versions(project: &DiscoveredProject, versions: &mut [VersionEntry]) {
+pub(crate) fn mark_compressed_versions(project: &DiscoveredProject, versions: &mut [VersionEntry]) {
     for version in versions.iter_mut() {
         version.is_compressed = !version.files.is_empty()
             && version.files.iter().all(|file_entry| {
@@ -401,6 +536,22 @@ fn mark_compressed_versions(project: &DiscoveredProject, versions: &mut [Version
                 staged.is_empty() || !Path::new(&staged).exists()
             });
     }
+}
+
+/// Identity of a project. Several loose project files can live in one
+/// folder (the "Files" layout), so the folder alone does not identify one:
+/// notes, dates, the registry and the selection all key on this instead, or
+/// siblings would share and overwrite each other's data.
+pub(crate) fn project_key(root_path: &str, primary_file: &str) -> String {
+    format!(
+        "{}\u{0}{}",
+        path_key(root_path),
+        primary_file.to_lowercase()
+    )
+}
+
+fn project_key_of(project: &DiscoveredProject) -> String {
+    project_key(&project.root_path, &project.primary_project_file)
 }
 
 pub(crate) fn resolve_staged_path(project_root: &str, staged_path: &str) -> String {
@@ -413,6 +564,10 @@ pub(crate) fn resolve_staged_path(project_root: &str, staged_path: &str) -> Stri
     join_path(project_root, staged_path)
 }
 
+/// Replaces a version log with `lines`. Callers hold
+/// [`crate::metadata_store::log_write_guard`] across their read and this
+/// write, so a snapshot appended by the versioning thread in between is not
+/// lost when the replacement file lands.
 fn write_lines_atomically(file_path: &str, lines: &[Vec<u8>]) -> bool {
     let mut joined: Vec<u8> = Vec::new();
     for line in lines {
@@ -546,6 +701,9 @@ pub(crate) fn migrate_misrouted_history(source_root: &str, destination_root: &st
     }
 
     let source_log_path = join_path(source_root, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
+    // Both logs are read and rewritten here, so nothing may append to either
+    // in the meantime.
+    let _log_guard = crate::metadata_store::log_write_guard();
     let Some(source_lines) = read_log_raw_lines(&source_log_path) else {
         return 0;
     };
@@ -726,6 +884,9 @@ pub struct AppBackend {
     scan_queue: Vec<String>,
     pending_projects_folder_setup: String,
     project_root: String,
+    /// Identity of the selected project (see [`project_key`]). The folder
+    /// alone is ambiguous when several loose project files share one.
+    selected_project_key: String,
     projects: Vec<ProjectListItem>,
     activity: Vec<String>,
     activity_all: Vec<String>,
@@ -745,7 +906,9 @@ pub struct AppBackend {
 
     // Indexes into the ACTIVE workspace's discovered_projects.
     visible_project_indexes: Vec<usize>,
-    last_opened_at_by_project_root: HashMap<String, SystemTime>,
+    /// Keyed by [`project_key`], not by folder.
+    last_opened_at_by_project: HashMap<String, SystemTime>,
+    /// Both keyed by [`project_key`].
     project_notes: HashMap<String, String>,
     project_primary_files: HashMap<String, String>,
 
@@ -774,6 +937,17 @@ pub struct AppBackend {
     /// Projects found by the watcher whose versioning is still coming up on
     /// the worker, by `path_key` of their root: (folder root, project).
     pending_adoptions: HashMap<String, (String, DiscoveredProject)>,
+    /// Folder tab that owns each initialized project, by `path_key` of the
+    /// project root. Teardown follows this rather than path containment, so
+    /// a folder nested inside another does not drop the other's projects.
+    folder_by_root_key: HashMap<String, String>,
+    /// Version lists the versioning thread has built, by [`project_key`].
+    /// The graph is drawn from these, so opening a project or receiving a
+    /// save never makes the window wait on the filesystem.
+    versions_by_project: HashMap<String, Vec<VersionEntry>>,
+    /// Projects whose list is being rebuilt, so a burst of saves queues one
+    /// rebuild rather than one per event.
+    version_loads_in_flight: HashSet<String>,
     // (mtime, len)-validated caches so version-graph refreshes don't re-hash
     // project files or re-parse log.jsonl on the UI thread unless they
     // actually changed on disk. Both are bounded (see CachedByStamp): the
@@ -844,7 +1018,8 @@ impl AppBackend {
             notifications_enabled: true,
             color_scheme_mode: ColorSchemeMode::System,
             visible_project_indexes: Vec::new(),
-            last_opened_at_by_project_root: HashMap::new(),
+            selected_project_key: String::new(),
+            last_opened_at_by_project: HashMap::new(),
             project_notes: HashMap::new(),
             project_primary_files: HashMap::new(),
             project_registry,
@@ -863,6 +1038,9 @@ impl AppBackend {
             versioning,
             monitoring_init_in_flight: None,
             pending_adoptions: HashMap::new(),
+            folder_by_root_key: HashMap::new(),
+            versions_by_project: HashMap::new(),
+            version_loads_in_flight: HashSet::new(),
             canonical_root_by_key: HashMap::new(),
             platform,
             msg_tx,
@@ -1081,6 +1259,26 @@ impl AppBackend {
         self.active_workspace
     }
 
+    /// Moves a folder tab to another position in the strip. The active tab
+    /// stays active wherever it lands, and the new order is remembered.
+    pub fn move_folder_tab(&mut self, from: i32, to: i32) {
+        let count = self.workspaces.len() as i32;
+        if from < 0 || to < 0 || from >= count || to >= count || from == to {
+            return;
+        }
+        let active_root = self.active().map(|workspace| workspace.root.clone());
+        let workspace = self.workspaces.remove(from as usize);
+        self.workspaces.insert(to as usize, workspace);
+        if let Some(root) = active_root
+            && let Some(index) = self.workspace_index_by_root(&root)
+        {
+            self.active_workspace = index as i32;
+        }
+        self.persist_projects_folders();
+        self.push_event(BackendEvent::FoldersChanged);
+        self.push_event(BackendEvent::ActiveFolderChanged);
+    }
+
     pub fn set_active_folder_index(&mut self, index: i32) {
         if index < 0 || index as usize >= self.workspaces.len() || index == self.active_workspace {
             return;
@@ -1280,7 +1478,7 @@ impl AppBackend {
                 SnapshotNotice::Created(message) => {
                     self.append_activity(&format!("[{}] {}", now_human(), message));
                     if path_equals(&project_root, &self.project_root) {
-                        self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+                        self.request_selected_versions();
                     }
                 }
                 SnapshotNotice::SaveRecorded {
@@ -1344,6 +1542,8 @@ impl AppBackend {
                 if ok {
                     self.canonical_root_by_key
                         .insert(path_key(&project_root), project_root.clone());
+                    self.folder_by_root_key
+                        .insert(path_key(&project_root), folder_root.clone());
                     if seeded {
                         self.append_debug_activity(&format!(
                             "[{}] seeded initial version v1 for {}",
@@ -1352,7 +1552,7 @@ impl AppBackend {
                         ));
                     }
                     if path_equals(&project_root, &self.project_root) {
-                        self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+                        self.request_selected_versions();
                     }
                 } else {
                     self.append_debug_activity(&format!(
@@ -1363,10 +1563,22 @@ impl AppBackend {
                 }
                 if let Some((adoption_folder, adopted)) =
                     self.pending_adoptions.remove(&path_key(&project_root))
-                    && ok
-                    && let Some(index) = self.workspace_index_by_root(&adoption_folder)
                 {
-                    self.publish_adopted_project(index, adopted);
+                    match self.workspace_index_by_root(&adoption_folder) {
+                        Some(index) if ok => {
+                            self.publish_adopted_project(index, adopted);
+                        }
+                        _ => {
+                            // Not a debug detail: the project the user just
+                            // created will not appear in the list, and they
+                            // need to know why.
+                            self.append_activity(&format!(
+                                "[{}] could not start versioning for {}; it is not being watched",
+                                now_human(),
+                                adopted.root_path
+                            ));
+                        }
+                    }
                 }
 
                 // A folder is watchable as soon as *its* projects are done —
@@ -1387,6 +1599,22 @@ impl AppBackend {
                     self.advance_monitoring_init();
                 }
             }
+            VersioningReply::Versions {
+                project_root,
+                primary_file,
+                versions,
+            } => {
+                let key = project_key(&project_root, &primary_file);
+                self.version_loads_in_flight.remove(&key);
+                let changed = self
+                    .versions_by_project
+                    .get(&key)
+                    .is_none_or(|existing| existing != &versions);
+                self.versions_by_project.insert(key.clone(), versions);
+                if changed && key == self.selected_project_key {
+                    self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+                }
+            }
             VersioningReply::RestoreDone {
                 project_root,
                 project_name,
@@ -1403,12 +1631,20 @@ impl AppBackend {
                         project_name,
                         version_id
                     ));
-                    if path_equals(&project_root, &self.project_root) {
-                        // Hand the restored file to the DAW, as before.
-                        let selected = self.selected_project_index;
-                        self.open_project(selected);
+                    // Hand the restored file to the DAW. The project is
+                    // found by the root the reply carries, so a selection
+                    // that moved while the job ran does not send the wrong
+                    // one (or none at all).
+                    if let Some(index) =
+                        self.visible_project_indexes.iter().position(|&discovered| {
+                            self.active_projects()
+                                .get(discovered)
+                                .is_some_and(|p| path_equals(&p.root_path, &project_root))
+                        })
+                    {
+                        self.open_project(index as i32);
                     }
-                    self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+                    self.request_selected_versions();
                 }
                 Err(message) => {
                     self.append_activity(&format!("[{}] {}", now_human(), message));
@@ -1670,14 +1906,19 @@ impl AppBackend {
         self.selected_project_index = visible_index;
         if let Some(project) = self.visible_project(visible_index).cloned() {
             self.project_root = project.root_path.clone();
+            self.selected_project_key = project_key_of(&project);
+            // The list for this project may be stale or missing; the graph
+            // draws what is cached and updates when the rebuild lands.
+            self.request_versions(&project);
             self.selected_project_note = self
                 .project_notes
-                .get(&project.root_path)
+                .get(&self.selected_project_key)
                 .cloned()
                 .unwrap_or_default();
             self.selected_project_primary_file = project.primary_project_file.clone();
         } else {
             self.project_root.clear();
+            self.selected_project_key.clear();
             self.selected_project_note.clear();
             self.selected_project_primary_file.clear();
         }
@@ -1719,23 +1960,37 @@ impl AppBackend {
             }
         }
 
-        let (root_path, project_name);
+        let (root_path, project_name, previous_primary);
         {
             let Some(workspace) = self.active_mut() else {
                 return;
             };
             let project = &mut workspace.discovered_projects[discovered_index];
+            previous_primary = project.primary_project_file.clone();
             project.primary_project_file = trimmed.clone();
             root_path = project.root_path.clone();
             project_name = project.name.clone();
         }
+        // The picker changes which file the project is, so its identity
+        // moves with it and its note and open time follow.
+        let previous_key = project_key(&root_path, &previous_primary);
+        let new_key = project_key(&root_path, &trimmed);
+        if let Some(note) = self.project_notes.remove(&previous_key) {
+            self.project_notes.insert(new_key.clone(), note);
+        }
+        if let Some(opened) = self.last_opened_at_by_project.remove(&previous_key) {
+            self.last_opened_at_by_project
+                .insert(new_key.clone(), opened);
+        }
+        self.project_primary_files.remove(&previous_key);
         self.project_primary_files
-            .insert(root_path.clone(), trimmed.clone());
+            .insert(new_key.clone(), trimmed.clone());
+        self.selected_project_key = new_key;
         self.selected_project_primary_file = trimmed.clone();
 
         if self
             .project_registry
-            .save_project_primary_file(&root_path, &trimmed)
+            .save_project_primary_file(&root_path, &previous_primary, &trimmed)
         {
             if let Some(project) = self.active_projects().get(discovered_index).cloned() {
                 self.project_registry.save_project(&project);
@@ -1744,7 +1999,7 @@ impl AppBackend {
 
         self.rebuild_visible_projects();
         self.push_event(BackendEvent::SelectedProjectPrimaryFileChanged);
-        self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+        self.request_selected_versions();
         self.log_config_change(&format!(
             "primary project file for {project_name} set to {trimmed}"
         ));
@@ -1779,22 +2034,18 @@ impl AppBackend {
             return;
         };
         let root_path = project.root_path.clone();
+        let key = project_key_of(project);
+        let primary_file = project.primary_project_file.clone();
         let trimmed = value.trim().to_string();
-        if self
-            .project_notes
-            .get(&root_path)
-            .cloned()
-            .unwrap_or_default()
-            == trimmed
-        {
+        if self.project_notes.get(&key).cloned().unwrap_or_default() == trimmed {
             return;
         }
 
         if self
             .project_registry
-            .save_project_note(&root_path, &trimmed)
+            .save_project_note(&root_path, &primary_file, &trimmed)
         {
-            self.project_notes.insert(root_path, trimmed.clone());
+            self.project_notes.insert(key, trimmed.clone());
             self.selected_project_note = trimmed;
             self.push_event(BackendEvent::SelectedProjectNoteChanged);
         }
@@ -1857,7 +2108,7 @@ impl AppBackend {
         let records = self.project_registry.load_project_records();
         for project in projects.iter_mut() {
             let Some(saved_primary) = records
-                .get(&path_key(&project.root_path))
+                .get(&project_key_of(project))
                 .map(|record| record.primary_project_file.as_str())
                 .filter(|saved| !saved.is_empty())
             else {
@@ -2297,12 +2548,12 @@ impl AppBackend {
         let records = self.project_registry.load_project_records();
         for project in &self.workspaces[workspace_index].discovered_projects {
             let note = records
-                .get(&path_key(&project.root_path))
+                .get(&project_key_of(project))
                 .map(|record| record.note.clone())
                 .unwrap_or_default();
-            self.project_notes.insert(project.root_path.clone(), note);
+            self.project_notes.insert(project_key_of(project), note);
             self.project_primary_files.insert(
-                project.root_path.clone(),
+                project_key_of(project),
                 project.primary_project_file.clone(),
             );
         }
@@ -2377,11 +2628,11 @@ impl AppBackend {
                 return;
             }
 
-            self.last_opened_at_by_project_root
-                .insert(path_key(&project.root_path), SystemTime::now());
-            if self.sort_mode == SortMode::LastOpened {
-                self.rebuild_visible_projects();
-            }
+            self.last_opened_at_by_project
+                .insert(project_key_of(&project), SystemTime::now());
+            // The list carries preformatted dates, so it has to be rebuilt
+            // whatever the sort mode, or the row keeps showing the old one.
+            self.rebuild_visible_projects();
 
             self.append_activity(&format!(
                 "[{}] file association unavailable; opened folder {}",
@@ -2391,13 +2642,10 @@ impl AppBackend {
             return;
         }
 
-        self.last_opened_at_by_project_root
-            .insert(path_key(&project.root_path), SystemTime::now());
+        self.last_opened_at_by_project
+            .insert(project_key_of(&project), SystemTime::now());
         self.append_activity(&format!("[{}] opened {}", now_human(), project_file_path));
-
-        if self.sort_mode == SortMode::LastOpened {
-            self.rebuild_visible_projects();
-        }
+        self.rebuild_visible_projects();
     }
 
     pub fn manage_project_versions(&mut self, visible_index: i32) {
@@ -2472,74 +2720,7 @@ impl AppBackend {
             return entry.value.clone();
         }
 
-        // Stream the log line by line instead of loading it whole: version
-        // logs can reach megabytes and this runs on the UI thread.
-        let Ok(file) = fs::File::open(log_path) else {
-            return Vec::new();
-        };
-        let mut reader = std::io::BufReader::new(file);
-
-        // One entry per version. Bundle saves write several log lines (one
-        // per internal file) sharing a version id; they are folded into one
-        // entry whose "files" list holds every file of that save.
-        let mut versions: Vec<VersionEntry> = Vec::new();
-        let mut version_index_by_id: HashMap<String, usize> = HashMap::new();
-        let mut legacy_count = 0i64;
-        let mut raw: Vec<u8> = Vec::new();
-
-        loop {
-            raw.clear();
-            match std::io::BufRead::read_until(&mut reader, b'\n', &mut raw) {
-                Ok(0) => break,
-                Ok(_) => {}
-                // A torn read must not get cached as the log's parsed state.
-                Err(_) => return Vec::new(),
-            }
-            let Some(obj) = parse_log_line(&raw) else {
-                continue;
-            };
-
-            let staged_path = json_str(&obj, "staged");
-            if !artifact_equals(&artifact_of_log_line(&obj), primary_file) || staged_path.is_empty()
-            {
-                continue;
-            }
-
-            let mut version_id = json_str(&obj, "version").to_string();
-            if version_id.is_empty() {
-                legacy_count += 1;
-                version_id = legacy_count.to_string();
-            }
-
-            let file_entry = VersionFileEntry {
-                path: json_str(&obj, "path").to_string(),
-                staged_path: staged_path.to_string(),
-                object_hash: json_str(&obj, "object").to_string(),
-            };
-
-            if let Some(&index) = version_index_by_id.get(&version_id) {
-                let version = &mut versions[index];
-                version.files.push(file_entry);
-                if version.note.is_empty() {
-                    version.note = json_str(&obj, "note").to_string();
-                }
-                continue;
-            }
-
-            let version = VersionEntry {
-                id: version_id.clone(),
-                label: version_label_from_id(&version_id),
-                full_label: format!("v{version_id}"),
-                timestamp: humanize_timestamp(json_str(&obj, "ts")),
-                note: json_str(&obj, "note").to_string(),
-                parent: json_str(&obj, "parent").to_string(),
-                is_current: false,
-                is_compressed: false,
-                files: vec![file_entry],
-            };
-            version_index_by_id.insert(version_id, versions.len());
-            versions.push(version);
-        }
+        let versions = parse_versions_from_log(log_path, primary_file);
 
         let mut cache = self.parsed_log_cache.borrow_mut();
         // As above: never evict for a replacement of an existing key.
@@ -2561,58 +2742,37 @@ impl AppBackend {
     /// on disk right now (by object hash, or by content against the staged
     /// copy). Disk hashes come from the (mtime, len)-validated cache.
     fn mark_current_version(&self, project: &DiscoveredProject, versions: &mut [VersionEntry]) {
-        let mut current_version_id = String::new();
-        for version in versions.iter() {
-            let mut all_match = !version.files.is_empty();
-            for file_entry in &version.files {
-                let disk_path = join_path(&project.root_path, &file_entry.path);
-                if !Path::new(&disk_path).exists() {
-                    all_match = false;
-                    break;
-                }
-
-                let disk_hash = self.cached_file_sha256(&disk_path);
-
-                let mut matches = false;
-                if !disk_hash.is_empty() && !file_entry.object_hash.is_empty() {
-                    matches = file_entry.object_hash.eq_ignore_ascii_case(&disk_hash);
-                }
-
-                if !matches {
-                    let staged = resolve_staged_path(&project.root_path, &file_entry.staged_path);
-                    if !staged.is_empty() && Path::new(&staged).exists() {
-                        matches = files_are_identical(&disk_path, &staged);
-                    }
-                }
-
-                if !matches {
-                    all_match = false;
-                    break;
-                }
-            }
-
-            if all_match
-                && (current_version_id.is_empty()
-                    || version_id::less_than(&current_version_id, &version.id))
-            {
-                current_version_id = version.id.clone();
-            }
-        }
-
-        // If the on-disk file matches no snapshot, no version is marked
-        // current. Claiming the latest one is current would mislead the user
-        // into believing their working state is already versioned.
-        if !current_version_id.is_empty() {
-            for version in versions.iter_mut() {
-                version.is_current = version.id == current_version_id;
-            }
-        }
+        mark_current_version_with(project, versions, |path| self.cached_file_sha256(path));
     }
 
     /// The selected project's versions as a tree in depth-first order:
     /// parents before their children, siblings in version order, top-level
     /// versions as roots. A node whose parent no longer exists (deleted by an
     /// older release) becomes a root rather than vanishing with its subtree.
+    /// Queues a rebuild of a project's version list on the versioning
+    /// thread. Cheap to call repeatedly: one rebuild is in flight per
+    /// project at a time.
+    pub(crate) fn request_versions(&mut self, project: &DiscoveredProject) {
+        let key = project_key_of(project);
+        if !self.version_loads_in_flight.insert(key) {
+            return;
+        }
+        self.versioning.send(VersioningJob::LoadVersions {
+            project: project.clone(),
+        });
+    }
+
+    /// Queues a rebuild for whichever project is selected.
+    fn request_selected_versions(&mut self) {
+        if let Some(project) = self.visible_project(self.selected_project_index).cloned() {
+            self.request_versions(&project);
+        }
+    }
+
+    /// The selected project's versions as the graph should draw them. Reads
+    /// the list the versioning thread built; empty until the first one
+    /// arrives, which is a blank graph for a moment rather than a window
+    /// that stops responding.
     pub fn selected_project_version_graph(&self) -> Vec<VersionGraphNode> {
         if self.selected_project_index < 0
             || self.selected_project_index as usize >= self.visible_project_indexes.len()
@@ -2620,7 +2780,11 @@ impl AppBackend {
             return Vec::new();
         }
 
-        let versions = self.get_project_versions(self.selected_project_index);
+        let versions = self
+            .versions_by_project
+            .get(&self.selected_project_key)
+            .cloned()
+            .unwrap_or_default();
         if versions.is_empty() {
             return Vec::new();
         }
@@ -2727,21 +2891,53 @@ impl AppBackend {
                 now_human(),
                 project.name
             ));
+            self.status_message =
+                format!("Still preparing {}; try again in a moment.", project.name);
+            self.push_event(BackendEvent::StatusMessageChanged);
             return false;
         }
 
         let versions = self.get_project_versions(self.selected_project_index);
-        let Some(version) = versions.iter().find(|v| v.id == version_id_str).cloned() else {
+        let Some(mut version) = versions.iter().find(|v| v.id == version_id_str).cloned() else {
             return false;
         };
-        // If the on-disk state matches no snapshot (e.g. the watcher has not
-        // seen the latest save yet), the worker snapshots it first so the
-        // restore cannot silently destroy the user's most recent work.
-        let needs_pre_snapshot = !versions.iter().any(|v| v.is_current);
+        // A version records only the files that changed in that save, so
+        // restoring it alone would leave a multi-file project (a Logic or
+        // GarageBand bundle) mixing old and new parts. Rebuild the artifact's
+        // full state as of that version: the newest entry for each file up to
+        // and including it.
+        let mut state_at_version: Vec<VersionFileEntry> = Vec::new();
+        for candidate in &versions {
+            for file in &candidate.files {
+                match state_at_version
+                    .iter_mut()
+                    .find(|existing| existing.path == file.path)
+                {
+                    Some(existing) => *existing = file.clone(),
+                    None => state_at_version.push(file.clone()),
+                }
+            }
+            if candidate.id == version.id {
+                break;
+            }
+        }
+        if !state_at_version.is_empty() {
+            version.files = state_at_version;
+        }
+        // Every content hash this artifact has ever had. The worker compares
+        // the file on disk against these at the moment it overwrites, so a
+        // save made while this job waited in the queue is still captured
+        // first.
+        let known_object_hashes: Vec<String> = versions
+            .iter()
+            .flat_map(|version| version.files.iter())
+            .filter(|file| !file.object_hash.is_empty())
+            .map(|file| file.object_hash.clone())
+            .collect();
         self.versioning.send(VersioningJob::Restore {
             project,
             version,
-            needs_pre_snapshot,
+            known_object_hashes,
         });
         true
     }
@@ -2755,6 +2951,9 @@ impl AppBackend {
         };
         let log_path = join_path(&project.root_path, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
 
+        // As in `delete_version_by_id`: one guard over the read and the
+        // rewrite.
+        let _log_guard = crate::metadata_store::log_write_guard();
         let Some(mut lines) = read_log_raw_lines(&log_path) else {
             return false;
         };
@@ -2814,7 +3013,7 @@ impl AppBackend {
             return false;
         }
 
-        self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+        self.request_selected_versions();
         true
     }
 
@@ -2827,6 +3026,9 @@ impl AppBackend {
         };
         let log_path = join_path(&project.root_path, strings::MUSIT_VERSION_LOG_RELATIVE_PATH);
 
+        // Held across the read and the rewrite: the versioning thread must
+        // not append a snapshot into the copy this is about to replace.
+        let _log_guard = crate::metadata_store::log_write_guard();
         let Some(original_lines) = read_log_raw_lines(&log_path) else {
             return false;
         };
@@ -2955,7 +3157,7 @@ impl AppBackend {
             version_id_str,
             project.name
         ));
-        self.push_event(BackendEvent::SelectedProjectVersionGraphChanged);
+        self.request_selected_versions();
         true
     }
 
@@ -2992,7 +3194,7 @@ impl AppBackend {
         self.selected_project_primary_file.clear();
         self.project_notes.clear();
         self.project_primary_files.clear();
-        self.last_opened_at_by_project_root.clear();
+        self.last_opened_at_by_project.clear();
         self.file_hash_cache.borrow_mut().clear();
         self.parsed_log_cache.borrow_mut().clear();
 
@@ -3226,10 +3428,7 @@ impl AppBackend {
     /// saw it (kept fresh by the watcher). Never touches the filesystem,
     /// which matters when the folder is on a network share.
     fn effective_last_opened(&self, project: &DiscoveredProject) -> Option<SystemTime> {
-        if let Some(explicit) = self
-            .last_opened_at_by_project_root
-            .get(&path_key(&project.root_path))
-        {
+        if let Some(explicit) = self.last_opened_at_by_project.get(&project_key_of(project)) {
             return Some(*explicit);
         }
         project.primary_file_modified
@@ -3318,10 +3517,10 @@ impl AppBackend {
         // The selected index points into the visible list, so remap it
         // whenever that list changes; otherwise operations act on the wrong
         // project.
-        if !self.project_root.is_empty() {
+        if !self.selected_project_key.is_empty() {
             let mut new_index = -1i32;
             for (i, &discovered_index) in self.visible_project_indexes.iter().enumerate() {
-                if path_equals(&projects[discovered_index].root_path, &self.project_root) {
+                if project_key_of(&projects[discovered_index]) == self.selected_project_key {
                     new_index = i as i32;
                     break;
                 }
@@ -3413,9 +3612,20 @@ impl AppBackend {
         self.monitoring_init_queue = mine.into_iter().chain(others).collect();
     }
 
+    /// Forgets the projects this folder brought in. Ownership is tracked
+    /// explicitly, so tabs that happen to nest do not tear down each other's
+    /// versioning.
     fn drop_services_under(&mut self, folder_root: &str) {
-        self.canonical_root_by_key
-            .retain(|_, root| !path_is_under_root(root, folder_root));
+        let doomed: Vec<String> = self
+            .folder_by_root_key
+            .iter()
+            .filter(|(_, owner)| path_equals(owner, folder_root))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in doomed {
+            self.canonical_root_by_key.remove(&key);
+            self.folder_by_root_key.remove(&key);
+        }
         self.versioning.send(VersioningJob::DropUnder {
             folder_root: folder_root.to_string(),
         });
@@ -3439,13 +3649,27 @@ impl AppBackend {
             format!("Initializing versioning ({done}/{total})..."),
         );
         self.monitoring_init_in_flight = Some((folder_root.clone(), project.root_path.clone()));
-        self.send_init_job(&folder_root, &project);
+        if !self.send_init_job(&folder_root, &project) {
+            // Nothing will reply, so the queue would sit here forever.
+            self.monitoring_init_in_flight = None;
+            self.monitoring_init_queue.clear();
+            self.monitoring_init_total = 0;
+            self.monitoring_init_done = 0;
+            self.set_status_for_folder(
+                &folder_root,
+                "Versioning stopped unexpectedly; restart Immersion.".to_string(),
+            );
+            self.append_activity(&format!(
+                "[{}] versioning worker is not running; no further versions will be recorded",
+                now_human()
+            ));
+        }
     }
 
     /// Queues one project's versioning set-up on the worker: history
     /// migration from enclosing projects, store init and seeding, all of
     /// which touch the (possibly remote) project folder.
-    fn send_init_job(&mut self, folder_root: &str, project: &DiscoveredProject) {
+    fn send_init_job(&mut self, folder_root: &str, project: &DiscoveredProject) -> bool {
         let mut ancestor_roots: Vec<String> = vec![folder_root.to_string()];
         if let Some(index) = self.workspace_index_by_root(folder_root) {
             for candidate in &self.workspaces[index].discovered_projects {
@@ -3468,7 +3692,7 @@ impl AppBackend {
             project: project.clone(),
             ancestor_roots,
             retention: self.snapshot_retention,
-        });
+        })
     }
 
     /// Starts a watcher for every workspace that has monitored projects but
@@ -3598,6 +3822,7 @@ impl AppBackend {
         self.monitoring_init_in_flight = None;
         self.pending_adoptions.clear();
         self.canonical_root_by_key.clear();
+        self.folder_by_root_key.clear();
         self.versioning.send(VersioningJob::DropAll);
         self.append_activity(&format!(
             "[{}] monitoring stopped",
@@ -3673,11 +3898,12 @@ impl AppBackend {
             .push(adopted.clone());
         self.project_registry.save_project(&adopted);
         self.project_notes.insert(
-            adopted.root_path.clone(),
-            self.project_registry.load_project_note(&adopted.root_path),
+            project_key_of(&adopted),
+            self.project_registry
+                .load_project_note(&adopted.root_path, &adopted.primary_project_file),
         );
         self.project_primary_files.insert(
-            adopted.root_path.clone(),
+            project_key_of(&adopted),
             adopted.primary_project_file.clone(),
         );
         if workspace_index as i32 == self.active_workspace {

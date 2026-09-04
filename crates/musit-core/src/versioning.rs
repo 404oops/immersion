@@ -13,10 +13,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use crate::backend::{VersionEntry, migrate_misrouted_history, resolve_staged_path};
+use crate::backend::{
+    VersionEntry, mark_compressed_versions, mark_current_version_with, migrate_misrouted_history,
+    parse_versions_from_log, resolve_staged_path, sha256_file_hex,
+};
 use crate::file_event::FileEvent;
 use crate::object_store::ObjectStore;
-use crate::path_cleanup::{join_path, parent_path, path_is_under_root, path_key};
+use crate::path_cleanup::{join_path, parent_path, path_equals, path_key};
 use crate::project_discovery::DiscoveredProject;
 use crate::snapshot_service::{SnapshotNotice, SnapshotService};
 
@@ -39,18 +42,30 @@ pub enum Job {
         root_key: String,
         event: FileEvent,
     },
-    /// Restore `version` of `project`, snapshotting the on-disk state first
-    /// when no version matches it.
+    /// Restore `version` of `project`. `known_object_hashes` holds every
+    /// object hash the artifact's history contains, so the worker can decide
+    /// for itself, at the moment it overwrites, whether what is on disk has
+    /// ever been captured.
     Restore {
         project: DiscoveredProject,
         version: VersionEntry,
-        needs_pre_snapshot: bool,
+        known_object_hashes: Vec<String>,
+    },
+    /// Build a project's version list: parsing its log, hashing the file on
+    /// disk to find which version is current, and checking which versions
+    /// still have staged copies. That is all filesystem work, and on a share
+    /// or an external disk it is far too slow to do while the window draws.
+    LoadVersions {
+        project: DiscoveredProject,
     },
     SetRetention {
         retention: i32,
         compact_existing: bool,
     },
-    /// Forget every project under `folder_root`.
+    /// Forget every project this folder brought in. Ownership is recorded
+    /// when the project is initialized rather than derived from the paths,
+    /// so a folder tab nested inside another does not silently drop the
+    /// other's services.
     DropUnder {
         folder_root: String,
     },
@@ -67,6 +82,12 @@ pub enum Reply {
         seeded: bool,
         migrated: usize,
     },
+    /// A project's version list, ready for the graph.
+    Versions {
+        project_root: String,
+        primary_file: String,
+        versions: Vec<VersionEntry>,
+    },
     RestoreDone {
         project_root: String,
         project_name: String,
@@ -82,28 +103,49 @@ pub type NoticeSink = Arc<dyn Fn(String, SnapshotNotice) + Send + Sync>;
 /// Handle to the worker thread. Dropping it (with the backend) closes the
 /// queue; the thread finishes what it has and exits.
 pub struct Worker {
-    tx: Sender<Job>,
+    tx: Option<Sender<Job>>,
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Worker {
     pub fn spawn(on_reply: impl Fn(Reply) + Send + 'static, on_notice: NoticeSink) -> Self {
         let (tx, rx) = mpsc::channel();
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("musit-versioning".to_string())
             .spawn(move || {
                 let mut state = State {
                     services: HashMap::new(),
                     roots: HashMap::new(),
+                    folders: HashMap::new(),
+                    hashes: HashMap::new(),
                     on_notice,
                 };
                 state.run(rx, on_reply);
             })
             .expect("versioning thread spawns");
-        Self { tx }
+        Self {
+            tx: Some(tx),
+            handle: Some(handle),
+        }
     }
 
-    pub fn send(&self, job: Job) {
-        let _ = self.tx.send(job);
+    /// Queues a job. False means the worker thread is gone, which the
+    /// caller must surface rather than wait forever for a reply that cannot
+    /// arrive.
+    pub fn send(&self, job: Job) -> bool {
+        self.tx.as_ref().is_some_and(|tx| tx.send(job).is_ok())
+    }
+}
+
+impl Drop for Worker {
+    /// Closes the queue and waits for the job in hand. Quitting in the
+    /// middle of a restore would otherwise leave a project file replaced by
+    /// nothing, with its content only in a scratch file.
+    fn drop(&mut self) {
+        self.tx.take();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -112,6 +154,12 @@ struct State {
     services: HashMap<String, SnapshotService>,
     /// Canonical project root by the same key.
     roots: HashMap<String, String>,
+    /// Folder tab that owns each service, by the same key.
+    folders: HashMap<String, String>,
+    /// Content hashes of files on disk against their (modified time, length),
+    /// so rebuilding a version list that has not changed costs a stat rather
+    /// than reading the whole project file again.
+    hashes: HashMap<String, (Option<std::time::SystemTime>, u64, String)>,
     on_notice: NoticeSink,
 }
 
@@ -143,14 +191,22 @@ impl State {
                 Job::Restore {
                     project,
                     version,
-                    needs_pre_snapshot,
+                    known_object_hashes,
                 } => {
-                    let result = self.restore(&project, &version, needs_pre_snapshot);
+                    let result = self.restore(&project, &version, &known_object_hashes);
                     on_reply(Reply::RestoreDone {
                         project_root: project.root_path,
                         project_name: project.name,
                         version_id: version.id,
                         result,
+                    });
+                }
+                Job::LoadVersions { project } => {
+                    let versions = self.load_versions(&project);
+                    on_reply(Reply::Versions {
+                        project_root: project.root_path,
+                        primary_file: project.primary_project_file,
+                        versions,
                     });
                 }
                 Job::SetRetention {
@@ -166,22 +222,52 @@ impl State {
                 }
                 Job::DropUnder { folder_root } => {
                     let doomed: Vec<String> = self
-                        .roots
+                        .folders
                         .iter()
-                        .filter(|(_, root)| path_is_under_root(root, &folder_root))
+                        .filter(|(_, owner)| path_equals(owner, &folder_root))
                         .map(|(key, _)| key.clone())
                         .collect();
                     for key in doomed {
                         self.services.remove(&key);
                         self.roots.remove(&key);
+                        self.folders.remove(&key);
                     }
                 }
                 Job::DropAll => {
                     self.services.clear();
                     self.roots.clear();
+                    self.folders.clear();
                 }
             }
         }
+    }
+
+    /// A project's version list, with the current version marked and the
+    /// compacted ones flagged.
+    fn load_versions(&mut self, project: &DiscoveredProject) -> Vec<VersionEntry> {
+        let log_path = join_path(&project.root_path, ".musit/versions/log.jsonl");
+        let mut versions = parse_versions_from_log(&log_path, &project.primary_project_file);
+        // Bounded like the backend's own caches: a folder with thousands of
+        // projects must not accumulate hashes forever.
+        if self.hashes.len() > 4096 {
+            self.hashes.clear();
+        }
+        let hashes = &mut self.hashes;
+        mark_current_version_with(project, &mut versions, |path| {
+            let stamp = fs::metadata(path)
+                .map(|meta| (meta.modified().ok(), meta.len()))
+                .unwrap_or((None, 0));
+            if let Some(entry) = hashes.get(path)
+                && (entry.0, entry.1) == stamp
+            {
+                return entry.2.clone();
+            }
+            let hash = sha256_file_hex(path);
+            hashes.insert(path.to_string(), (stamp.0, stamp.1, hash.clone()));
+            hash
+        });
+        mark_compressed_versions(project, &mut versions);
+        versions
     }
 
     fn init(
@@ -223,6 +309,7 @@ impl State {
 
         let key = path_key(&project.root_path);
         self.roots.insert(key.clone(), project.root_path.clone());
+        self.folders.insert(key.clone(), folder_root.clone());
         self.services.insert(key, service);
         Reply::InitDone {
             folder_root,
@@ -242,19 +329,27 @@ impl State {
         &mut self,
         project: &DiscoveredProject,
         version: &VersionEntry,
-        needs_pre_snapshot: bool,
+        known_object_hashes: &[String],
     ) -> Result<(), String> {
         let artifact_path = join_path(&project.root_path, &project.primary_project_file);
         let key = path_key(&project.root_path);
 
-        // If the on-disk state matches no snapshot (e.g. the watcher has not
-        // seen the latest save yet), snapshot it now so the restore cannot
-        // silently destroy the user's most recent work.
-        if needs_pre_snapshot
-            && Path::new(&artifact_path).exists()
-            && let Some(service) = self.services.get_mut(&key)
-        {
-            service.snapshot_path_now(&artifact_path, &project.primary_project_file);
+        // If what is on disk right now matches no snapshot (the watcher has
+        // not seen the latest save yet, or the user saved while this job
+        // waited in the queue), capture it before overwriting. The check is
+        // made here, immediately before the swap, because anything decided
+        // earlier could be out of date by now. Anything the check cannot
+        // establish — an unreadable file, a bundle directory — counts as
+        // "not captured", so the safety snapshot is taken.
+        if Path::new(&artifact_path).exists() {
+            let on_disk = sha256_file_hex(&artifact_path);
+            let captured = !on_disk.is_empty()
+                && known_object_hashes
+                    .iter()
+                    .any(|hash| hash.eq_ignore_ascii_case(&on_disk));
+            if !captured && let Some(service) = self.services.get_mut(&key) {
+                service.snapshot_path_now(&artifact_path, &project.primary_project_file);
+            }
         }
 
         let object_store = ObjectStore::new(join_path(&project.root_path, ".musit"));
@@ -262,16 +357,29 @@ impl State {
         struct Pending {
             destination_path: String,
             temp_path: String,
+            /// Where the file that was there has been parked, so a failure
+            /// part-way can put it back.
+            backup_path: String,
             relative_path: String,
         }
         let mut pending: Vec<Pending> = Vec::new();
         let cleanup_temps = |pending: &[Pending]| {
             for item in pending {
                 let _ = fs::remove_file(&item.temp_path);
+                let _ = fs::remove_file(&item.backup_path);
             }
         };
 
-        for file_entry in &version.files {
+        // Scratch files live inside `.musit`, which is never tracked, so a
+        // slow restore cannot end up versioning its own temporary files.
+        let scratch_dir = join_path(&join_path(&project.root_path, ".musit"), "restore");
+        if fs::create_dir_all(&scratch_dir).is_err() {
+            return Err(format!("restore failed: could not create {scratch_dir}"));
+        }
+        let scratch_name =
+            |suffix: &str, index: usize| join_path(&scratch_dir, &format!("{index}-{suffix}"));
+
+        for (index, file_entry) in version.files.iter().enumerate() {
             let relative_path = file_entry.path.clone();
             let destination_path = join_path(&project.root_path, &relative_path);
 
@@ -282,8 +390,10 @@ impl State {
                 ));
             }
 
-            let temp_path = format!("{destination_path}.musit-restore.tmp");
+            let temp_path = scratch_name("new", index);
+            let backup_path = scratch_name("old", index);
             let _ = fs::remove_file(&temp_path);
+            let _ = fs::remove_file(&backup_path);
 
             let staged_path = resolve_staged_path(&project.root_path, &file_entry.staged_path);
             let mut materialized = false;
@@ -305,6 +415,7 @@ impl State {
             pending.push(Pending {
                 destination_path,
                 temp_path,
+                backup_path,
                 relative_path,
             });
         }
@@ -316,11 +427,34 @@ impl State {
             ));
         }
 
-        // All temps are ready; swap them in.
+        // Announce the writes before making them: a file swapped early can
+        // stabilize and be picked up by the watcher while later files are
+        // still being written, which would record the restore as a new
+        // version of a half-restored project.
+        if let Some(service) = self.services.get_mut(&key) {
+            for item in &pending {
+                service.suppress_next_events_for_path(&item.relative_path, 1);
+            }
+        }
+
+        // All temps are ready; swap them in. Each file that is replaced is
+        // parked first, so a failure part-way through a multi-file version
+        // can put the project back as it was instead of leaving it half
+        // restored, or a file missing entirely.
+        let mut swapped: Vec<&Pending> = Vec::new();
+        let roll_back = |swapped: &[&Pending]| {
+            for item in swapped {
+                let _ = fs::remove_file(&item.destination_path);
+                if Path::new(&item.backup_path).exists() {
+                    let _ = fs::rename(&item.backup_path, &item.destination_path);
+                }
+            }
+        };
+
         for item in &pending {
-            if Path::new(&item.destination_path).exists()
-                && fs::remove_file(&item.destination_path).is_err()
-            {
+            let had_destination = Path::new(&item.destination_path).exists();
+            if had_destination && fs::rename(&item.destination_path, &item.backup_path).is_err() {
+                roll_back(&swapped);
                 cleanup_temps(&pending);
                 return Err(format!(
                     "restore failed: could not replace {}",
@@ -331,6 +465,11 @@ impl State {
                 // The complete data is still in the temp file; try a plain
                 // copy as a last resort before giving up.
                 if fs::copy(&item.temp_path, &item.destination_path).is_err() {
+                    if had_destination {
+                        let _ = fs::rename(&item.backup_path, &item.destination_path);
+                    }
+                    roll_back(&swapped);
+                    cleanup_temps(&pending);
                     return Err(format!(
                         "restore failed: copy failed from {} to {}",
                         item.temp_path, item.destination_path
@@ -338,12 +477,14 @@ impl State {
                 }
                 let _ = fs::remove_file(&item.temp_path);
             }
+            swapped.push(item);
+        }
+        // Everything is in place; the parked originals are no longer needed.
+        for item in &pending {
+            let _ = fs::remove_file(&item.backup_path);
         }
 
         if let Some(service) = self.services.get_mut(&key) {
-            for item in &pending {
-                service.suppress_next_events_for_path(&item.relative_path, 1);
-            }
             service.set_branch_base_for_artifact(&project.primary_project_file, &version.id);
         }
         Ok(())

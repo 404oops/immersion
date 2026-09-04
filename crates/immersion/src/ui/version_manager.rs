@@ -3,17 +3,17 @@
 //! the main view.
 
 use gpui::{
-    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, Rgba, SharedString, Window,
-    canvas, div, fill, point, prelude::*, px, size,
+    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, ObjectFit, PathBuilder, Rgba,
+    SharedString, Window, canvas, div, fill, img, point, prelude::*, px, size,
 };
 
-use crate::app::{ComboId, RootView, SelectionFade};
+use crate::app::{ComboId, RootView};
 use crate::theme::{MONO_FONT, Theme};
 use crate::ui::controls::{
     ButtonVariant, CONTROL_HEIGHT, ScrollAxis, caption, lerp_rgba, panel_button, scrollbar,
     text_area,
 };
-use crate::ui::graph_layout::{self, GraphNode, NODE_HALF_H, NODE_HALF_W};
+use crate::ui::graph_layout::{self, GraphNode, LABEL_FONT_PX, NODE_HALF_H, SUB_LABEL_FONT_PX};
 use crate::ui::lighting;
 use crate::ui::modals::delete_version_confirm;
 
@@ -33,7 +33,8 @@ impl RootView {
         let content_h = extent_h * zoom;
 
         // Data for the paint closure.
-        let nodes: Vec<(String, String, f32, f32)> = self
+        // (id, parent id, centre x, centre y, half width, column).
+        let nodes: Vec<(String, String, f32, f32, f32, usize)> = self
             .vm_graph
             .iter()
             .map(|node| {
@@ -42,13 +43,17 @@ impl RootView {
                     node.parent_id.clone(),
                     node.x,
                     node.y,
+                    node.half_w,
+                    node.col,
                 )
             })
             .collect();
-        let positions: std::collections::HashMap<String, (f32, f32)> = nodes
+        let positions: std::collections::HashMap<String, (f32, f32, f32, usize)> = nodes
             .iter()
-            .map(|(id, _, x, y)| (id.clone(), (*x, *y)))
+            .map(|(id, _, x, y, half_w, col)| (id.clone(), (*x, *y, *half_w, *col)))
             .collect();
+        let pan_active = self.graph_pan.as_ref().is_some_and(|pan| pan.moved);
+        let gutters = self.vm_graph_placement.gutters.clone();
         let ancestors = self.ancestor_id_set(&self.vm_selected_id);
 
         div()
@@ -124,14 +129,30 @@ impl RootView {
                                                     }
                                                 };
                                                 let factor = (1.0 + dy * 0.01).clamp(0.5, 2.0);
-                                                this.set_graph_zoom(
-                                                    this.graph_zoom * factor,
-                                                    Some(event.position),
-                                                    cx,
-                                                );
+                                                this.set_graph_zoom(this.graph_zoom * factor, cx);
                                                 cx.stop_propagation();
                                             },
                                         ))
+                                        // Dragging anywhere on the canvas pans the view,
+                                        // nodes included. A press on a node also marks it,
+                                        // and the release selects it if the pointer never
+                                        // travelled (see `global_mouse_up`).
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, event: &MouseDownEvent, _w, cx| {
+                                                this.graph_pan = Some(crate::app::GraphPan {
+                                                    start_mouse: event.position,
+                                                    start_offset: this.graph_scroll.offset(),
+                                                    moved: false,
+                                                });
+                                                cx.notify();
+                                            }),
+                                        )
+                                        .cursor(if pan_active {
+                                            gpui::CursorStyle::ClosedHand
+                                        } else {
+                                            gpui::CursorStyle::OpenHand
+                                        })
                                         // Canvas: dotted grid + links.
                                         .child(
                                             canvas(
@@ -139,13 +160,30 @@ impl RootView {
                                                 move |bounds, _state, window, _cx| {
                                                     let origin = bounds.origin;
 
-                                                    // Dotted grid, painted only for the
+                                                    // Dotted grid from the very edge (index 0, so
+                                                    // half a dot shows at the border and the
+                                                    // lattice reads as endless), painted only for the
                                                     // visible clip — the full extent can be
                                                     // thousands of dots while the viewport
                                                     // shows ~700.
-                                                    let grid_step =
-                                                        (graph_layout::GRID * zoom).max(10.0);
-                                                    let dot_radius = 1.1_f32 * zoom.clamp(0.7, 1.6);
+                                                    // One square cell in both directions, snapped
+                                                    // to whole points so the dots cannot creep
+                                                    // against the nodes between zoom levels.
+                                                    let grid_step = (graph_layout::GRID * zoom)
+                                                        .max(10.0)
+                                                        .round();
+                                                    // Dots are sized and placed in whole device
+                                                    // pixels. Left on fractional ones they cover
+                                                    // two pixels faintly on some cells and one
+                                                    // brightly on others, which reads as the grid
+                                                    // twinkling; the screen's scale factor is what
+                                                    // makes that predictable.
+                                                    let scale = window.scale_factor().max(0.1);
+                                                    let to_device = |v: f32| (v * scale).round();
+                                                    let dot_device =
+                                                        to_device(2.0 * zoom.clamp(0.7, 1.6)).max(2.0);
+                                                    let dot_size = dot_device / scale;
+                                                    let dot_radius = dot_size / 2.0;
                                                     let grid_color = theme.vm_graph_grid;
                                                     let width = f32::from(bounds.size.width);
                                                     let height = f32::from(bounds.size.height);
@@ -162,31 +200,38 @@ impl RootView {
                                                     let visible_bottom = (f32::from(mask.bottom())
                                                         - f32::from(origin.y))
                                                     .min(height);
-                                                    let mut gx =
-                                                        (visible_left / grid_step).floor().max(1.0)
+                                                    // Only dots that fit whole: one clipped by the
+                                                    // pane's edge would show as a half dot along
+                                                    // the border.
+                                                    let mut gx = ((visible_left + dot_radius)
+                                                        / grid_step)
+                                                        .ceil()
+                                                        .max(0.0)
+                                                        * grid_step;
+                                                    while gx + dot_radius <= visible_right {
+                                                        let mut gy = ((visible_top + dot_radius)
+                                                            / grid_step)
+                                                            .ceil()
+                                                            .max(0.0)
                                                             * grid_step;
-                                                    while gx < visible_right {
-                                                        let mut gy = (visible_top / grid_step)
-                                                            .floor()
-                                                            .max(1.0)
-                                                            * grid_step;
-                                                        while gy < visible_bottom {
+                                                        while gy + dot_radius <= visible_bottom {
+                                                            // Snapped in absolute window space, so
+                                                            // the canvas's own fractional origin
+                                                            // does not put every dot half a pixel
+                                                            // off the physical grid.
+                                                            let left = to_device(
+                                                                f32::from(origin.x) + gx - dot_radius,
+                                                            ) / scale;
+                                                            let top = to_device(
+                                                                f32::from(origin.y) + gy - dot_radius,
+                                                            ) / scale;
                                                             window.paint_quad(
                                                                 fill(
                                                                     gpui::Bounds::new(
-                                                                        point(
-                                                                            origin.x
-                                                                                + px(
-                                                                                    gx - dot_radius
-                                                                                ),
-                                                                            origin.y
-                                                                                + px(
-                                                                                    gy - dot_radius
-                                                                                ),
-                                                                        ),
+                                                                        point(px(left), px(top)),
                                                                         size(
-                                                                            px(dot_radius * 2.0),
-                                                                            px(dot_radius * 2.0),
+                                                                            px(dot_size),
+                                                                            px(dot_size),
                                                                         ),
                                                                     ),
                                                                     grid_color,
@@ -199,11 +244,13 @@ impl RootView {
                                                     }
 
                                                     // Orthogonal parent->child links.
-                                                    for (id, parent_id, cx_, cy_) in &nodes {
+                                                    for (id, parent_id, cx_, cy_, c_half, _) in
+                                                        &nodes
+                                                    {
                                                         if parent_id.is_empty() {
                                                             continue;
                                                         }
-                                                        let Some((px_, py_)) =
+                                                        let Some((px_, py_, p_half, p_col)) =
                                                             positions.get(parent_id)
                                                         else {
                                                             continue;
@@ -211,61 +258,126 @@ impl RootView {
                                                         let highlighted = ancestors
                                                             .contains(parent_id)
                                                             && ancestors.contains(id);
-                                                        let x1 = (px_ + NODE_HALF_W) * zoom;
+                                                        let x1 = (px_ + p_half) * zoom;
                                                         let y1 = *py_ * zoom;
-                                                        let x2 = (cx_ - NODE_HALF_W) * zoom;
+                                                        let x2 = (cx_ - c_half) * zoom;
                                                         let y2 = *cy_ * zoom;
-                                                        let mid_x = x1 + (x2 - x1) * 0.5;
+                                                        // Descend through the column gutter, so a
+                                                        // parent's trunk stays straight whatever
+                                                        // widths its children have.
+                                                        let mid_x = gutters
+                                                            .get(*p_col)
+                                                            .copied()
+                                                            .unwrap_or((px_ + cx_) * 0.5)
+                                                            * zoom;
 
                                                         let stroke_width =
-                                                            (if highlighted { 2.5 } else { 2.0 })
+                                                            (if highlighted { 2.0 } else { 1.5 })
                                                                 * zoom.clamp(0.7, 1.5);
+                                                        // Quiet by default: the wire sits back
+                                                        // toward the grid, and only the selected
+                                                        // version's ancestry comes forward.
                                                         let color = if highlighted {
                                                             theme.vm_graph_link_active
                                                         } else {
-                                                            theme.vm_graph_link
+                                                            lerp_rgba(
+                                                                theme.vm_graph,
+                                                                theme.vm_graph_link,
+                                                                0.55,
+                                                            )
                                                         };
-                                                        // Three axis-aligned quads rather than a
-                                                        // stroked path: crisp edges with no
-                                                        // jaggies. Positions snap to half pixels
-                                                        // and the segments overlap by half the
-                                                        // width so the corners close cleanly.
+                                                        // Straight runs as axis-aligned quads
+                                                        // (crisp, no jaggies) joined by rounded
+                                                        // corners, so an elbow reads as a soft
+                                                        // wire rather than a hard right angle.
                                                         let snap = |v: f32| (v * 2.0).round() / 2.0;
                                                         let half = stroke_width * 0.5;
-                                                        let mut segment =
-                                                            |x: f32, y: f32, w: f32, h: f32| {
-                                                                window.paint_quad(fill(
-                                                                    gpui::Bounds::new(
-                                                                        point(
-                                                                            origin.x + px(snap(x)),
-                                                                            origin.y + px(snap(y)),
-                                                                        ),
-                                                                        size(
-                                                                            px(snap(w)),
-                                                                            px(snap(h)),
-                                                                        ),
+                                                        let drop = (y2 - y1).abs();
+                                                        let radius = (10.0 * zoom).min(drop / 2.0);
+                                                        let mut bar = |x: f32,
+                                                                       y: f32,
+                                                                       w: f32,
+                                                                       h: f32| {
+                                                            if w <= 0.0 || h <= 0.0 {
+                                                                return;
+                                                            }
+                                                            window.paint_quad(fill(
+                                                                gpui::Bounds::new(
+                                                                    point(
+                                                                        origin.x + px(snap(x)),
+                                                                        origin.y + px(snap(y)),
                                                                     ),
-                                                                    color,
+                                                                    size(px(snap(w)), px(snap(h))),
+                                                                ),
+                                                                color,
+                                                            ));
+                                                        };
+                                                        if radius <= 1.0 {
+                                                            // Same row: a single straight run.
+                                                            bar(
+                                                                x1,
+                                                                y1 - half,
+                                                                x2 - x1,
+                                                                stroke_width,
+                                                            );
+                                                        } else {
+                                                            let down =
+                                                                if y2 > y1 { 1.0 } else { -1.0 };
+                                                            bar(
+                                                                x1,
+                                                                y1 - half,
+                                                                mid_x - radius - x1,
+                                                                stroke_width,
+                                                            );
+                                                            bar(
+                                                                mid_x - half,
+                                                                y1.min(y2) + radius,
+                                                                stroke_width,
+                                                                drop - 2.0 * radius,
+                                                            );
+                                                            bar(
+                                                                mid_x + radius,
+                                                                y2 - half,
+                                                                x2 - mid_x - radius,
+                                                                stroke_width,
+                                                            );
+                                                            // The two quarter-turns, as stroked
+                                                            // quadratic arcs between those runs.
+                                                            let mut turn = |from: (f32, f32),
+                                                                            ctrl: (f32, f32),
+                                                                            to: (f32, f32)| {
+                                                                let mut builder = PathBuilder::stroke(
+                                                                    px(stroke_width),
+                                                                );
+                                                                builder.move_to(point(
+                                                                    origin.x + px(from.0),
+                                                                    origin.y + px(from.1),
                                                                 ));
+                                                                builder.curve_to(
+                                                                    point(
+                                                                        origin.x + px(to.0),
+                                                                        origin.y + px(to.1),
+                                                                    ),
+                                                                    point(
+                                                                        origin.x + px(ctrl.0),
+                                                                        origin.y + px(ctrl.1),
+                                                                    ),
+                                                                );
+                                                                if let Ok(path) = builder.build() {
+                                                                    window.paint_path(path, color);
+                                                                }
                                                             };
-                                                        segment(
-                                                            x1,
-                                                            y1 - half,
-                                                            mid_x - x1 + half,
-                                                            stroke_width,
-                                                        );
-                                                        segment(
-                                                            mid_x - half,
-                                                            y1.min(y2) - half,
-                                                            stroke_width,
-                                                            (y2 - y1).abs() + stroke_width,
-                                                        );
-                                                        segment(
-                                                            mid_x - half,
-                                                            y2 - half,
-                                                            x2 - mid_x + half,
-                                                            stroke_width,
-                                                        );
+                                                            turn(
+                                                                (mid_x - radius, y1),
+                                                                (mid_x, y1),
+                                                                (mid_x, y1 + radius * down),
+                                                            );
+                                                            turn(
+                                                                (mid_x, y2 - radius * down),
+                                                                (mid_x, y2),
+                                                                (mid_x + radius, y2),
+                                                            );
+                                                        }
                                                     }
                                                 },
                                             )
@@ -294,21 +406,25 @@ impl RootView {
                             &theme,
                             cx,
                         ))
-                        // Zoom controls (also: cmd/ctrl + wheel).
+                        // Zoom controls (also: cmd/ctrl + wheel). The cluster
+                        // occludes the graph, so presses in the gaps between
+                        // its buttons do not reach the nodes either.
                         .child(
                             div()
+                                .id("graph-zoom-controls")
                                 .absolute()
                                 .top(px(6.0))
                                 .right(px(14.0))
                                 .flex()
                                 .items_center()
                                 .gap(px(4.0))
+                                .occlude()
                                 .child(self.graph_zoom_button(
                                     "graph-zoom-out",
                                     "\u{2212}",
                                     cx,
                                     |this, cx| {
-                                        this.set_graph_zoom(this.graph_zoom / 1.15, None, cx);
+                                        this.set_graph_zoom(this.graph_zoom / 1.15, cx);
                                     },
                                 ))
                                 .child(
@@ -334,7 +450,8 @@ impl RootView {
                                         .on_mouse_down(
                                             MouseButton::Left,
                                             cx.listener(|this, _event, _window, cx| {
-                                                this.set_graph_zoom(1.0, None, cx);
+                                                cx.stop_propagation();
+                                                this.set_graph_zoom(1.0, cx);
                                             }),
                                         )
                                         .child(SharedString::from(format!("{:.0}%", zoom * 100.0))),
@@ -344,7 +461,7 @@ impl RootView {
                                     "+",
                                     cx,
                                     |this, cx| {
-                                        this.set_graph_zoom(this.graph_zoom * 1.15, None, cx);
+                                        this.set_graph_zoom(this.graph_zoom * 1.15, cx);
                                     },
                                 )),
                         ),
@@ -376,9 +493,13 @@ impl RootView {
             .text_size(px(12.0))
             .text_color(theme.text_muted)
             .hover(move |style| style.bg(theme.button_soft_fill))
+            // The press stops here: the controls float over the graph, and
+            // without this the node (or the background pan) beneath would
+            // also take it.
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event, _window, cx| {
+                    cx.stop_propagation();
                     on_click(this, cx);
                 }),
             )
@@ -443,24 +564,26 @@ impl RootView {
             node_shadows.push(lighting::glow(theme.accent, 0.4 * weight, 8.0 * zoom));
         }
         let version_id = node.version.id.clone();
-        let note = node.version.note.clone();
         let show_full =
             !node.version.full_label.is_empty() && node.version.full_label != node.version.label;
 
         div()
             .id(ElementId::NamedInteger("vm-node".into(), index as u64))
             .absolute()
-            .left(px((node.x - NODE_HALF_W) * zoom))
-            .top(px((node.y - NODE_HALF_H) * zoom))
-            .w(px(NODE_HALF_W * 2.0 * zoom))
-            .h(px(NODE_HALF_H * 2.0 * zoom))
+            // Whole points: the dot grid is snapped the same way, so a node
+            // sits on its dots at every zoom instead of drifting a fraction
+            // of a pixel each step.
+            .left(px(((node.x - node.half_w) * zoom).round()))
+            .top(px(((node.y - NODE_HALF_H) * zoom).round()))
+            .w(px((node.half_w * 2.0 * zoom).round()))
+            .h(px((NODE_HALF_H * 2.0 * zoom).round()))
             .cursor_pointer()
             // Body: lit card; the current and selected versions also glow.
             .child(
                 div()
                     .absolute()
                     .inset_0()
-                    .rounded(px(8.0 * zoom))
+                    .rounded(px(9.0 * zoom))
                     .bg(lighting::lit(
                         fill_color,
                         if current { 0.1 } else { 0.05 + 0.05 * weight },
@@ -479,7 +602,7 @@ impl RootView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .text_size(px(12.0 * text_zoom))
+                            .text_size(px(LABEL_FONT_PX * text_zoom))
                             .font_family(MONO_FONT)
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(label_color)
@@ -492,7 +615,7 @@ impl RootView {
                     .when(show_full && zoom > 0.7, |el| {
                         el.child(
                             div()
-                                .text_size(px(9.0 * text_zoom))
+                                .text_size(px(SUB_LABEL_FONT_PX * text_zoom))
                                 .font_family(MONO_FONT)
                                 .text_color(sub_label_color)
                                 .opacity(0.9)
@@ -500,28 +623,21 @@ impl RootView {
                         )
                     }),
             )
-            // Click selects; double-click restores, like "Open Version".
+            // A press arms a click; the release selects, unless the pointer
+            // travelled, in which case the press was the start of a pan (the
+            // handler for that sits on the canvas beneath). Double-click
+            // restores, like "Open Version".
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
                     if event.click_count >= 2 {
+                        cx.stop_propagation();
+                        this.pending_node_click = None;
+                        this.graph_pan = None;
                         this.pending_select_latest = true;
                         this.backend.restore_version_by_id(&version_id);
                     } else {
-                        let previous =
-                            std::mem::replace(&mut this.vm_selected_id, version_id.clone());
-                        if previous != version_id {
-                            this.node_fade = Some(SelectionFade {
-                                to: version_id.clone(),
-                                from: previous,
-                                since: std::time::Instant::now(),
-                            });
-                        }
-                        let note = note.clone();
-                        this.version_note_input.update(cx, |input, cx| {
-                            input.set_text(&note, cx);
-                            input.disabled = false;
-                        });
+                        this.pending_node_click = Some(version_id.clone());
                     }
                     cx.notify();
                 }),
@@ -611,6 +727,7 @@ impl RootView {
         } else {
             project_item.last_opened.clone()
         };
+        let title_icon = self.file_icon(&project_item.file);
 
         let divider = || div().w(px(1.0)).h_full().flex_none().bg(theme.vm_border);
 
@@ -638,11 +755,27 @@ impl RootView {
                             .child(
                                 div()
                                     .flex_none()
-                                    .text_size(px(13.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.vm_text_primary)
-                                    .truncate()
-                                    .child(SharedString::from(project_item.name.clone())),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(7.0))
+                                    .when_some(title_icon, |el, icon| {
+                                        el.child(
+                                            img(icon)
+                                                .w(px(20.0))
+                                                .h(px(20.0))
+                                                .flex_none()
+                                                .object_fit(ObjectFit::Contain),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .text_size(px(13.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.vm_text_primary)
+                                            .truncate()
+                                            .child(SharedString::from(project_item.name.clone())),
+                                    ),
                             )
                             // Only what the list does not already show: the
                             // file (a picker when the project has several),
@@ -737,6 +870,9 @@ impl RootView {
                                     |this, _w, cx| {
                                         let note = this.project_note_input.read(cx).text();
                                         this.backend.set_selected_project_note(&note);
+                                        // Saved: the field matches storage again, so a later
+                                        // refresh may replace it.
+                                        this.project_note_loaded = note;
                                         cx.notify();
                                     },
                                 )),
@@ -859,6 +995,7 @@ impl RootView {
                                             let version_id = this.vm_selected_id.clone();
                                             // The backend event refreshes the graph.
                                             this.backend.save_version_note(&version_id, &note);
+                                            this.version_note_loaded = note;
                                             cx.notify();
                                         },
                                     )))
