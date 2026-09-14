@@ -1,14 +1,16 @@
 [workspace]
-members = ["crates/musit-core", "crates/immersion", "crates/vampir"]
+members = ["crates/musit-core", "crates/immersion"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 
 [workspace.dependencies]
-# Pinned by Cargo.lock; declared here so every crate resolves the same copy.
-gpui = { git = "https://github.com/zed-industries/zed", branch = "main" }
+# gpui-ce is the community edition of Zed's GPUI, synced from Zed and published
+# to crates.io. It is imported as `gpui` so the code reads as GPUI code, and it
+# is the edition vampir builds against, so both crates share one set of types.
+gpui = { package = "gpui-ce", version = "0.2.2" }
 unicode-segmentation = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

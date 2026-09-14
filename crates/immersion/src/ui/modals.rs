@@ -1,5 +1,5 @@
-//! Modal layer: popup sizing/scrims, the settings window, the projects-folder
-//! layout dialog, and the confirm dialog.
+//! Modal layer: the settings panel with its scrim, and the two vampir
+//! dialogs — the projects-folder layout question and the confirm.
 
 use gpui::{
     AnyElement, Context, ElementId, FontWeight, PathPromptOptions, SharedString, Window, div,
@@ -10,19 +10,13 @@ use crate::app::{ConfirmAction, ConfirmState, RootView};
 use crate::theme::MODAL_EDGE_PADDING;
 use crate::theme::MODAL_PANEL_RADIUS;
 use crate::ui::controls::{
-    ButtonVariant, ScrollAxis, modal_opacity, panel_button, scrollbar, themed_spinbox,
-    themed_switch,
+    ButtonVariant, CONFIRM_DIALOG, LAYOUT_DIALOG, ScrollAxis, modal_opacity, panel_button,
+    scrollbar, themed_spinbox, themed_switch,
 };
+use crate::ui::onboarding::{LAYOUTS, layout_choices};
+use vampir::{DialogButton, dialog, radio_group};
 
-/// How tall a popup panel is: a fixed frame, or one that hugs its content up
-/// to a cap (short dialogs shouldn't paint a half-empty panel).
-#[derive(Clone, Copy)]
-enum PopupHeight {
-    Fixed(f32),
-    FitContent(f32),
-}
-
-/// ThemedPopup width/height rule.
+/// Settings panel width/height rule.
 fn popup_size(window: &Window, min: (f32, f32), max: (f32, f32), pref: (f32, f32)) -> (f32, f32) {
     let viewport = window.viewport_size();
     let available_w = (f32::from(viewport.width) - MODAL_EDGE_PADDING).max(0.0);
@@ -42,84 +36,55 @@ impl RootView {
         let theme = self.theme;
         let mut layers: Vec<AnyElement> = Vec::new();
 
-        if !self.any_modal_open() && self.confirm.is_none() {
-            return layers;
+        // The confirm dialog's question outlives the dialog by its fade, so
+        // it has something to show on the way out; once the dialog has gone,
+        // so has the question.
+        if self.confirm.is_some() && self.controls.dialog_fade(CONFIRM_DIALOG).is_none() {
+            self.confirm = None;
         }
-
-        // Topmost visible popup drives scrim opacity.
-        let (scrim_opacity, _) = if self.confirm.is_some() {
-            modal_opacity(self.confirm_enter_at, self.confirm_exit_at)
-        } else if self.layout_dialog.open {
-            modal_opacity(self.layout_enter_at, self.layout_exit_at)
-        } else if self.settings_open {
-            modal_opacity(self.settings_enter_at, self.settings_exit_at)
-        } else {
-            (1.0, false)
-        };
-
-        // Full-window scrim behind modal popups. It occludes the root, so it
-        // must forward the shared drag tracking (hue slider, scrollbars).
-        layers.push(
-            div()
-                .id("modal-scrim")
-                .absolute()
-                .inset_0()
-                .bg(theme.modal_scrim)
-                .opacity(scrim_opacity)
-                .occlude()
-                .on_mouse_move(
-                    cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
-                        this.global_mouse_move(event, cx);
-                    }),
-                )
-                .on_mouse_up(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this, _event, _window, cx| {
-                        this.global_mouse_up(cx);
-                    }),
-                )
-                .into_any_element(),
-        );
 
         if self.settings_open {
-            layers.push(self.render_settings_modal(window, cx).into_any_element());
-        }
-
-        // Nested scrim for child dialogs (layout dialog over settings, confirm).
-        if self.child_dialog_open() {
-            let (nested_opacity, _) = if self.confirm.is_some() {
-                modal_opacity(self.confirm_enter_at, self.confirm_exit_at)
-            } else {
-                modal_opacity(self.layout_enter_at, self.layout_exit_at)
-            };
+            let (scrim_opacity, _) = modal_opacity(self.settings_enter_at, self.settings_exit_at);
+            // Full-window scrim behind the panel. It occludes the root, so it
+            // must forward the shared drag tracking (hue slider, scrollbars).
             layers.push(
                 div()
-                    .id("nested-modal-scrim")
+                    .id("modal-scrim")
                     .absolute()
                     .inset_0()
                     .bg(theme.modal_scrim)
-                    .opacity(0.72 * nested_opacity)
+                    .opacity(scrim_opacity)
                     .occlude()
+                    .on_mouse_move(cx.listener(
+                        |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                            this.global_mouse_move(event, cx);
+                        },
+                    ))
+                    .on_mouse_up(
+                        gpui::MouseButton::Left,
+                        cx.listener(|this, _event, _window, cx| {
+                            this.global_mouse_up(cx);
+                        }),
+                    )
                     .into_any_element(),
             );
+            layers.push(self.render_settings_modal(window, cx).into_any_element());
         }
 
-        if self.layout_dialog.open {
-            layers.push(self.render_layout_dialog(window, cx).into_any_element());
-        }
-        if self.confirm.is_some() {
-            layers.push(self.render_confirm_dialog(window, cx).into_any_element());
-        }
+        // The dialogs bring their own scrim and fade, and are deferred, so
+        // one opened from the settings panel paints over it.
+        layers.extend(self.render_layout_dialog(cx));
+        layers.extend(self.render_confirm_dialog(cx));
 
         layers
     }
 
-    /// Centers a ThemedPopup; opacity fade on enter/exit applied once to the
-    /// whole panel (chrome + content).
+    /// Centers the settings panel; opacity fade on enter/exit applied once to
+    /// the whole panel (chrome + content).
     fn popup_frame(
         &self,
         id: &'static str,
-        size: (f32, PopupHeight),
+        size: (f32, f32),
         content: AnyElement,
         enter_at: Option<std::time::Instant>,
         exit_at: Option<std::time::Instant>,
@@ -138,10 +103,7 @@ impl RootView {
                 div()
                     .id(ElementId::Name(id.to_string().into()))
                     .w(px(size.0))
-                    .map(|el| match size.1 {
-                        PopupHeight::Fixed(h) => el.h(px(h)),
-                        PopupHeight::FitContent(max) => el.max_h(px(max)),
-                    })
+                    .h(px(size.1))
                     .rounded(px(MODAL_PANEL_RADIUS))
                     .bg(theme.vm_panel)
                     .border_1()
@@ -212,6 +174,7 @@ impl RootView {
         let retention_edit = self.retention_input.clone();
         let notifications = self.backend.notifications_enabled();
         let hue_value = self.backend.theme_hue();
+        let saturation_percent = (self.backend.theme_saturation() * 100.0).round() as i64;
 
         let section_label = move |text: &str| {
             div()
@@ -340,8 +303,8 @@ impl RootView {
                                                     !folder_path.is_empty(),
                                                     &theme,
                                                     cx,
-                                                    |this, window, cx| {
-                                                        this.open_layout_dialog_for_current_folder(window, cx);
+                                                    |this, _window, cx| {
+                                                        this.open_layout_dialog_for_current_folder();
                                                         cx.notify();
                                                     },
                                                 )),
@@ -562,6 +525,25 @@ impl RootView {
                                                             ))),
                                                     ),
                                             )
+                                            .child(section_label("Theme saturation"))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(px(12.0))
+                                                    .child(self.render_saturation_slider(cx))
+                                                    .child(
+                                                        div()
+                                                            .w(px(42.0))
+                                                            .flex_none()
+                                                            .text_size(px(12.0))
+                                                            .text_color(theme.vm_text_meta)
+                                                            .text_right()
+                                                            .child(SharedString::from(format!(
+                                                                "{saturation_percent}%"
+                                                            ))),
+                                                    ),
+                                            )
                                             .child(
                                                 div()
                                                     .h(px(22.0))
@@ -615,17 +597,15 @@ impl RootView {
                                                         true,
                                                         &theme,
                                                         cx,
-                                                        |this, w, cx| {
-                                                            this.take_modal_focus(w, cx);
-                                                            this.confirm_enter_at = Some(std::time::Instant::now());
-                                                            this.confirm_exit_at = None;
-                                                            this.confirm = Some(ConfirmState {
+                                                        |this, _w, cx| {
+                                                            let message = if this.show_dev_details() {
+                                                                "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted."
+                                                            } else {
+                                                                "This clears your settings, folder choices, and project notes.\n\nYour saved versions are kept."
+                                                            };
+                                                            this.open_confirm(ConfirmState {
                                                                 title: "Reset Configuration".to_string(),
-                                                                message: if this.show_dev_details() {
-                                                                    "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted.".to_string()
-                                                                } else {
-                                                                    "This clears your settings, folder choices, and project notes.\n\nYour saved versions are kept.".to_string()
-                                                                },
+                                                                message: message.to_string(),
                                                                 confirm_text: "Reset".to_string(),
                                                                 danger: true,
                                                                 action: ConfirmAction::ResetConfig,
@@ -641,14 +621,14 @@ impl RootView {
                         "settings",
                         &self.settings_scroll.clone(),
                         ScrollAxis::Vertical,
-                        &theme,
+                        self,
                         cx,
                     )),
             );
 
         self.popup_frame(
             "settings-popup",
-            (size.0, PopupHeight::Fixed(size.1)),
+            size,
             content.into_any_element(),
             self.settings_enter_at,
             self.settings_exit_at,
@@ -658,317 +638,149 @@ impl RootView {
 
     // ---- Projects-folder layout dialog --------------------------------------
 
-    fn render_layout_dialog(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<RootView>,
-    ) -> impl IntoElement {
-        let theme = self.theme;
-        let size = popup_size(window, (460.0, 240.0), (600.0, 620.0), (560.0, 520.0));
-
+    /// The layout question as a vampir dialog, while it is open or fading
+    /// out; `None` otherwise. Picking an option only changes the selection;
+    /// OK is what saves it and scans.
+    fn render_layout_dialog(&self, cx: &mut Context<RootView>) -> Option<AnyElement> {
+        let palette = self.theme.palette();
         let folder_path = self.layout_dialog.folder_path.clone();
-        let selected = self.layout_dialog.selected_layout.clone();
-        let is_new_folder = self.layout_dialog.is_new_folder;
-
-        // Radio dot: the border alone left both cards looking equally chosen.
-        let radio = move |selected: bool| {
-            div()
-                .flex_none()
-                .mt(px(2.0))
-                .w(px(16.0))
-                .h(px(16.0))
-                .rounded_full()
-                .border_1()
-                .border_color(if selected {
-                    theme.modal_selected_border
-                } else {
-                    theme.modal_option_border
-                })
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(selected, |el| {
-                    el.child(
-                        div()
-                            .w(px(8.0))
-                            .h(px(8.0))
-                            .rounded_full()
-                            .bg(theme.modal_selected_border),
-                    )
-                })
-        };
-
-        let card = |id: &'static str,
-                    layout: &'static str,
-                    title: &'static str,
-                    description: &'static str,
-                    selected: bool,
-                    cx: &mut Context<RootView>| {
-            div()
-                .id(id)
-                .w_full()
-                .rounded(px(MODAL_PANEL_RADIUS))
-                .bg(if selected {
-                    theme.modal_option_selected_fill
-                } else {
-                    theme.modal_option_fill
-                })
-                .border_1()
-                .border_color(if selected {
-                    theme.modal_selected_border
-                } else {
-                    theme.modal_option_border
-                })
-                .px(px(13.0))
-                .py(px(12.0))
-                .flex()
-                .items_start()
-                .gap(px(11.0))
-                .when(!selected, |el| {
-                    el.hover(move |style| style.bg(theme.modal_option_fill_hover))
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.layout_dialog_select(layout);
-                    cx.notify();
-                }))
-                .child(radio(selected))
-                .child(
-                    // min_w_0: without it the flex item takes its min-content
-                    // width and the description runs past the card edge
-                    // instead of wrapping.
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .child(
-                            div()
-                                .text_size(px(13.0))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(theme.vm_text_primary)
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .line_height(px(16.0))
-                                .text_color(theme.vm_text_meta)
-                                .child(description),
-                        ),
-                )
-        };
+        let selected = LAYOUTS
+            .iter()
+            .position(|(layout, _, _)| *layout == self.layout_dialog.selected_layout)
+            .unwrap_or(0);
+        let choices = layout_choices();
 
         // Nothing happens until OK, so the footer just says what OK will do.
         let footer_text: SharedString = if self.show_dev_details() {
             "Saved to .immersion/settings.json in this folder.".into()
-        } else if is_new_folder {
+        } else if self.layout_dialog.is_new_folder {
             "The folder is scanned once you press OK.".into()
         } else {
             "Changing this rescans the folder.".into()
         };
 
         let body = div()
-            .id("layout-dialog-scroll")
-            .w_full()
-            .max_h(px(size.1))
-            .overflow_y_scroll()
-            .track_scroll(&self.layout_dialog_scroll)
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
             .child(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(14.0))
-                    .px(px(20.0))
-                    .py(px(18.0))
+                    .gap(px(4.0))
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.0))
-                            .child(
-                                div()
-                                    .text_size(px(18.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.vm_text_primary)
-                                    .child("How are your projects organized?"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .line_height(px(16.0))
-                                    .text_color(theme.vm_text_meta)
-                                    .child("Pick the option that matches this folder."),
-                            )
-                            .when(!folder_path.is_empty(), |el| {
-                                el.child(
-                                    div()
-                                        .w_full()
-                                        .text_size(px(11.0))
-                                        .text_color(theme.vm_text_meta)
-                                        .opacity(0.7)
-                                        .truncate()
-                                        .child(SharedString::from(folder_path)),
-                                )
-                            }),
+                            .text_size(px(12.0))
+                            .line_height(px(16.0))
+                            .text_color(palette.text_secondary)
+                            .child("Pick the option that matches this folder."),
                     )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.0))
-                            .child(card(
-                                "layout-card-bundles",
-                                "Bundles",
-                                "Project folders with bundles",
-                                "Each project has its own subfolder or bundle, like .logicx.",
-                                selected == "Bundles",
-                                cx,
-                            ))
-                            .child(card(
-                                "layout-card-files",
-                                "Files",
-                                "Loose project files",
-                                "Project files like .als or .flp sit directly in the folder.",
-                                selected == "Files",
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_size(px(11.5))
-                                    .line_height(px(15.0))
-                                    .text_color(theme.vm_text_meta)
-                                    .opacity(0.7)
-                                    .child(footer_text),
-                            )
-                            .child(div().w(px(88.0)).flex_none().child(panel_button(
-                                "layout-dialog-cancel",
-                                "Cancel",
-                                ButtonVariant::Soft,
-                                true,
-                                &theme,
-                                cx,
-                                |this, _w, cx| {
-                                    this.request_close_layout(cx);
-                                },
-                            )))
-                            .child(div().w(px(88.0)).flex_none().child(panel_button(
-                                "layout-dialog-ok",
-                                "OK",
-                                ButtonVariant::Primary,
-                                true,
-                                &theme,
-                                cx,
-                                |this, _w, cx| {
-                                    this.layout_dialog_confirm(cx);
-                                },
-                            ))),
-                    ),
+                    .when(!folder_path.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .w_full()
+                                .text_size(px(11.0))
+                                .text_color(palette.text_secondary)
+                                .opacity(0.7)
+                                .truncate()
+                                .child(SharedString::from(folder_path)),
+                        )
+                    }),
+            )
+            .child(radio_group(
+                "layout-choice",
+                &choices,
+                selected,
+                true,
+                self.widget_context(cx),
+                |this, index, _window, cx| {
+                    this.layout_dialog_select(LAYOUTS[index].0);
+                    cx.notify();
+                },
+            ))
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .line_height(px(15.0))
+                    .text_color(palette.text_secondary)
+                    .opacity(0.7)
+                    .child(footer_text),
             );
 
-        self.popup_frame(
-            "layout-dialog",
-            (size.0, PopupHeight::FitContent(size.1)),
-            body.into_any_element(),
-            self.layout_enter_at,
-            self.layout_exit_at,
-            cx,
+        dialog(
+            LAYOUT_DIALOG,
+            "How are your projects organized?",
+            520.0,
+            self.widget_context(cx),
+            body,
+            vec![
+                DialogButton::new(
+                    "layout-dialog-cancel",
+                    "Cancel",
+                    ButtonVariant::Soft,
+                    |_this, _window, _cx| {},
+                ),
+                DialogButton::new(
+                    "layout-dialog-ok",
+                    "OK",
+                    ButtonVariant::Primary,
+                    |this: &mut RootView, _window, cx| {
+                        this.layout_dialog_confirm();
+                        cx.notify();
+                    },
+                ),
+            ],
+            |_this, _window, _cx| {},
         )
+        .map(IntoElement::into_any_element)
     }
 
     // ---- Confirm dialog -----------------------------------------------------
 
-    fn render_confirm_dialog(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<RootView>,
-    ) -> impl IntoElement {
-        let theme = self.theme;
-        let size = popup_size(window, (420.0, 230.0), (520.0, 320.0), (480.0, 260.0));
-        let (title, message, confirm_text, danger) = self
-            .confirm
-            .as_ref()
-            .map(|confirm| {
-                (
-                    confirm.title.clone(),
-                    confirm.message.clone(),
-                    confirm.confirm_text.clone(),
-                    confirm.danger,
-                )
-            })
-            .unwrap_or_default();
+    /// The confirm as a vampir dialog, while it is open or fading out.
+    fn render_confirm_dialog(&self, cx: &mut Context<RootView>) -> Option<AnyElement> {
+        let confirm = self.confirm.as_ref()?;
+        let title = confirm.title.clone();
+        let message = confirm.message.clone();
+        let confirm_text = confirm.confirm_text.clone();
+        let variant = if confirm.danger {
+            ButtonVariant::Danger
+        } else {
+            ButtonVariant::Primary
+        };
+        let palette = self.theme.palette();
 
-        let content = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .p(px(18.0))
-            .gap(px(14.0))
-            .child(
-                div()
-                    .text_size(px(18.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme.vm_text_primary)
-                    .child(SharedString::from(title)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_size(px(13.0))
-                    .line_height(px(17.5))
-                    .text_color(theme.vm_text_meta)
-                    .child(SharedString::from(message)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(10.0))
-                    .child(div().w(px(96.0)).child(panel_button(
-                        "confirm-cancel",
-                        "Cancel",
-                        ButtonVariant::Soft,
-                        true,
-                        &theme,
-                        cx,
-                        |this, _w, cx| {
-                            this.request_close_confirm(cx);
-                        },
-                    )))
-                    .child(div().w(px(112.0)).child(panel_button(
-                        "confirm-accept",
-                        &confirm_text,
-                        if danger {
-                            ButtonVariant::Danger
-                        } else {
-                            ButtonVariant::Primary
-                        },
-                        true,
-                        &theme,
-                        cx,
-                        |this, _w, cx| {
-                            this.run_confirm_action(cx);
-                        },
-                    ))),
-            );
+        let body = div()
+            .text_size(px(13.0))
+            .line_height(px(17.5))
+            .text_color(palette.text_secondary)
+            .child(SharedString::from(message));
 
-        self.popup_frame(
-            "confirm-dialog",
-            (size.0, PopupHeight::Fixed(size.1)),
-            content.into_any_element(),
-            self.confirm_enter_at,
-            self.confirm_exit_at,
-            cx,
+        dialog(
+            CONFIRM_DIALOG,
+            &title,
+            460.0,
+            self.widget_context(cx),
+            body,
+            vec![
+                DialogButton::new(
+                    "confirm-cancel",
+                    "Cancel",
+                    ButtonVariant::Soft,
+                    |_this, _window, _cx| {},
+                ),
+                DialogButton::new(
+                    "confirm-accept",
+                    confirm_text,
+                    variant,
+                    |this: &mut RootView, _window, cx| {
+                        this.run_confirm_action(cx);
+                    },
+                ),
+            ],
+            |_this, _window, _cx| {},
         )
+        .map(IntoElement::into_any_element)
     }
 
     // ---- File dialogs --------------------------------------------------------

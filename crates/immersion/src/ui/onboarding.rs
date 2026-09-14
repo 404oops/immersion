@@ -1,13 +1,36 @@
 //! First-run wizard: pick a projects folder, choose its layout, watch the
 //! scan run, then optionally add more folders — repeat until done.
 
-use gpui::{
-    Context, FontWeight, MouseButton, PathPromptOptions, SharedString, Window, div, prelude::*, px,
-};
+use gpui::{Context, FontWeight, PathPromptOptions, SharedString, Window, div, prelude::*, px};
 
 use crate::app::{OnboardingStep, RootView};
 use crate::theme::{MODAL_PANEL_RADIUS, Theme};
 use crate::ui::controls::{ButtonVariant, panel_button};
+use vampir::{Choice, radio_group};
+
+/// The two ways a projects folder can be laid out: the backend's name for
+/// each, the label the user picks, and what it means. The wizard and the
+/// layout dialog offer the same list.
+pub const LAYOUTS: [(&str, &str, &str); 2] = [
+    (
+        "Bundles",
+        "One folder per project",
+        "Each project has its own subfolder or bundle, like .logicx.",
+    ),
+    (
+        "Files",
+        "Loose project files",
+        "Project files like .als or .flp sit directly in the folder.",
+    ),
+];
+
+/// [`LAYOUTS`] as the choices of a radio group.
+pub fn layout_choices() -> Vec<Choice> {
+    LAYOUTS
+        .iter()
+        .map(|(_, title, detail)| Choice::new(*title).detail(*detail))
+        .collect()
+}
 
 impl RootView {
     pub fn render_onboarding(
@@ -83,8 +106,8 @@ impl RootView {
         folder: String,
         cx: &mut Context<RootView>,
     ) -> gpui::AnyElement {
-        let folder_for_bundles = folder.clone();
-        let folder_for_files = folder.clone();
+        let choices = layout_choices();
+        let selected = self.onboarding_layout.min(LAYOUTS.len() - 1);
         div()
             .flex()
             .flex_col()
@@ -97,49 +120,51 @@ impl RootView {
                     .truncate()
                     .child(SharedString::from(folder.clone())),
             )
-            .child(self.layout_card(
-                "onboarding-layout-bundles",
-                "One folder per project",
-                "Each project lives in its own subfolder (an Ableton or Bitwig \
-                 project folder, a Logic bundle, ...).",
-                theme,
-                cx,
-                move |this, cx| {
-                    this.backend
-                        .add_projects_folder(&folder_for_bundles, "Bundles");
-                    this.onboarding = Some(OnboardingStep::Scanning {
-                        folder: folder_for_bundles.clone(),
-                    });
-                    cx.notify();
-                },
-            ))
-            .child(self.layout_card(
-                "onboarding-layout-files",
-                "Loose project files",
-                "Project files sit directly in the folder (a folder full of .als \
-                 or .flp files); every file is its own project.",
-                theme,
-                cx,
-                move |this, cx| {
-                    this.backend.add_projects_folder(&folder_for_files, "Files");
-                    this.onboarding = Some(OnboardingStep::Scanning {
-                        folder: folder_for_files.clone(),
-                    });
-                    cx.notify();
-                },
-            ))
-            .child(div().h(px(30.0)).w(px(120.0)).child(panel_button(
-                "onboarding-layout-back",
-                "Back",
-                ButtonVariant::Soft,
+            .child(radio_group(
+                "onboarding-layout",
+                &choices,
+                selected,
                 true,
-                theme,
-                cx,
-                |this, _w, cx| {
-                    this.onboarding = Some(OnboardingStep::Welcome);
+                self.widget_context(cx),
+                |this, index, _window, cx| {
+                    this.onboarding_layout = index;
                     cx.notify();
                 },
-            )))
+            ))
+            .child(
+                div()
+                    .flex()
+                    .gap(px(10.0))
+                    .child(div().h(px(30.0)).w(px(120.0)).child(panel_button(
+                        "onboarding-layout-back",
+                        "Back",
+                        ButtonVariant::Soft,
+                        true,
+                        theme,
+                        cx,
+                        |this, _w, cx| {
+                            this.onboarding = Some(OnboardingStep::Welcome);
+                            cx.notify();
+                        },
+                    )))
+                    .child(div().flex_1())
+                    .child(div().h(px(30.0)).w(px(140.0)).child(panel_button(
+                        "onboarding-layout-continue",
+                        "Continue",
+                        ButtonVariant::Primary,
+                        true,
+                        theme,
+                        cx,
+                        move |this, _w, cx| {
+                            let layout = LAYOUTS[this.onboarding_layout.min(LAYOUTS.len() - 1)].0;
+                            this.backend.add_projects_folder(&folder, layout);
+                            this.onboarding = Some(OnboardingStep::Scanning {
+                                folder: folder.clone(),
+                            });
+                            cx.notify();
+                        },
+                    ))),
+            )
             .into_any_element()
     }
 
@@ -249,51 +274,6 @@ impl RootView {
                     ))),
             )
             .into_any_element()
-    }
-
-    fn layout_card(
-        &mut self,
-        id: &'static str,
-        title: &'static str,
-        description: &'static str,
-        theme: &Theme,
-        cx: &mut Context<RootView>,
-        on_pick: impl Fn(&mut RootView, &mut Context<RootView>) + 'static,
-    ) -> impl IntoElement {
-        let theme = *theme;
-        div()
-            .id(id)
-            .w_full()
-            .rounded(px(8.0))
-            .bg(theme.row_odd)
-            .border_1()
-            .border_color(theme.node_border)
-            .p(px(12.0))
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .cursor_pointer()
-            .hover(move |style| style.border_color(theme.accent))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _event, _window, cx| {
-                    on_pick(this, cx);
-                }),
-            )
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme.text_primary)
-                    .child(title),
-            )
-            .child(
-                div()
-                    .text_size(px(12.0))
-                    .line_height(px(16.0))
-                    .text_color(theme.text_muted)
-                    .child(description),
-            )
     }
 
     /// Folder picker used by the wizard: continues to the layout step.

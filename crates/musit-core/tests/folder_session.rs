@@ -59,7 +59,9 @@ fn folder_session_survives_removal_and_re_adding() {
 
     backend.rename_projects_folder(0, "Late Night Beats");
     backend.set_theme_hue(212.0);
-    // The hue write is debounced; shutdown flushes it.
+    // Saturation is app-wide, not the folder's: it goes to the app config.
+    backend.set_theme_saturation(0.6);
+    // The theme writes are debounced; shutdown flushes them.
     backend.flush_pending_persist();
 
     assert_eq!(
@@ -88,6 +90,11 @@ fn folder_session_survives_removal_and_re_adding() {
     assert!(
         backend.folder_tabs().is_empty(),
         "the removed folder does not come back on its own"
+    );
+    assert_eq!(
+        backend.theme_saturation(),
+        0.6,
+        "saturation comes back from the app config"
     );
     // A different colour is in play before the folder is re-added.
     backend.set_theme_hue(30.0);

@@ -4,17 +4,18 @@
 
 use chrono::{Datelike, Local, NaiveDateTime};
 use gpui::{
-    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, ObjectFit, Rgba, SharedString,
-    Window, canvas, div, img, linear_color_stop, linear_gradient, prelude::*, px, relative,
-    uniform_list,
+    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, ObjectFit, SharedString, Window,
+    canvas, div, img, prelude::*, px, relative, uniform_list,
 };
 
 use crate::app::{ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView};
 use crate::ui::controls::{
-    ButtonVariant, CONTROL_HEIGHT, CONTROL_RADIUS, ScrollAxis, caption, lerp_rgba, panel_button,
-    scrollbar, text_field,
+    ButtonVariant, CONTROL_HEIGHT, CONTROL_RADIUS, DETAILS_SPLIT, FOLDER_TABS, LIST_SPLIT,
+    ScrollAxis, caption, lerp_rgba, panel_button, scrollbar, text_field,
 };
 use crate::ui::lighting;
+use vampir::color::with_alpha;
+use vampir::{Tab, split_area, split_handle, tab_bar};
 
 /// Uniform row pitch: name and file line plus padding; rows touch and are
 /// separated by a hairline rather than by spacing.
@@ -113,45 +114,9 @@ impl RootView {
             .child(
                 div()
                     .flex()
-                    .items_start()
+                    .items_center()
                     .gap(px(12.0))
-                    .child(
-                        // One row however many folders there are: a segmented
-                        // control that hugs its segments and scrolls sideways
-                        // once they outgrow the header, instead of wrapping and
-                        // pushing the panels down.
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .id("folder-tabs-scroll")
-                                    .flex_none()
-                                    .max_w_full()
-                                    .h(px(TAB_HEIGHT))
-                                    .p(px(2.0))
-                                    .rounded(px(CONTROL_RADIUS + 1.0))
-                                    .bg(self.segment_track_color())
-                                    .shadow(lighting::recessed(theme.is_dark_mode))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(2.0))
-                                    .overflow_x_scroll()
-                                    .track_scroll(&self.tabs_scroll)
-                                    .children(self.folder_tab_items(cx)),
-                            )
-                            .children(self.tab_strip_fades())
-                            .child(scrollbar(
-                                "folder-tabs",
-                                &self.tabs_scroll.clone(),
-                                ScrollAxis::Horizontal,
-                                &theme,
-                                cx,
-                            )),
-                    )
+                    .child(self.render_folder_tabs(cx))
                     .child(self.render_add_folder_button(cx))
                     .child(
                         // Tab height, so the three header controls line up on
@@ -204,6 +169,10 @@ impl RootView {
                         .absolute()
                         .size_full()
                     })
+                    // The two dividers read their position as a fraction of
+                    // this same area, so both probes go here.
+                    .child(split_area(LIST_SPLIT, cx))
+                    .child(split_area(DETAILS_SPLIT, cx))
                     // Top row: project list | graph, split on a draggable
                     // divider (the list keeps `list_fraction` of the width).
                     .child(
@@ -222,35 +191,25 @@ impl RootView {
                                     .h_full()
                                     .child(self.render_projects_panel(window, cx)),
                             )
+                            // The divider is the toolkit's; it reports where
+                            // it was dragged to as a fraction of the split
+                            // area (see `RootView::track_dragged`). Its grab
+                            // area is narrower than the gap, so it is centred
+                            // in it.
                             .child(
                                 div()
-                                    .id("list-split-handle")
                                     .w(px(PANE_GAP))
                                     .h_full()
                                     .flex_none()
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .cursor(gpui::CursorStyle::ResizeColumn)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(|this, _event, _window, cx| {
-                                            this.list_split_dragging = true;
-                                            cx.notify();
-                                        }),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(6.0))
-                                            .h(px(6.0))
-                                            .rounded(px(3.0))
-                                            .bg(theme.text_secondary)
-                                            .opacity(if self.list_split_dragging {
-                                                1.0
-                                            } else {
-                                                0.5
-                                            }),
-                                    ),
+                                    .child(split_handle(
+                                        LIST_SPLIT,
+                                        self.list_fraction,
+                                        true,
+                                        self.widget_context(cx),
+                                    )),
                             )
                             .child(
                                 div()
@@ -260,33 +219,23 @@ impl RootView {
                                     .child(self.render_graph_panel(cx)),
                             ),
                     )
-                    // Split handle: same thickness as the list|graph one, so
-                    // the three panels sit an even distance apart.
+                    // Split handle: same gap as the list|graph one, so the
+                    // three panels sit an even distance apart. Its fraction
+                    // is the top row's share, measured from the top.
                     .child(
                         div()
-                            .id("split-handle")
                             .h(px(PANE_GAP))
                             .w_full()
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor(gpui::CursorStyle::ResizeRow)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _event, _window, cx| {
-                                    this.split_dragging = true;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .w(px(6.0))
-                                    .h(px(6.0))
-                                    .rounded(px(3.0))
-                                    .bg(theme.text_secondary)
-                                    .opacity(if self.split_dragging { 1.0 } else { 0.5 }),
-                            ),
+                            .child(split_handle(
+                                DETAILS_SPLIT,
+                                1.0 - self.details_fraction,
+                                false,
+                                self.widget_context(cx),
+                            )),
                     )
                     // Details panel (blame, description, notes).
                     .child(
@@ -299,258 +248,159 @@ impl RootView {
             )
     }
 
-    /// Track of the folder segmented control: a shade off the window
-    /// background, so the raised active segment reads as the selection.
-    fn segment_track_color(&self) -> Rgba {
-        if self.theme.is_dark_mode {
-            self.theme.row_odd
-        } else {
-            self.theme.row_even
-        }
-    }
-
-    /// Fill of the active segment: white in light mode, a lighter tint in
-    /// dark mode.
-    fn segment_fill_color(&self) -> Rgba {
-        if self.theme.is_dark_mode {
-            self.theme.button_soft_fill
-        } else {
-            self.theme.vm_panel
-        }
-    }
-
-    fn folder_tab_items(&mut self, cx: &mut Context<RootView>) -> Vec<gpui::AnyElement> {
+    /// The folder tabs: the toolkit's tab bar, with each folder's scan
+    /// status as its badge and a close on the active tab. Pressing selects,
+    /// dragging reorders (the drop arrives at `RootView::tabs_reordered`),
+    /// and a double-click renames inline, which the bar has no gesture of
+    /// its own for: the press is read here, after the bar has seen it, and
+    /// the name field is laid over the tab.
+    fn render_folder_tabs(&mut self, cx: &mut Context<RootView>) -> impl IntoElement {
         let theme = self.theme;
-        let segment_fill = self.segment_fill_color();
-        let tabs = self.backend.folder_tabs();
-        let active = self.backend.active_folder_index();
-        let renaming = self.renaming_tab;
-        let dragged_tab = self
-            .tab_drag
-            .as_ref()
-            .filter(|drag| drag.moved)
-            .map(|drag| drag.index);
-        // Stale bounds would misplace a drag that starts before the strip is
-        // drawn again; they are refilled by the canvases below.
-        self.tab_bounds.truncate(tabs.len());
-
-        tabs.iter()
+        let folders = self.backend.folder_tabs();
+        let active = usize::try_from(self.backend.active_folder_index()).unwrap_or(0);
+        let tabs: Vec<Tab> = folders
+            .iter()
             .enumerate()
-            .map(|(index, tab)| {
-                let selected = index as i32 == active;
-                let is_renaming = renaming == Some(index as i32);
-                let dragging = dragged_tab == Some(index as i32);
-                let label = tab.name.clone();
-                let confirm_name = tab.name.clone();
-                let status = tab.status.clone();
-                let tab_path = tab.path.clone();
-                let tab_name = tab.name.clone();
-                div()
-                    .id(ElementId::NamedInteger("folder-tab".into(), index as u64))
-                    .h(px(TAB_HEIGHT - 4.0))
-                    .flex_none()
-                    .max_w(px(260.0))
-                    .pl(px(10.0))
-                    .pr(px(if selected { 4.0 } else { 10.0 }))
-                    .rounded(px(CONTROL_RADIUS - 1.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .cursor_pointer()
-                    // Report where this tab landed, so dragging one knows
-                    // when the pointer has reached a neighbour.
-                    .child({
-                        let weak = cx.entity().downgrade();
-                        canvas(
-                            move |bounds, _window, cx| {
-                                if let Some(root) = weak.upgrade() {
-                                    root.update(cx, |root, _| {
-                                        if root.tab_bounds.len() <= index {
-                                            root.tab_bounds.resize(index + 1, bounds);
-                                        }
-                                        root.tab_bounds[index] = bounds;
-                                    });
-                                }
-                            },
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full()
-                    })
-                    // The active segment is raised out of the track.
-                    .when(selected, |el| {
-                        el.bg(lighting::lit(segment_fill, 0.05))
-                            .shadow(lighting::raised(theme.is_dark_mode))
-                    })
-                    // The tab under the pointer lifts while it is dragged.
-                    .when(dragging, |el| {
-                        el.bg(lighting::lit(segment_fill, 0.1))
-                            .shadow(lighting::raised(theme.is_dark_mode))
-                            .cursor(gpui::CursorStyle::ClosedHand)
-                    })
-                    .when(!selected, |el| {
-                        el.hover(move |style| {
-                            style.bg(Rgba {
-                                a: 0.5,
-                                ..segment_fill
-                            })
-                        })
-                    })
-                    // A press arms a drag: moving sideways rearranges the
-                    // tabs, releasing without moving switches to this one
-                    // (see `global_mouse_up`). Double-click renames inline.
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            if this.renaming_tab == Some(index as i32) {
-                                return;
-                            }
-                            if event.click_count >= 2 {
-                                this.tab_drag = None;
-                                this.renaming_tab = Some(index as i32);
-                                let name = tab_name.clone();
-                                this.tab_name_input
-                                    .update(cx, |input, cx| input.set_text(&name, cx));
-                                let focus =
-                                    this.tab_name_input.read(cx).focus_handle.clone();
-                                window.focus(&focus, cx);
-                            } else {
-                                this.renaming_tab = None;
-                                this.tab_drag = Some(crate::app::TabDrag {
-                                    index: index as i32,
-                                    start_mouse: event.position,
-                                    moved: false,
-                                });
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .when(is_renaming, |el| {
-                        el.child(
-                            div()
-                                .w(px(150.0))
-                                .text_size(px(12.0))
-                                .child(self.tab_name_input.clone()),
-                        )
-                    })
-                    .when(!is_renaming, |el| {
-                        el.child(
-                            div()
-                                .text_size(px(12.5))
-                                .font_weight(if selected {
-                                    FontWeight::MEDIUM
-                                } else {
-                                    FontWeight::NORMAL
-                                })
-                                .text_color(if selected {
-                                    theme.text_primary
-                                } else {
-                                    theme.text_secondary
-                                })
-                                .whitespace_nowrap()
-                                .child(SharedString::from(label)),
-                        )
-                        .when(!status.is_empty(), |el| {
-                            el.child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(theme.text_muted)
-                                    .whitespace_nowrap()
-                                    .child(SharedString::from(status)),
-                            )
-                        })
-                    })
-                    // Close: stop watching this folder (history stays on disk).
-                    // Only the active segment offers it.
-                    .when(selected, |el| el.child(
-                        div()
-                            .id(ElementId::NamedInteger("folder-tab-close".into(), index as u64))
-                            .w(px(18.0))
-                            .h(px(18.0))
-                            .rounded(px(3.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(px(10.0))
-                            .text_color(theme.text_muted)
-                            .hover(move |style| style.bg(theme.button_soft_fill))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
-                                    cx.stop_propagation();
-                                    this.take_modal_focus(window, cx);
-                                    this.confirm_enter_at = Some(std::time::Instant::now());
-                                    this.confirm_exit_at = None;
-                                    this.confirm = Some(ConfirmState {
-                                        title: "Remove Projects Folder".to_string(),
-                                        message: if this.show_dev_details() {
-                                            format!(
-                                                "Stop watching and versioning {tab_path}?\n\nExisting version history (.musit folders) is not deleted."
-                                            )
-                                        } else {
-                                            format!(
-                                                "Stop watching {confirm_name} for changes?\n\nNothing is deleted — its saved versions stay, and you can add the folder back later."
-                                            )
-                                        },
-                                        confirm_text: "Remove".to_string(),
-                                        danger: true,
-                                        action: ConfirmAction::RemoveFolder(index as i32),
-                                    });
-                                    cx.notify();
-                                }),
-                            )
-                            .child("\u{2715}"),
-                    ))
-                    .into_any_element()
+            .map(|(index, folder)| {
+                // Keyed by path, so two folders of one name keep their own
+                // slide records.
+                let mut tab = Tab::new(folder.name.clone()).id(folder.path.clone());
+                if !folder.status.is_empty() {
+                    tab = tab.badge(folder.status.clone());
+                }
+                // Close (stop watching the folder; history stays on disk) is
+                // offered on the active tab only.
+                if index == active {
+                    tab = tab.closable();
+                }
+                tab
             })
-            .collect()
-    }
-
-    /// Fades at whichever end of the tab strip has more tabs beyond it, so a
-    /// clipped tab reads as "there is more" rather than as a broken layout.
-    /// Plain divs: no id, no handlers, so clicks land on the tabs underneath.
-    fn tab_strip_fades(&self) -> Vec<gpui::AnyElement> {
-        const FADE_WIDTH: f32 = 40.0;
-
-        let scrolled = -f32::from(self.tabs_scroll.offset().x);
-        let max_scroll = f32::from(self.tabs_scroll.max_offset().x);
-        let opaque: gpui::Hsla = self.segment_track_color().into();
-        let clear = opaque.opacity(0.0);
-
-        let mut fades = Vec::new();
-        if scrolled > 0.5 {
-            fades.push(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(FADE_WIDTH))
-                    .bg(linear_gradient(
-                        90.0,
-                        linear_color_stop(opaque, 0.0),
-                        linear_color_stop(clear, 1.0),
-                    ))
-                    .into_any_element(),
-            );
-        }
-        if max_scroll - scrolled > 0.5 {
-            fades.push(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .right_0()
-                    .w(px(FADE_WIDTH))
-                    .bg(linear_gradient(
-                        90.0,
-                        linear_color_stop(clear, 0.0),
-                        linear_color_stop(opaque, 1.0),
-                    ))
-                    .into_any_element(),
-            );
-        }
-        fades
+            .collect();
+        // Where the tab being renamed sits, relative to this row, from the
+        // slots the bar recorded last frame.
+        let renaming = self.renaming_tab.and_then(|index| {
+            let slot = self
+                .controls
+                .slot(FOLDER_TABS, usize::try_from(index).ok()?)?;
+            let row = self.controls.bounds((FOLDER_TABS, "row"))?;
+            Some((slot, row))
+        });
+        let weak = cx.entity().downgrade();
+        div()
+            .flex_1()
+            .min_w_0()
+            .relative()
+            .flex()
+            .items_center()
+            // Where this row is, so the rename field can be laid over the
+            // tab it renames.
+            .child(
+                canvas(
+                    move |bounds, _window, cx| {
+                        if let Some(root) = weak.upgrade() {
+                            root.update(cx, |root, _cx| {
+                                root.controls.record_bounds((FOLDER_TABS, "row"), bounds);
+                            });
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            // The second press of a double-click: the bar has just armed a
+            // reorder from it, which is let go, and the name field takes over.
+            // With no drag left, the bar's release does not count as a click,
+            // so it neither re-selects the tab nor takes the keyboard back.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    if event.click_count < 2 {
+                        return;
+                    }
+                    let Some(index) = this.controls.tab_at(FOLDER_TABS, event.position) else {
+                        return;
+                    };
+                    let Some(name) = this
+                        .backend
+                        .folder_tabs()
+                        .get(index)
+                        .map(|folder| folder.name.clone())
+                    else {
+                        return;
+                    };
+                    this.controls.end_drag();
+                    this.renaming_tab = Some(index as i32);
+                    this.tab_name_input
+                        .update(cx, |input, cx| input.set_text(&name, cx));
+                    let focus = this.tab_name_input.read(cx).focus_handle.clone();
+                    window.focus(&focus, cx);
+                    cx.notify();
+                }),
+            )
+            .child(tab_bar(
+                FOLDER_TABS,
+                &tabs,
+                active,
+                self.widget_context(cx),
+                |this, index, _window, cx| {
+                    // A click on another tab ends a rename.
+                    if this
+                        .renaming_tab
+                        .is_some_and(|renaming| renaming != index as i32)
+                    {
+                        this.renaming_tab = None;
+                    }
+                    this.pending_select_latest = true;
+                    this.backend.set_active_folder_index(index as i32);
+                    cx.notify();
+                },
+                |this, index, _window, cx| {
+                    let Some(folder) = this.backend.folder_tabs().get(index).cloned() else {
+                        return;
+                    };
+                    let message = if this.show_dev_details() {
+                        format!(
+                            "Stop watching and versioning {}?\n\nExisting version history (.musit folders) is not deleted.",
+                            folder.path
+                        )
+                    } else {
+                        format!(
+                            "Stop watching {} for changes?\n\nNothing is deleted — its saved versions stay, and you can add the folder back later.",
+                            folder.name
+                        )
+                    };
+                    this.open_confirm(ConfirmState {
+                        title: "Remove Projects Folder".to_string(),
+                        message,
+                        confirm_text: "Remove".to_string(),
+                        danger: true,
+                        action: ConfirmAction::RemoveFolder(index as i32),
+                    });
+                    cx.notify();
+                },
+            ))
+            // The name field, over the tab it renames. Enter commits (see
+            // `RootView::new`), Escape cancels (see `RootView::dismiss`).
+            .when_some(renaming, |el, (slot, row)| {
+                el.child(
+                    div()
+                        .absolute()
+                        .left(px(f32::from(slot.left()) - f32::from(row.left())))
+                        .top(px(f32::from(slot.top()) - f32::from(row.top())))
+                        .w(px(f32::from(slot.size.width).max(150.0)))
+                        .h(px(f32::from(slot.size.height)))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(CONTROL_RADIUS))
+                        .bg(theme.input_surface)
+                        .border_1()
+                        .border_color(theme.input_border_accent)
+                        .text_size(px(12.0))
+                        .child(self.tab_name_input.clone()),
+                )
+            })
     }
 
     /// The "+" that adds another projects folder. It sits outside the tab
@@ -745,12 +595,12 @@ impl RootView {
                                             lerp_rgba(theme.text_primary, on_accent, weight);
                                         let date_color = lerp_rgba(
                                             theme.text_muted,
-                                            Rgba { a: 0.8, ..on_accent },
+                                            with_alpha(on_accent, 0.8),
                                             weight,
                                         );
                                         let file_color = lerp_rgba(
                                             theme.text_secondary,
-                                            Rgba { a: 0.85, ..on_accent },
+                                            with_alpha(on_accent, 0.85),
                                             weight,
                                         );
                                         let tile_fill = lerp_rgba(
@@ -913,7 +763,7 @@ impl RootView {
                         "project-list",
                         &self.project_list_scroll.0.borrow().base_handle.clone(),
                         ScrollAxis::Vertical,
-                        &theme,
+                        self,
                         cx,
                     ))
                     .when(!has_projects, |el| {
@@ -983,7 +833,7 @@ impl RootView {
                 "activity",
                 &self.activity_scroll.0.borrow().base_handle.clone(),
                 ScrollAxis::Vertical,
-                &theme,
+                self,
                 cx,
             ))
     }

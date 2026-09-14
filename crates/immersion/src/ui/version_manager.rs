@@ -16,6 +16,7 @@ use crate::ui::controls::{
 use crate::ui::graph_layout::{self, GraphNode, LABEL_FONT_PX, NODE_HALF_H, SUB_LABEL_FONT_PX};
 use crate::ui::lighting;
 use crate::ui::modals::delete_version_confirm;
+use vampir::color::{WHITE, argb};
 
 impl RootView {
     pub(crate) fn render_graph_panel(&mut self, cx: &mut Context<RootView>) -> impl IntoElement {
@@ -396,14 +397,14 @@ impl RootView {
                             "graph-v",
                             &self.graph_scroll.clone(),
                             ScrollAxis::Vertical,
-                            &theme,
+                            self,
                             cx,
                         ))
                         .child(scrollbar(
                             "graph-h",
                             &self.graph_scroll.clone(),
                             ScrollAxis::Horizontal,
-                            &theme,
+                            self,
                             cx,
                         ))
                         // Zoom controls (also: cmd/ctrl + wheel). The cluster
@@ -528,13 +529,8 @@ impl RootView {
         // zoomed out.
         let text_zoom = zoom.clamp(0.75, 1.6);
 
-        let white: Rgba = gpui::white().into();
-        let light = Rgba {
-            r: 0xee as f32 / 255.0,
-            g: 0xf2 as f32 / 255.0,
-            b: 1.0,
-            a: 1.0,
-        };
+        let white: Rgba = WHITE;
+        let light = argb(0xffee_f2ff);
         let fill_color = if current {
             theme.vm_node_current_fill
         } else {
@@ -967,11 +963,8 @@ impl RootView {
                                         has_selection,
                                         &theme,
                                         cx,
-                                        |this, w, cx| {
-                                            this.take_modal_focus(w, cx);
-                                            this.confirm_enter_at = Some(std::time::Instant::now());
-                                            this.confirm_exit_at = None;
-                                            this.confirm = Some(delete_version_confirm(
+                                        |this, _w, cx| {
+                                            this.open_confirm(delete_version_confirm(
                                                 &this.vm_selected_id,
                                                 this.show_dev_details(),
                                             ));

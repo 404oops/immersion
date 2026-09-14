@@ -1,19 +1,31 @@
 //! OKLCH-based theme palette.
 //!
-//! Every colour is derived from a single base hue in degrees plus a
-//! light/dark flag. The maths lives in the vampir toolkit; this is the
+//! Every colour is derived from a single base hue in degrees, a saturation
+//! multiplier on chroma (0 is greyscale, 1 the standard palette, 2 vivid)
+//! and a light/dark flag. The maths lives in the vampir toolkit; this is the
 //! app's own, larger set of roles built on top of it, and the mapping down
 //! to the twenty-odd colours the toolkit's controls actually paint.
 
 use gpui::Rgba;
 
-pub use vampir::color::{argb, mix, oklch_to_color};
+pub use vampir::color::{argb, mix, oklch_to_color, with_alpha};
+pub use vampir::{DEFAULT_SATURATION, MAX_SATURATION};
 
 const WHITE: Rgba = vampir::color::WHITE;
 const TRANSPARENT: Rgba = vampir::color::TRANSPARENT;
 
 fn clamp(v: f64, min_v: f64, max_v: f64) -> f64 {
     v.clamp(min_v, max_v)
+}
+
+/// Saturation as the palette accepts it: clamped to the toolkit's range,
+/// with a NaN (a hand-edited config) falling back to the default.
+pub fn clamp_saturation(saturation: f64) -> f64 {
+    if saturation.is_nan() {
+        DEFAULT_SATURATION
+    } else {
+        saturation.clamp(0.0, MAX_SATURATION)
+    }
 }
 
 /// Modal animation — opacity fade only (GPUI has no transform scale). The
@@ -31,10 +43,14 @@ pub const MONO_FONT: &str = if cfg!(target_os = "macos") {
     "DejaVu Sans Mono"
 };
 
-/// Fully evaluated theme palette; recompute when hue or dark mode changes.
+/// Fully evaluated theme palette; recompute when hue, saturation or dark
+/// mode changes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     pub hue: f64,
+    /// Chroma multiplier, `0.0..=MAX_SATURATION`; `DEFAULT_SATURATION` is
+    /// the palette as originally designed.
+    pub saturation: f64,
     pub is_dark_mode: bool,
 
     pub app_background: Rgba,
@@ -114,7 +130,12 @@ pub struct Theme {
 }
 
 impl Theme {
-    pub fn compute(hue: f64, dark: bool) -> Self {
+    pub fn compute(hue: f64, saturation: f64, dark: bool) -> Self {
+        let saturation = clamp_saturation(saturation);
+        // Every chroma in the palette is scaled by the saturation, the fixed
+        // hues (success green, danger red) included, so a greyscale theme is
+        // grey throughout, as the toolkit's own palette is.
+        let oklch_to_color = |l: f64, c: f64, h: f64| oklch_to_color(l, c * saturation, h);
         // Pastel helper: keeps chroma in a soft range (capped at 0.16).
         let pastel = |l: f64, c: f64, dh: f64| oklch_to_color(l, clamp(c, 0.0, 0.16), hue + dh);
         let pick =
@@ -145,6 +166,7 @@ impl Theme {
 
         Self {
             hue,
+            saturation,
             is_dark_mode: dark,
 
             app_background: pick(pastel(0.23, 0.015, -4.0), pastel(0.97, 0.010, -4.0)),
@@ -187,10 +209,7 @@ impl Theme {
             modal_option_fill_hover: pick(argb(0x1eff_ffff), argb(0x1400_0000)),
             // Accent wash so the picked option reads at a glance, not just by
             // its border.
-            modal_option_selected_fill: pick(
-                Rgba { a: 0.13, ..accent },
-                Rgba { a: 0.11, ..accent },
-            ),
+            modal_option_selected_fill: pick(with_alpha(accent, 0.13), with_alpha(accent, 0.11)),
             modal_selected_border: pick(pastel(0.72, 0.070, 0.0), pastel(0.64, 0.070, 0.0)),
             node_border: pick(pastel(0.58, 0.040, 0.0), pastel(0.76, 0.035, 0.0)),
             graph_link,
@@ -241,16 +260,18 @@ impl Theme {
     /// blue would pass through green, which reads as the theme changing to
     /// something else mid-transition rather than settling.
     /// Palette part-way through a fade. Between two hues in the same colour
-    /// scheme the palette is re-derived from the interpolated hue, so the
-    /// fade travels around the colour wheel and never dips through the grey
-    /// that a straight sRGB mix of, say, purple and green passes through.
-    /// A scheme change has no hue path and mixes colour by colour instead.
+    /// scheme the palette is re-derived from the interpolated hue and
+    /// saturation, so the fade travels around the colour wheel and never
+    /// dips through the grey that a straight sRGB mix of, say, purple and
+    /// green passes through. A scheme change has no hue path and mixes
+    /// colour by colour instead.
     pub fn blend(from: &Theme, to: &Theme, t: f32) -> Theme {
         let t = t.clamp(0.0, 1.0);
         if from.is_dark_mode == to.is_dark_mode {
             let delta = (to.hue - from.hue + 540.0).rem_euclid(360.0) - 180.0;
             let hue = (from.hue + delta * t as f64).rem_euclid(360.0);
-            Theme::compute(hue, to.is_dark_mode)
+            let saturation = from.saturation + (to.saturation - from.saturation) * t as f64;
+            Theme::compute(hue, saturation, to.is_dark_mode)
         } else {
             Theme::lerp(from, to, t)
         }
@@ -265,6 +286,7 @@ impl Theme {
                 let delta = (to.hue - from.hue + 540.0).rem_euclid(360.0) - 180.0;
                 (from.hue + delta * t as f64).rem_euclid(360.0)
             },
+            saturation: from.saturation + (to.saturation - from.saturation) * t as f64,
             is_dark_mode: if t < 0.5 {
                 from.is_dark_mode
             } else {
@@ -367,6 +389,7 @@ impl Theme {
         vampir::Palette {
             is_dark: self.is_dark_mode,
             accent: self.accent,
+            backdrop: self.app_background,
 
             text_primary: self.text_primary,
             text_secondary: self.text_secondary,
@@ -401,22 +424,27 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vampir::color::relative_luminance;
+    use vampir::color::{channels, relative_luminance};
 
     fn hex(c: Rgba) -> String {
+        let [r, g, b, _] = channels(c);
         format!(
             "#{:02x}{:02x}{:02x}",
-            (c.r * 255.0).round() as u8,
-            (c.g * 255.0).round() as u8,
-            (c.b * 255.0).round() as u8
+            (r * 255.0).round() as u8,
+            (g * 255.0).round() as u8,
+            (b * 255.0).round() as u8
         )
+    }
+
+    fn alpha(c: Rgba) -> f32 {
+        channels(c)[3]
     }
 
     // Known-good OKLCH -> sRGB reference values at hue=280 (the default) —
     // guards the palette derivation against regressions.
     #[test]
     fn oklch_matches_reference() {
-        let t = Theme::compute(280.0, true);
+        let t = Theme::compute(280.0, DEFAULT_SATURATION, true);
         // pastel(0.23, 0.015, -4.0) at hue 280 => oklch(0.23, 0.015, 276)
         assert_eq!(
             hex(t.app_background),
@@ -424,16 +452,47 @@ mod tests {
         );
         // success is hue-independent
         assert_eq!(hex(t.success), hex(oklch_to_color(0.67, 0.16, 145.0)));
-        let light = Theme::compute(280.0, false);
+        let light = Theme::compute(280.0, DEFAULT_SATURATION, false);
         assert_eq!(hex(light.input_surface), "#ffffff");
-        assert!((light.modal_scrim.a - 0x55 as f32 / 255.0).abs() < 1e-6);
-        assert!((t.modal_scrim.a - 0x80 as f32 / 255.0).abs() < 1e-6);
+        assert!((alpha(light.modal_scrim) - 0x55 as f32 / 255.0).abs() < 1e-6);
+        assert!((alpha(t.modal_scrim) - 0x80 as f32 / 255.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn saturation_scales_chroma() {
+        // Zero saturation is grey in every role, fixed hues included.
+        let grey = Theme::compute(280.0, 0.0, true);
+        for c in [
+            grey.accent,
+            grey.app_background,
+            grey.success,
+            grey.button_danger_fill,
+        ] {
+            let [r, g, b, _] = channels(c);
+            assert!((r - g).abs() < 1e-3 && (g - b).abs() < 1e-3, "{}", hex(c));
+        }
+        // Full saturation is the palette as designed.
+        assert_eq!(
+            hex(Theme::compute(280.0, 1.0, true).accent),
+            hex(oklch_to_color(0.78, 0.105, 280.0))
+        );
+        // Out-of-range and NaN values are tamed rather than trusted.
+        assert_eq!(Theme::compute(280.0, 9.0, true).saturation, MAX_SATURATION);
+        assert_eq!(Theme::compute(280.0, -1.0, true).saturation, 0.0);
+        assert_eq!(
+            Theme::compute(280.0, f64::NAN, true).saturation,
+            DEFAULT_SATURATION
+        );
+        // A blend within one scheme walks saturation linearly.
+        let from = Theme::compute(280.0, 0.0, true);
+        let to = Theme::compute(280.0, 2.0, true);
+        assert!((Theme::blend(&from, &to, 0.5).saturation - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn luminance_dark_check() {
-        let dark = Theme::compute(280.0, true);
-        let light = Theme::compute(280.0, false);
+        let dark = Theme::compute(280.0, DEFAULT_SATURATION, true);
+        let light = Theme::compute(280.0, DEFAULT_SATURATION, false);
         assert!(relative_luminance(dark.app_background) < relative_luminance(dark.text_primary));
         assert!(relative_luminance(light.app_background) > relative_luminance(light.text_primary));
     }

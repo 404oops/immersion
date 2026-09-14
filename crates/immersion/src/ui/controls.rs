@@ -6,15 +6,16 @@
 //! the view code keeps passing the theme it already has.
 //!
 //! Anything with an `impl RootView` block below is app-specific: the combo
-//! that knows which of this window's pop-ups opens upward, and the hue
-//! slider that is wired to the backend's own setting.
+//! and the scrollbar, which read this window's control state, and the hue
+//! and saturation sliders that are wired to the backend's own settings.
 
 use gpui::{Context, ElementId, Entity, ScrollHandle, Window, prelude::*};
 
 use crate::app::RootView;
 use crate::theme::Theme;
 
-pub use vampir::controls::{ButtonVariant, CONTROL_HEIGHT, CONTROL_RADIUS, ComboDirection};
+use vampir::controls::WidgetContext;
+pub use vampir::controls::{ButtonVariant, CONTROL_HEIGHT, CONTROL_RADIUS};
 pub use vampir::easing::{ease_out_cubic, modal_opacity};
 pub use vampir::scroll::ScrollAxis;
 pub use vampir::text_input::TextInput;
@@ -47,7 +48,14 @@ pub fn themed_switch(
     cx: &mut Context<RootView>,
     on_toggle: impl Fn(&mut RootView, bool, &mut Window, &mut Context<RootView>) + 'static,
 ) -> impl IntoElement {
-    vampir::controls::switch(id, checked, enabled, theme.palette(), view, cx, on_toggle)
+    vampir::controls::switch(
+        id,
+        checked,
+        None,
+        enabled,
+        WidgetContext::new(theme.palette(), view, cx),
+        on_toggle,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -79,7 +87,7 @@ pub fn text_field(
     input: &Entity<TextInput>,
     theme: &Theme,
     window: &Window,
-    cx: &Context<RootView>,
+    cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     vampir::controls::text_field(input, theme.palette(), window, cx)
 }
@@ -90,26 +98,32 @@ pub fn text_area(
     enabled: bool,
     theme: &Theme,
     window: &Window,
-    cx: &Context<RootView>,
+    cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     vampir::controls::text_area(input, height, enabled, theme.palette(), window, cx)
 }
 
+/// Scrollbar over `handle`. The bar fades with the host's control state,
+/// so it takes the view rather than just its theme.
 pub fn scrollbar(
     id: &'static str,
     handle: &ScrollHandle,
     axis: ScrollAxis,
-    theme: &Theme,
+    view: &RootView,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    vampir::controls::scrollbar(id, handle, axis, theme.palette(), cx)
+    vampir::controls::scrollbar(
+        id,
+        handle,
+        axis,
+        WidgetContext::new(view.theme.palette(), view, cx),
+    )
 }
 
 impl RootView {
-    /// Pop-up button and its list.
-    ///
-    /// The main-file picker sits a few pixels above the bottom of the
-    /// window, so its list opens upward; everything else has room below.
+    /// Pop-up button and its list. The list places itself, opening upward
+    /// when there is no room below (the main-file picker sits a few pixels
+    /// above the bottom of the window).
     pub fn render_combo(
         &self,
         id: &'static str,
@@ -119,20 +133,12 @@ impl RootView {
         cx: &mut Context<RootView>,
         on_select: impl Fn(&mut RootView, usize, &mut Window, &mut Context<RootView>) + 'static,
     ) -> impl IntoElement {
-        let direction = if id == "primary-file" {
-            ComboDirection::Up
-        } else {
-            ComboDirection::Down
-        };
         vampir::controls::combo(
             id,
             current_index,
             options,
             width,
-            direction,
-            self.theme.palette(),
-            self,
-            cx,
+            WidgetContext::new(self.theme.palette(), self, cx),
             on_select,
         )
     }
@@ -142,12 +148,44 @@ impl RootView {
         vampir::swatch::hue_slider(
             HUE_SLIDER,
             self.backend.theme_hue(),
-            self.theme.palette(),
-            cx,
+            WidgetContext::new(self.theme.palette(), self, cx),
         )
+    }
+
+    /// Theme saturation slider, wired to the backend's stored saturation.
+    pub fn render_saturation_slider(&self, cx: &mut Context<RootView>) -> impl IntoElement {
+        vampir::swatch::saturation_slider(
+            SATURATION_SLIDER,
+            self.backend.theme_saturation(),
+            WidgetContext::new(self.theme.palette(), self, cx),
+        )
+    }
+}
+
+impl RootView {
+    /// The palette, view and context every animated vampir control takes.
+    pub fn widget_context<'v, 'c, 'app>(
+        &'v self,
+        cx: &'c mut Context<'app, RootView>,
+    ) -> WidgetContext<'v, 'c, 'app, RootView> {
+        WidgetContext::new(self.theme.palette(), self, cx)
     }
 }
 
 /// The hue slider's track id, shared between the element and the drag
 /// handler that turns a position back into degrees.
 pub const HUE_SLIDER: &str = "hue-slider";
+/// The saturation slider's track id; its position arrives at `track_dragged`
+/// as a 0..=1 fraction of `MAX_SATURATION`.
+pub const SATURATION_SLIDER: &str = "saturation-slider";
+/// The list|graph divider: a vampir split handle whose position arrives at
+/// `track_dragged` as `x`, a fraction of the split area's width.
+pub const LIST_SPLIT: &str = "list-split";
+/// The top-row|details divider; its position arrives as `y`.
+pub const DETAILS_SPLIT: &str = "details-split";
+/// The folder tab bar.
+pub const FOLDER_TABS: &str = "folder-tabs";
+/// The projects-folder layout dialog and the confirm dialog: one vampir
+/// dialog is open at a time, and these are the ids it is opened under.
+pub const LAYOUT_DIALOG: &str = "layout-dialog";
+pub const CONFIRM_DIALOG: &str = "confirm-dialog";

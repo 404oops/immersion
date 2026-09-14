@@ -17,7 +17,7 @@ use gpui_platform::application;
 use crate::platform::single_instance::{self, InstanceGuard};
 use vampir::text_input as ti;
 
-actions!(immersion, [Quit, CloseModal]);
+actions!(immersion, [Quit]);
 
 thread_local! {
     static MAIN_WINDOW: RefCell<Option<WindowHandle<app::RootView>>> = const { RefCell::new(None) };
@@ -74,48 +74,15 @@ fn main() {
         // Dev builds run outside a .app bundle; give the Dock the real icon.
         platform::set_dock_icon_if_unbundled();
 
+        // Tab, Shift-Tab, Escape and the text-editing keys are the toolkit's;
+        // the application's own keys go in after, so they take precedence.
+        vampir::bind_keys(cx);
         cx.bind_keys([
-            // Text editing (context-scoped to text inputs).
-            KeyBinding::new("backspace", ti::Backspace, Some("TextInput")),
-            KeyBinding::new("delete", ti::Delete, Some("TextInput")),
-            KeyBinding::new("alt-backspace", ti::DeleteWordLeft, Some("TextInput")),
-            KeyBinding::new("cmd-backspace", ti::DeleteToLineStart, Some("TextInput")),
-            KeyBinding::new("left", ti::Left, Some("TextInput")),
-            KeyBinding::new("right", ti::Right, Some("TextInput")),
-            KeyBinding::new("up", ti::Up, Some("TextInput")),
-            KeyBinding::new("down", ti::Down, Some("TextInput")),
-            KeyBinding::new("shift-left", ti::SelectLeft, Some("TextInput")),
-            KeyBinding::new("shift-right", ti::SelectRight, Some("TextInput")),
-            KeyBinding::new("shift-up", ti::SelectUp, Some("TextInput")),
-            KeyBinding::new("shift-down", ti::SelectDown, Some("TextInput")),
-            KeyBinding::new("alt-left", ti::WordLeft, Some("TextInput")),
-            KeyBinding::new("alt-right", ti::WordRight, Some("TextInput")),
-            KeyBinding::new("alt-shift-left", ti::SelectWordLeft, Some("TextInput")),
-            KeyBinding::new("alt-shift-right", ti::SelectWordRight, Some("TextInput")),
-            KeyBinding::new("cmd-left", ti::Home, Some("TextInput")),
-            KeyBinding::new("cmd-right", ti::End, Some("TextInput")),
-            KeyBinding::new("cmd-shift-left", ti::SelectToHome, Some("TextInput")),
-            KeyBinding::new("cmd-shift-right", ti::SelectToEnd, Some("TextInput")),
-            KeyBinding::new("cmd-up", ti::DocumentStart, Some("TextInput")),
-            KeyBinding::new("cmd-down", ti::DocumentEnd, Some("TextInput")),
-            KeyBinding::new("cmd-a", ti::SelectAll, Some("TextInput")),
-            KeyBinding::new("cmd-v", ti::Paste, Some("TextInput")),
-            KeyBinding::new("cmd-c", ti::Copy, Some("TextInput")),
-            KeyBinding::new("cmd-x", ti::Cut, Some("TextInput")),
-            KeyBinding::new("cmd-z", ti::Undo, Some("TextInput")),
-            KeyBinding::new("cmd-shift-z", ti::Redo, Some("TextInput")),
-            KeyBinding::new("home", ti::Home, Some("TextInput")),
-            KeyBinding::new("end", ti::End, Some("TextInput")),
-            KeyBinding::new("shift-home", ti::SelectToHome, Some("TextInput")),
-            KeyBinding::new("shift-end", ti::SelectToEnd, Some("TextInput")),
-            KeyBinding::new("enter", ti::Enter, Some("TextInput")),
             KeyBinding::new(
                 "ctrl-cmd-space",
                 ti::ShowCharacterPalette,
                 Some("TextInput"),
             ),
-            // App-level.
-            KeyBinding::new("escape", CloseModal, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());

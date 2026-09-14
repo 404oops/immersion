@@ -5,16 +5,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, Pixels, ScrollHandle, UniformListScrollHandle,
-    Window, WindowAppearance, div, prelude::*,
+    Bounds, Context, Entity, Pixels, ScrollHandle, UniformListScrollHandle, Window,
+    WindowAppearance, div, prelude::*,
 };
 use musit_core::backend::{AppBackend, BackendEvent, ColorSchemeMode, PlatformHooks};
 
-use crate::CloseModal;
-use crate::theme::Theme;
+use crate::theme::{MAX_SATURATION, Theme};
+use crate::ui::controls::{
+    CONFIRM_DIALOG, DETAILS_SPLIT, HUE_SLIDER, LAYOUT_DIALOG, LIST_SPLIT, SATURATION_SLIDER,
+};
 use crate::ui::graph_layout::{self, GraphNode, Placement};
 use vampir::text_input::{InputStyle, TextInput};
-use vampir::{ControlHost, ControlState};
+use vampir::{ControlHost, ControlState, Dismiss};
 
 /// Pending confirm dialog (ThemedConfirmDialog).
 pub struct ConfirmState {
@@ -47,18 +49,6 @@ const HUE_ANIM_DURATION: Duration = Duration::from_millis(280);
 /// Selection highlights cross-fade in this long: quicker than the colour
 /// shift, so clicking around never feels laggy.
 pub const SELECTION_FADE: Duration = Duration::from_millis(180);
-
-/// Dragging a folder tab along the strip to reorder it. The tabs reorder
-/// live as the pointer passes their midpoints, so the strip always shows
-/// where the tab will land.
-pub struct TabDrag {
-    /// Where the tab sits now (it moves as the drag progresses).
-    pub index: i32,
-    pub start_mouse: gpui::Point<Pixels>,
-    /// Set once the pointer has travelled far enough to be a drag rather
-    /// than a click that selects the tab.
-    pub moved: bool,
-}
 
 /// Dragging the graph by its background: pans the view by the pointer's
 /// travel since the press.
@@ -127,7 +117,9 @@ pub struct HueAnim {
 
 impl HueAnim {
     fn aims_at(&self, target: &Theme) -> bool {
-        (self.to.hue - target.hue).abs() < 1e-9 && self.to.is_dark_mode == target.is_dark_mode
+        (self.to.hue - target.hue).abs() < 1e-9
+            && (self.to.saturation - target.saturation).abs() < 1e-9
+            && self.to.is_dark_mode == target.is_dark_mode
     }
 }
 
@@ -151,11 +143,12 @@ fn shortest_hue_delta(from: f64, to: f64) -> f64 {
     (to - from + 540.0).rem_euclid(360.0) - 180.0
 }
 
-/// ProjectsFolderLayoutDialog state. Picking a card only changes
-/// `selected_layout`; nothing is saved or scanned until OK.
+/// What the projects-folder layout dialog is asking about. Picking an
+/// option only changes `selected_layout`; nothing is saved or scanned until
+/// OK. Whether the dialog is showing is the toolkit's to say
+/// (`ControlState::is_dialog_open(LAYOUT_DIALOG)`).
 #[derive(Default)]
 pub struct LayoutDialogState {
-    pub open: bool,
     pub folder_path: String,
     pub selected_layout: String,
     /// True when the folder is not a tab yet, so OK has to add it.
@@ -167,7 +160,6 @@ pub struct RootView {
     pub theme: Theme,
     pub color_scheme: ColorSchemeMode,
     pub system_dark: bool,
-    pub focus_handle: FocusHandle,
 
     // Text inputs.
     pub search_input: Entity<TextInput>,
@@ -175,9 +167,13 @@ pub struct RootView {
     pub version_note_input: Entity<TextInput>,
     pub retention_input: Entity<TextInput>,
 
-    // Modals.
+    // Modals. Settings is the app's own panel; the layout and confirm
+    // dialogs are vampir dialogs, so whether one is up lives in `controls`
+    // and these only carry what it shows.
     pub settings_open: bool,
     pub layout_dialog: LayoutDialogState,
+    /// What the confirm dialog is asking. Kept while the dialog fades out,
+    /// so it has something to show, and cleared once it has gone.
     pub confirm: Option<ConfirmState>,
 
     // Version manager state.
@@ -193,11 +189,6 @@ pub struct RootView {
     pub vm_graph_placement: Placement,
     /// A drag of the graph in flight.
     pub graph_pan: Option<GraphPan>,
-    /// A folder tab being dragged along the strip.
-    pub tab_drag: Option<TabDrag>,
-    /// Where each folder tab was drawn last frame, so a drag knows which
-    /// neighbour the pointer has reached.
-    pub tab_bounds: Vec<Bounds<Pixels>>,
     /// Version whose node was pressed; it is selected on release, provided
     /// the press did not turn into a pan.
     pub pending_node_click: Option<String>,
@@ -220,15 +211,16 @@ pub struct RootView {
     /// In-flight tab-to-tab colour shift (see `displayed_hue`).
     pub hue_anim: Option<HueAnim>,
     pub split_bounds: Option<Bounds<Pixels>>,
-    pub split_dragging: bool,
     /// Width share of the project list in the list|graph split: the list is
     /// a fixed-width card, the graph is what benefits from the extra room.
     pub list_fraction: f32,
-    pub list_split_dragging: bool,
     /// Bottom details panel height as a fraction of the split area.
     pub details_fraction: f32,
     /// Some while the first-run wizard is showing.
     pub onboarding: Option<OnboardingStep>,
+    /// The layout picked on the wizard's layout step: an index into
+    /// [`crate::ui::onboarding::LAYOUTS`].
+    pub onboarding_layout: usize,
     /// Next event-driven graph refresh should select the latest version.
     pub pending_select_latest: bool,
     /// Folder tab currently being renamed inline (double-click a tab).
@@ -237,23 +229,17 @@ pub struct RootView {
     /// Version-graph zoom (1.0 = 100%).
     pub graph_zoom: f32,
 
-    // Animation state (colour and position transitions).
-    // ThemedPopup enter/exit (OutCubic / InCubic): Instant-driven opacity so
-    // frame requests stop when the transition finishes (no stuck 60Hz redraw).
+    // Settings panel enter/exit (OutCubic / InCubic): Instant-driven opacity
+    // so frame requests stop when the transition finishes (no stuck 60Hz
+    // redraw).
     pub settings_enter_at: Option<Instant>,
-    pub layout_enter_at: Option<Instant>,
-    pub confirm_enter_at: Option<Instant>,
     pub settings_exit_at: Option<Instant>,
-    pub layout_exit_at: Option<Instant>,
-    pub confirm_exit_at: Option<Instant>,
 
     // Scroll handles.
     pub project_list_scroll: UniformListScrollHandle,
     pub activity_scroll: UniformListScrollHandle,
     pub settings_scroll: ScrollHandle,
-    pub tabs_scroll: ScrollHandle,
     pub graph_scroll: ScrollHandle,
-    pub layout_dialog_scroll: ScrollHandle,
 }
 
 impl ControlHost for RootView {
@@ -265,11 +251,27 @@ impl ControlHost for RootView {
         &mut self.controls
     }
 
-    /// The only vampir track in this window is the theme hue slider.
+    /// The theme hue and saturation sliders and the two split dividers.
     fn track_dragged(&mut self, id: vampir::ComboId, at: gpui::Point<f32>, cx: &mut Context<Self>) {
-        if id == crate::ui::controls::HUE_SLIDER {
-            self.set_hue_from_ratio(at.x, cx);
+        match id {
+            HUE_SLIDER => self.set_hue_from_ratio(at.x, cx),
+            SATURATION_SLIDER => self.set_saturation_from_ratio(at.x, cx),
+            LIST_SPLIT => self.set_list_split(at.x),
+            DETAILS_SPLIT => self.set_details_split(at.y),
+            _ => {}
         }
+    }
+
+    /// A folder tab was dropped in a new slot.
+    fn tabs_reordered(
+        &mut self,
+        _bar: vampir::ComboId,
+        from: usize,
+        to: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.backend.move_folder_tab(from as i32, to as i32);
+        cx.notify();
     }
 
     /// Scrollbar tracks block the mouse, so while the pointer is over one the
@@ -307,7 +309,7 @@ impl RootView {
             ColorSchemeMode::Light => false,
             ColorSchemeMode::System => system_dark,
         };
-        let theme = Theme::compute(backend.theme_hue(), dark);
+        let theme = Theme::compute(backend.theme_hue(), backend.theme_saturation(), dark);
 
         let search_input =
             cx.new(|cx| TextInput::new(cx, "Search projects...", false, field_style(&theme)));
@@ -424,7 +426,6 @@ impl RootView {
             theme,
             color_scheme,
             system_dark,
-            focus_handle: cx.focus_handle(),
             search_input,
             project_note_input,
             version_note_input,
@@ -439,8 +440,6 @@ impl RootView {
             vm_graph_layout_w: 0.0,
             vm_graph_placement: Placement::default(),
             graph_pan: None,
-            tab_drag: None,
-            tab_bounds: Vec::new(),
             pending_node_click: None,
             version_note_loaded: String::new(),
             project_note_loaded: String::new(),
@@ -450,27 +449,20 @@ impl RootView {
             controls: ControlState::new(),
             hue_anim: None,
             split_bounds: None,
-            split_dragging: false,
             list_fraction: 0.4,
-            list_split_dragging: false,
             details_fraction: 0.3,
             onboarding: None,
+            onboarding_layout: 0,
             pending_select_latest: false,
             renaming_tab: None,
             tab_name_input,
             graph_zoom: 1.0,
             settings_enter_at: None,
-            layout_enter_at: None,
-            confirm_enter_at: None,
             settings_exit_at: None,
-            layout_exit_at: None,
-            confirm_exit_at: None,
             project_list_scroll: UniformListScrollHandle::new(),
             activity_scroll: UniformListScrollHandle::new(),
             settings_scroll: ScrollHandle::new(),
-            tabs_scroll: ScrollHandle::new(),
             graph_scroll: ScrollHandle::new(),
-            layout_dialog_scroll: ScrollHandle::new(),
         };
 
         // First run (no folders yet): show the onboarding wizard. A saved
@@ -520,7 +512,13 @@ impl RootView {
                     // While dragging the hue slider the synchronous update
                     // already recomputed the theme; skip the echo. Every other
                     // source (switching tabs, most of all) eases across.
-                    if !self.controls.is_dragging(crate::ui::controls::HUE_SLIDER) {
+                    if !self.controls.is_dragging(HUE_SLIDER) {
+                        self.start_hue_animation();
+                        recompute_theme = true;
+                    }
+                }
+                BackendEvent::ThemeSaturationChanged => {
+                    if !self.controls.is_dragging(SATURATION_SLIDER) {
                         self.start_hue_animation();
                         recompute_theme = true;
                     }
@@ -552,13 +550,10 @@ impl RootView {
                     self.settings_enter_at = None;
                     self.settings_exit_at = None;
                     self.onboarding = Some(OnboardingStep::Welcome);
+                    self.onboarding_layout = 0;
                     self.renaming_tab = None;
-                    self.layout_dialog.open = false;
-                    self.layout_enter_at = None;
-                    self.layout_exit_at = None;
+                    self.controls.close_dialog();
                     self.confirm = None;
-                    self.confirm_enter_at = None;
-                    self.confirm_exit_at = None;
                 }
                 BackendEvent::ProjectSaveRecorded {
                     project_name,
@@ -643,7 +638,11 @@ impl RootView {
     }
 
     fn theme_target(&self) -> Theme {
-        Theme::compute(self.backend.theme_hue(), self.dark_mode())
+        Theme::compute(
+            self.backend.theme_hue(),
+            self.backend.theme_saturation(),
+            self.dark_mode(),
+        )
     }
 
     /// Starts (or retargets) the cross-fade towards the backend's colour.
@@ -661,6 +660,7 @@ impl RootView {
             return;
         }
         if shortest_hue_delta(self.theme.hue, target.hue).abs() < 0.5
+            && (self.theme.saturation - target.saturation).abs() < 0.005
             && self.theme.is_dark_mode == target.is_dark_mode
         {
             self.hue_anim = None;
@@ -752,8 +752,7 @@ impl RootView {
             return;
         }
         self.close_combo();
-        let timer_started = Instant::now();
-        self.settings_exit_at = Some(timer_started);
+        self.settings_exit_at = Some(Instant::now());
         cx.notify();
         Self::schedule_modal_exit(cx, move |root| {
             // A reopen during the exit animation cleared exit_at; this close
@@ -764,61 +763,13 @@ impl RootView {
             root.settings_open = false;
             root.settings_enter_at = None;
             root.settings_exit_at = None;
-            // The layout dialog is closed with Settings only if it is the one
-            // that was open underneath; a dialog opened during the fade is
-            // the user's newer intent and stays.
-            if root
-                .layout_enter_at
-                .is_some_and(|opened| opened < timer_started)
-            {
-                root.layout_dialog.open = false;
-                root.layout_enter_at = None;
-                root.layout_exit_at = None;
-            }
         });
-    }
-
-    pub fn request_close_layout(&mut self, cx: &mut Context<Self>) {
-        if !self.layout_dialog.open || self.layout_exit_at.is_some() {
-            return;
-        }
-        self.layout_exit_at = Some(Instant::now());
-        cx.notify();
-        Self::schedule_modal_exit(cx, |root| {
-            if root.layout_exit_at.is_none() {
-                return;
-            }
-            root.layout_dialog.open = false;
-            root.layout_enter_at = None;
-            root.layout_exit_at = None;
-        });
-    }
-
-    pub fn request_close_confirm(&mut self, cx: &mut Context<Self>) {
-        if self.confirm.is_none() || self.confirm_exit_at.is_some() {
-            return;
-        }
-        self.confirm_exit_at = Some(Instant::now());
-        cx.notify();
-        Self::schedule_modal_exit(cx, |root| {
-            if root.confirm_exit_at.is_none() {
-                return;
-            }
-            root.confirm = None;
-            root.confirm_enter_at = None;
-            root.confirm_exit_at = None;
-        });
-    }
-
-    /// Moves keyboard focus off any text input onto the root view, so keys
-    /// typed while a modal is up don't edit fields behind the scrim
-    /// (ThemedPopup was `modal: true; focus: true`).
-    pub fn take_modal_focus(&self, window: &mut Window, cx: &mut App) {
-        window.focus(&self.focus_handle, cx);
     }
 
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.take_modal_focus(window, cx);
+        // Off any text input, so keys typed while the panel is up don't edit
+        // fields behind the scrim.
+        self.controls.focus_root(window, cx);
         // Discard any half-typed retention value from a previous visit.
         let retention = self.backend.snapshot_retention().to_string();
         self.retention_input
@@ -826,6 +777,13 @@ impl RootView {
         self.settings_open = true;
         self.settings_enter_at = Some(Instant::now());
         self.settings_exit_at = None;
+    }
+
+    /// Asks for confirmation. The dialog takes the keyboard itself when it
+    /// paints, and hands it back on its way out.
+    pub fn open_confirm(&mut self, confirm: ConfirmState) {
+        self.confirm = Some(confirm);
+        self.controls.open_dialog(CONFIRM_DIALOG);
     }
 
     /// Asks how a folder is laid out. Opening no longer scans: the folder is
@@ -838,34 +796,25 @@ impl RootView {
             .to_string();
         self.layout_dialog.folder_path = local;
         self.layout_dialog.is_new_folder = true;
-        self.layout_dialog.open = true;
-        self.layout_enter_at = Some(Instant::now());
-        self.layout_exit_at = None;
+        self.controls.open_dialog(LAYOUT_DIALOG);
     }
 
-    pub fn open_layout_dialog_for_current_folder(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn open_layout_dialog_for_current_folder(&mut self) {
         if self.backend.projects_folder_path().is_empty() {
             return;
         }
-        self.take_modal_focus(window, cx);
         self.layout_dialog.folder_path = self.backend.projects_folder_path().to_string();
         self.layout_dialog.is_new_folder = false;
         self.layout_dialog.selected_layout = self.backend.projects_folder_layout().to_string();
-        self.layout_dialog.open = true;
-        self.layout_enter_at = Some(Instant::now());
-        self.layout_exit_at = None;
+        self.controls.open_dialog(LAYOUT_DIALOG);
     }
 
     /// OK: saves the choice and rescans — the only path that does either.
     /// A folder already on this layout is left alone rather than rescanned.
-    pub fn layout_dialog_confirm(&mut self, cx: &mut Context<Self>) {
+    /// The dialog closes itself once this returns.
+    pub fn layout_dialog_confirm(&mut self) {
         let local_path = self.layout_dialog.folder_path.clone();
         if local_path.is_empty() {
-            self.request_close_layout(cx);
             return;
         }
         let layout = self.layout_dialog.selected_layout.clone();
@@ -875,7 +824,6 @@ impl RootView {
             self.pending_select_latest = true;
             self.backend.confirm_projects_folder(&local_path, &layout);
         }
-        self.request_close_layout(cx);
     }
 
     pub fn layout_dialog_select(&mut self, layout: &str) {
@@ -1045,28 +993,6 @@ impl RootView {
             .flatten()
     }
 
-    /// The position a tab dragged to `pointer_x` should occupy, or None when
-    /// it is already there. A tab only moves once the pointer passes the
-    /// midpoint of its neighbour, so a drag does not flicker between two
-    /// positions.
-    fn tab_index_at(&self, pointer_x: Pixels, dragged: i32) -> Option<i32> {
-        let bounds = self.tab_bounds.get(dragged as usize)?;
-        let pointer = f32::from(pointer_x);
-        if pointer < f32::from(bounds.left())
-            && let Some(previous) = self.tab_bounds.get(dragged as usize - 1)
-            && pointer < f32::from(previous.center().x)
-        {
-            return Some(dragged - 1);
-        }
-        if pointer > f32::from(bounds.right())
-            && let Some(next) = self.tab_bounds.get(dragged as usize + 1)
-            && pointer > f32::from(next.center().x)
-        {
-            return Some(dragged + 1);
-        }
-        None
-    }
-
     /// Closes the open combo, if any, letting its list fade back out the way
     /// it faded in.
     pub fn close_combo(&mut self) {
@@ -1141,12 +1067,10 @@ impl RootView {
         ids
     }
 
-    pub fn any_modal_open(&self) -> bool {
-        self.settings_open || self.layout_dialog.open
-    }
-
-    pub fn child_dialog_open(&self) -> bool {
-        self.confirm.is_some() || (self.settings_open && self.layout_dialog.open)
+    /// Whether a vampir dialog is on screen, open or fading out.
+    pub fn dialog_showing(&self) -> bool {
+        self.controls.dialog_fade(LAYOUT_DIALOG).is_some()
+            || self.controls.dialog_fade(CONFIRM_DIALOG).is_some()
     }
 
     /// True while any Instant-driven UI transition still needs frames.
@@ -1155,7 +1079,7 @@ impl RootView {
     pub fn ui_animating(&self) -> bool {
         use crate::ui::controls::modal_opacity;
 
-        // Switch slides and pop-up reveals.
+        // Switch slides, pop-up reveals, tab slides and dialog fades.
         if self.controls.animating() {
             return true;
         }
@@ -1167,49 +1091,41 @@ impl RootView {
         {
             return true;
         }
-        if self.settings_open && modal_opacity(self.settings_enter_at, self.settings_exit_at).1 {
-            return true;
-        }
-        if self.layout_dialog.open && modal_opacity(self.layout_enter_at, self.layout_exit_at).1 {
-            return true;
-        }
-        if self.confirm.is_some() && modal_opacity(self.confirm_enter_at, self.confirm_exit_at).1 {
-            return true;
-        }
-        false
+        self.settings_open && modal_opacity(self.settings_enter_at, self.settings_exit_at).1
     }
 
-    fn close_modal(&mut self, _: &CloseModal, _window: &mut Window, cx: &mut Context<Self>) {
+    /// An Escape nothing of the toolkit's was open for: the root's handlers
+    /// have already closed any pop-up list, and a dialog that had the
+    /// keyboard has already taken it. What is left is the app's own.
+    fn dismiss(&mut self, _: &Dismiss, _window: &mut Window, cx: &mut Context<Self>) {
         if self.renaming_tab.is_some() {
             // Escape cancels an inline tab rename.
             self.renaming_tab = None;
             cx.notify();
-        } else if self.controls.open_combo.is_some() {
-            self.close_combo();
-            cx.notify();
-        } else if self.confirm.is_some() {
-            self.request_close_confirm(cx);
-        } else if self.layout_dialog.open {
-            self.request_close_layout(cx);
+        } else if self.dialog_showing() {
+            // A dialog on its way out passes Escape on; it must not close
+            // the settings panel underneath as well.
         } else if self.settings_open {
             self.request_close_settings(cx);
         }
     }
 
+    /// The confirm dialog's accepting button. The dialog closes itself once
+    /// this returns; `confirm` stays for the fade and is cleared after.
     pub fn run_confirm_action(&mut self, cx: &mut Context<Self>) {
-        if let Some(confirm) = self.confirm.take() {
-            match confirm.action {
+        if let Some(confirm) = &self.confirm {
+            match &confirm.action {
                 ConfirmAction::ResetConfig => {
                     self.backend.reset_config();
                 }
                 ConfirmAction::DeleteVersion(version_id) => {
                     // The backend pushes SelectedProjectVersionGraphChanged;
                     // the pump refreshes once.
-                    self.backend.delete_version_by_id(&version_id);
+                    self.backend.delete_version_by_id(version_id);
                 }
                 ConfirmAction::RemoveFolder(index) => {
                     self.pending_select_latest = true;
-                    self.backend.remove_projects_folder(index);
+                    self.backend.remove_projects_folder(*index);
                 }
             }
         }
@@ -1241,18 +1157,23 @@ impl Render for RootView {
         let theme = self.theme;
         let onboarding = self.onboarding.is_some();
 
-        if self.ui_animating() {
-            window.request_animation_frame();
-        }
+        let body = if onboarding {
+            self.render_onboarding(window, cx).into_any_element()
+        } else {
+            self.render_main_view(window, cx).into_any_element()
+        };
+        let modals = self.render_modal_layer(window, cx);
 
-        div()
-            .id("root")
+        // Tab, Shift-Tab and Escape are the toolkit's; it puts their handlers
+        // on the root, and passes on an Escape it had nothing to close for.
+        // The mouse is tracked here rather than by `vampir::root`, because
+        // the graph pan is a drag of the app's own and shares the stream.
+        let root = vampir::handle_keys(div().id("root"), self, cx)
             .size_full()
             .font_family(".SystemUIFont")
             .bg(crate::ui::lighting::lit(theme.app_background, 0.035))
             .text_color(theme.text_primary)
-            .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::close_modal))
+            .on_action(cx.listener(Self::dismiss))
             .on_mouse_move(
                 cx.listener(|this, event: &gpui::MouseMoveEvent, _window, cx| {
                     this.global_mouse_move(event, cx);
@@ -1264,12 +1185,19 @@ impl Render for RootView {
                     this.global_mouse_up(cx);
                 }),
             )
-            .child(if onboarding {
-                self.render_onboarding(window, cx).into_any_element()
-            } else {
-                self.render_main_view(window, cx).into_any_element()
-            })
-            .children(self.render_modal_layer(window, cx))
+            .child(body)
+            .children(modals);
+
+        // Asked after the tree is built, as the toolkit requires: a control
+        // that found its target moved while it was being built (a tab whose
+        // width changed with its weight, say) has only just started its
+        // tween, and asking before the build would miss it and leave it
+        // stuck part-way until the next event happened to repaint.
+        if self.ui_animating() {
+            window.request_animation_frame();
+        }
+
+        root
     }
 }
 
@@ -1287,17 +1215,30 @@ impl RootView {
         self.recompute_theme(cx);
     }
 
+    /// Applies a saturation-slider position, `ratio` running 0..=1 along
+    /// its track, which the toolkit maps over `0.0..=MAX_SATURATION`.
+    fn set_saturation_from_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
+        // Whole percent steps, so the readout beside the slider and the
+        // saved value agree.
+        let value = (ratio as f64 * MAX_SATURATION * 100.0).round() / 100.0;
+        if (self.backend.theme_saturation() - value).abs() < 0.005 {
+            return;
+        }
+        self.hue_anim = None;
+        self.backend.set_theme_saturation(value);
+        self.recompute_theme(cx);
+    }
+
+    /// Whether any press-and-move gesture is in flight: the graph pan, or
+    /// one of the toolkit's (a scrollbar thumb, the hue slider, a split
+    /// divider, a folder tab).
+    fn dragging_anything(&self) -> bool {
+        self.graph_pan.is_some() || self.controls.dragging_anything()
+    }
+
     /// Shared drag tracking. Attached to the root AND to occluding modal
     /// surfaces — an `.occlude()`d settings panel otherwise swallows the
     /// mouse-move stream the hue-slider drag depends on.
-    /// Whether any press-and-move gesture is in flight.
-    fn dragging_anything(&self) -> bool {
-        self.split_dragging
-            || self.list_split_dragging
-            || self.graph_pan.is_some()
-            || self.controls.dragging_anything()
-    }
-
     pub fn global_mouse_move(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
         // A release outside the window never reaches us, so a drag would
         // otherwise still be running when the pointer comes back. Any move
@@ -1310,32 +1251,11 @@ impl RootView {
             return;
         }
 
-        // Scrollbar thumbs and the hue slider are the toolkit's own drags.
+        // Scrollbar thumbs, the hue slider, the split dividers and the
+        // folder tabs are the toolkit's own drags. A pressed tab only
+        // becomes a drag once it has travelled `vampir::TAB_DRAG_THRESHOLD`,
+        // so a click that wobbles a pixel still selects it.
         let mut dirty = vampir::continue_drags(self, event.position, cx);
-        if self.split_dragging {
-            self.update_split_from_mouse(event.position);
-            dirty = true;
-        }
-        if self.list_split_dragging {
-            self.update_list_split_from_mouse(event.position);
-            dirty = true;
-        }
-        if let Some(drag) = &self.tab_drag {
-            let travelled = (f32::from(event.position.x) - f32::from(drag.start_mouse.x)).abs();
-            if drag.moved || travelled >= 4.0 {
-                let index = drag.index;
-                if let Some(target) = self.tab_index_at(event.position.x, index) {
-                    self.backend.move_folder_tab(index, target);
-                    if let Some(drag) = &mut self.tab_drag {
-                        drag.index = target;
-                    }
-                }
-                if let Some(drag) = &mut self.tab_drag {
-                    drag.moved = true;
-                }
-                dirty = true;
-            }
-        }
         if let Some(pan) = &self.graph_pan {
             let dx = f32::from(event.position.x) - f32::from(pan.start_mouse.x);
             let dy = f32::from(event.position.y) - f32::from(pan.start_mouse.y);
@@ -1403,21 +1323,11 @@ impl RootView {
     }
 
     pub fn global_mouse_up(&mut self, cx: &mut Context<Self>) {
-        if self.controls.is_dragging(crate::ui::controls::HUE_SLIDER) {
+        if self.controls.is_dragging(HUE_SLIDER) {
             self.backend.flush_pending_theme_hue_persist();
         }
-        if self.split_dragging {
-            self.split_dragging = false;
-            cx.notify();
-        }
-        if let Some(drag) = self.tab_drag.take() {
-            // A press that never travelled is a plain click: switch to that
-            // tab, as clicking always did.
-            if !drag.moved {
-                self.pending_select_latest = true;
-                self.backend.set_active_folder_index(drag.index);
-            }
-            cx.notify();
+        if self.controls.is_dragging(SATURATION_SLIDER) {
+            self.backend.flush_pending_theme_saturation_persist();
         }
         if let Some(pan) = self.graph_pan.take() {
             // A press that never travelled is a click on the node under it.
@@ -1431,14 +1341,11 @@ impl RootView {
             cx.notify();
         }
         self.pending_node_click = None;
-        if self.list_split_dragging {
-            self.list_split_dragging = false;
-            cx.notify();
-        }
-        // Ends the toolkit's drags and clears the dismissed-combo marker: one
-        // not consumed by its toggle (the click landed elsewhere) must not
-        // eat a later toggle click. Only a drag that was actually running
-        // needs a repaint; every click in the window comes through here.
+        // Ends the toolkit's drags (dropping a folder tab arrives at
+        // `tabs_reordered`) and clears the dismissed-combo marker: one not
+        // consumed by its toggle (the click landed elsewhere) must not eat a
+        // later toggle click. Only a drag that was actually running needs a
+        // repaint; every click in the window comes through here.
         let was_dragging = self.controls.dragging_anything();
         vampir::end_drags(self, cx);
         if was_dragging {
@@ -1446,37 +1353,34 @@ impl RootView {
         }
     }
 
-    fn update_split_from_mouse(&mut self, position: gpui::Point<Pixels>) {
-        if let Some(bounds) = self.split_bounds {
-            let total = f32::from(bounds.size.height);
-            if total <= 0.0 {
-                return;
-            }
-            let bottom = f32::from(bounds.origin.y) + total;
-            // 10px handle center offset; clamp so neither pane collapses
-            // (matches the 210px render floor for the details panel).
-            let height =
-                (bottom - f32::from(position.y) - 10.0).clamp(210.0, (total - 200.0).max(210.0));
-            self.details_fraction = (height / total).clamp(0.15, 0.6);
+    /// The top-row|details divider moved to `at`, a fraction of the split
+    /// area's height from its top. Clamped so neither pane collapses
+    /// (matching the 210px render floor for the details panel).
+    fn set_details_split(&mut self, at: f32) {
+        let Some(bounds) = self.split_bounds else {
+            return;
+        };
+        let total = f32::from(bounds.size.height);
+        if total <= 0.0 {
+            return;
         }
+        let height = (total * (1.0 - at)).clamp(210.0, (total - 200.0).max(210.0));
+        self.details_fraction = (height / total).clamp(0.15, 0.6);
     }
 
-    /// The list|graph divider. Shares the split area's bounds with the
-    /// details drag: the top row spans exactly the same x-range.
-    fn update_list_split_from_mouse(&mut self, position: gpui::Point<Pixels>) {
-        if let Some(bounds) = self.split_bounds {
-            let total = f32::from(bounds.size.width);
-            if total <= 0.0 {
-                return;
-            }
-            // 5px handle half-width. The list floor is what its own header
-            // needs ("Discovered Projects" + the Sort combo); below that the
-            // row overflows its panel.
-            let left = f32::from(bounds.origin.x);
-            let width = (f32::from(position.x) - left - 5.0)
-                .clamp(LIST_PANE_MIN, (total - GRAPH_PANE_MIN).max(LIST_PANE_MIN));
-            self.list_fraction = width / total;
+    /// The list|graph divider moved to `at`, a fraction of the split area's
+    /// width. The list floor is what its own header needs ("Projects" and
+    /// the Sort combo); below that the row overflows its panel.
+    fn set_list_split(&mut self, at: f32) {
+        let Some(bounds) = self.split_bounds else {
+            return;
+        };
+        let total = f32::from(bounds.size.width);
+        if total <= 0.0 {
+            return;
         }
+        let width = (total * at).clamp(LIST_PANE_MIN, (total - GRAPH_PANE_MIN).max(LIST_PANE_MIN));
+        self.list_fraction = width / total;
     }
 }
 
@@ -1486,7 +1390,10 @@ pub fn field_style(theme: &Theme) -> InputStyle {
         placeholder_color: theme.text_muted,
         selection_color: theme.selection,
         cursor_color: theme.accent,
+        accent_color: theme.accent,
         font_size: 12.0,
+        // Hand-picked colours; `apply_theme` re-styles the inputs itself.
+        follows_palette: false,
     }
 }
 
@@ -1496,6 +1403,8 @@ pub fn area_style(theme: &Theme) -> InputStyle {
         placeholder_color: theme.text_muted,
         selection_color: theme.selection,
         cursor_color: theme.accent,
+        accent_color: theme.accent,
         font_size: 13.0,
+        follows_palette: false,
     }
 }

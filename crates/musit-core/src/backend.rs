@@ -20,7 +20,10 @@ use crate::path_cleanup::{
     relative_file_path, remove_empty_parent_dirs,
 };
 use crate::project_discovery::{self, DiscoveredProject};
-use crate::project_registry::{AppSettings, ProjectRegistry, app_config_directory};
+use crate::project_registry::{
+    AppSettings, DEFAULT_THEME_SATURATION, ProjectRegistry, app_config_directory,
+    clamp_theme_saturation,
+};
 use crate::snapshot_service::SnapshotNotice;
 use crate::version_id;
 use crate::versioning::{self, Job as VersioningJob, Reply as VersioningReply};
@@ -196,6 +199,7 @@ pub enum BackendEvent {
     FoldersChanged,
     ActiveFolderChanged,
     ThemeHueChanged,
+    ThemeSaturationChanged,
     LaunchAtStartupChanged,
     SnapshotRetentionChanged,
     NotificationsEnabledChanged,
@@ -899,6 +903,8 @@ pub struct AppBackend {
     selected_project_primary_file: String,
     theme_hue: f64,
     theme_hue_persist_deadline: Option<Instant>,
+    theme_saturation: f64,
+    theme_saturation_persist_deadline: Option<Instant>,
     launch_at_startup: bool,
     snapshot_retention: i32,
     notifications_enabled: bool,
@@ -1013,6 +1019,8 @@ impl AppBackend {
             selected_project_primary_file: String::new(),
             theme_hue: 280.0,
             theme_hue_persist_deadline: None,
+            theme_saturation: DEFAULT_THEME_SATURATION,
+            theme_saturation_persist_deadline: None,
             launch_at_startup: false,
             snapshot_retention: UNCOMPRESSED_RECENT_VERSIONS,
             notifications_enabled: true,
@@ -1050,6 +1058,7 @@ impl AppBackend {
 
         let saved_settings = backend.project_registry.load_app_settings();
         backend.theme_hue = saved_settings.theme_hue;
+        backend.theme_saturation = clamp_theme_saturation(saved_settings.theme_saturation);
         backend.sort_mode = sort_mode_from_string(if saved_settings.sort_mode.is_empty() {
             strings::SORT_NAME
         } else {
@@ -1391,6 +1400,15 @@ impl AppBackend {
             let hue = self.theme_hue;
             self.log_config_change(&format!("theme hue set to {hue:.0}"));
         }
+        if self
+            .theme_saturation_persist_deadline
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            self.theme_saturation_persist_deadline = None;
+            self.persist_app_settings();
+            let percent = self.theme_saturation * 100.0;
+            self.log_config_change(&format!("theme saturation set to {percent:.0}%"));
+        }
 
         self.advance_monitoring_init();
     }
@@ -1400,6 +1418,9 @@ impl AppBackend {
     pub fn flush_pending_persist(&mut self) {
         if self.theme_hue_persist_deadline.take().is_some() {
             self.persist_theme_hue();
+        }
+        if self.theme_saturation_persist_deadline.take().is_some() {
+            self.persist_app_settings();
         }
     }
 
@@ -1740,6 +1761,22 @@ impl AppBackend {
         if let Some(root) = self.active().map(|w| w.root.clone()) {
             folder_settings::save_hue(&root, hue);
         }
+    }
+
+    pub fn theme_saturation(&self) -> f64 {
+        self.theme_saturation
+    }
+
+    /// Sets the palette's chroma multiplier (`0.0..=MAX_THEME_SATURATION`).
+    /// App-wide: unlike the hue it is not a property of the active tab.
+    pub fn set_theme_saturation(&mut self, value: f64) {
+        let clamped = clamp_theme_saturation(value);
+        if (self.theme_saturation - clamped).abs() < 1e-9 {
+            return;
+        }
+        self.theme_saturation = clamped;
+        self.push_event(BackendEvent::ThemeSaturationChanged);
+        self.theme_saturation_persist_deadline = Some(Instant::now() + THEME_HUE_PERSIST_DELAY);
     }
 
     pub fn launch_at_startup(&self) -> bool {
@@ -3200,6 +3237,8 @@ impl AppBackend {
 
         self.theme_hue = 280.0;
         self.theme_hue_persist_deadline = None;
+        self.theme_saturation = DEFAULT_THEME_SATURATION;
+        self.theme_saturation_persist_deadline = None;
         self.sort_mode = SortMode::Name;
         self.log_level = LogLevel::Info;
         self.snapshot_retention = UNCOMPRESSED_RECENT_VERSIONS;
@@ -3226,6 +3265,7 @@ impl AppBackend {
             BackendEvent::FoldersChanged,
             BackendEvent::ActiveFolderChanged,
             BackendEvent::ThemeHueChanged,
+            BackendEvent::ThemeSaturationChanged,
             BackendEvent::SortModeChanged,
             BackendEvent::LogLevelChanged,
             BackendEvent::SnapshotRetentionChanged,
@@ -3279,6 +3319,7 @@ impl AppBackend {
     fn persist_app_settings(&self) {
         let settings = AppSettings {
             theme_hue: self.theme_hue,
+            theme_saturation: self.theme_saturation,
             launch_at_startup: self.launch_at_startup,
             sort_mode: self.sort_mode().to_string(),
             log_level: self.log_level().to_string(),
@@ -3295,6 +3336,12 @@ impl AppBackend {
         }
         self.theme_hue_persist_deadline = None;
         self.persist_theme_hue();
+    }
+
+    pub fn flush_pending_theme_saturation_persist(&mut self) {
+        if self.theme_saturation_persist_deadline.take().is_some() {
+            self.persist_app_settings();
+        }
     }
 
     fn append_activity_with_level(&mut self, line: &str, level: LogLevel) {
@@ -4001,6 +4048,7 @@ impl Default for AppBackend {
 impl Drop for AppBackend {
     fn drop(&mut self) {
         self.flush_pending_theme_hue_persist();
+        self.flush_pending_theme_saturation_persist();
         self.cancel_project_scan();
         for workspace in &mut self.workspaces {
             if let Some(watcher) = workspace.watcher.take() {

@@ -43,6 +43,10 @@ use std::path::Path;
 #[derive(Clone, Debug)]
 pub struct AppSettings {
     pub theme_hue: f64,
+    /// Chroma multiplier for the whole palette: `0.0` greyscale, `1.0` the
+    /// standard palette, up to `MAX_THEME_SATURATION`. App-wide, unlike the
+    /// hue, which each folder tab remembers for itself.
+    pub theme_saturation: f64,
     pub launch_at_startup: bool,
     pub sort_mode: String,
     pub log_level: String,
@@ -55,6 +59,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme_hue: 280.0,
+            theme_saturation: DEFAULT_THEME_SATURATION,
             launch_at_startup: false,
             sort_mode: String::new(),
             log_level: String::new(),
@@ -62,6 +67,21 @@ impl Default for AppSettings {
             notifications_enabled: true,
             color_scheme_mode: String::new(),
         }
+    }
+}
+
+/// The saturation the palette was designed at.
+pub const DEFAULT_THEME_SATURATION: f64 = 1.0;
+/// Twice the designed chroma; the toolkit clips anything past sRGB.
+pub const MAX_THEME_SATURATION: f64 = 2.0;
+
+/// `theme_saturation` as the config accepts it: clamped to the range, with
+/// a NaN (a hand-edited file) falling back to the default.
+pub fn clamp_theme_saturation(value: f64) -> f64 {
+    if value.is_nan() {
+        DEFAULT_THEME_SATURATION
+    } else {
+        value.clamp(0.0, MAX_THEME_SATURATION)
     }
 }
 
@@ -597,6 +617,9 @@ impl ProjectRegistry {
         if let Some(value) = root.get("theme_hue").and_then(|v| v.as_f64()) {
             settings.theme_hue = value;
         }
+        if let Some(value) = root.get("theme_saturation").and_then(|v| v.as_f64()) {
+            settings.theme_saturation = clamp_theme_saturation(value);
+        }
         if let Some(value) = root.get("launch_at_startup").and_then(|v| v.as_bool()) {
             settings.launch_at_startup = value;
         }
@@ -629,6 +652,10 @@ impl ProjectRegistry {
 
         let mut root = self.read_config_root();
         root.insert("theme_hue".to_string(), json!(settings.theme_hue));
+        root.insert(
+            "theme_saturation".to_string(),
+            json!(clamp_theme_saturation(settings.theme_saturation)),
+        );
         root.insert(
             "launch_at_startup".to_string(),
             json!(settings.launch_at_startup),

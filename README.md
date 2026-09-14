@@ -20,10 +20,11 @@ folder, choose its layout, then optionally add more folders.
   framing), version metadata log.
 - `crates/immersion` — GPUI desktop app and platform glue (menu bar status
   item, notifications, launch-at-login, single instance).
-- `crates/vampir` — the widget toolkit the app is built from: buttons,
-  fields, pop-ups, menus, tabs, dialogs and a text input, over a small OKLCH
-  palette. It depends on nothing but GPUI, so it can be used on its own; see
-  `crates/vampir/AGENTS.md`.
+
+The widget toolkit the app is built from is [vampir], pulled from crates.io.
+It depends on nothing but GPUI, and is MIT licensed.
+
+[vampir]: https://github.com/404oops/vampir
 
 ## Build & run
 
@@ -56,6 +57,11 @@ powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 [-Productio
 The Windows installer is per-user (no admin prompt), offers a
 launch-at-login checkbox, and registers an Add/Remove Programs entry. The
 exe icon/version block is embedded at build time via `build.rs`.
+
+Releases are built by CI: bump `version` in `Cargo.toml`, commit, then push
+a matching `v<version>` tag. `.github/workflows/release.yml` runs the tests,
+packages the DMG and the Windows installer with the `production` profile,
+and publishes both on the GitHub release for that tag.
 
 ## Platform support
 

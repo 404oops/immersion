@@ -1,0 +1,106 @@
+name: Release
+
+# Pushing a tag such as v0.2.1 builds the distributable installers with the
+# `production` cargo profile (fat LTO, stripped) and publishes them on a
+# GitHub release: the macOS DMG from scripts/package-macos.sh and the Windows
+# installer from scripts/package-windows.ps1. The tag must match the
+# workspace version in Cargo.toml, so the file names and the release agree.
+#
+# The macOS bundle is ad-hoc signed unless IMMERSION_SIGN_IDENTITY is set;
+# to sign with a Developer ID, import the certificate into the runner's
+# keychain in a step before packaging and export that variable.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: The tag is the version in Cargo.toml
+        run: |
+          version="$(grep -m1 '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "tag v$tag does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+
+      - run: cargo fmt --all --check
+      - run: cargo test --workspace
+
+  macos:
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Package the DMG
+        run: scripts/package-macos.sh --production
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/Immersion-*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # NSIS ships on the GitHub Windows image; this covers an image without it.
+      - name: NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+            echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
+          }
+
+      - name: Package the installer
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -Production
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/ImmersionSetup-*.exe
+          if-no-files-found: error
+
+  release:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Immersion ${GITHUB_REF_NAME#v}" \
+            --generate-notes
