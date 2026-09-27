@@ -11,7 +11,7 @@ use crate::object_store::{ObjectStore, is_staged_file, write_atomically};
 use crate::path_cleanup::{join_path, parent_path, relative_file_path, remove_empty_parent_dirs};
 use crate::project_config::ProjectConfig;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -47,9 +47,13 @@ fn resolve_branch_base_version(explicit_branch_base: &str, latest_staged_version
     branch_base_version
 }
 
-#[derive(Clone, Copy, Debug)]
+const BUNDLE_SAVE_WINDOW_MS: i64 = 2_000;
+
+#[derive(Clone, Debug)]
 struct ActiveGroup {
     scan_sequence: i64,
+    modified_ms: i64,
+    paths: HashSet<String>,
     // version_id / parent_version are stored alongside in the map value.
 }
 
@@ -266,14 +270,25 @@ impl SnapshotService {
         let version_id: String;
         let parent_version: String;
 
-        // Files of one save share a scan sequence, including the ones that
-        // needed extra passes to stop changing (the watcher keeps the
-        // sequence for those), so they land in a single version.
+        // Most files of one save share a watcher scan sequence. On busy
+        // filesystems a bundle's next file can settle in a later scan; keep
+        // it in the same version if its write time is close and that path
+        // has not already appeared in the group. A repeated path starts a
+        // new save even when saves happen quickly.
         let group_hit = event.scan_sequence != 0
             && self
                 .active_group_by_artifact
                 .get(&artifact)
-                .is_some_and(|entry| entry.group.scan_sequence == event.scan_sequence);
+                .is_some_and(|entry| {
+                    entry.group.scan_sequence == event.scan_sequence
+                        || (event.scan_sequence > 0
+                            && entry.group.scan_sequence > 0
+                            && event.modified_ms > 0
+                            && entry.group.modified_ms > 0
+                            && (event.modified_ms - entry.group.modified_ms).abs()
+                                <= BUNDLE_SAVE_WINDOW_MS
+                            && !entry.group.paths.contains(&event.relative_path))
+                });
 
         if group_hit {
             let entry = &self.active_group_by_artifact[&artifact];
@@ -324,6 +339,8 @@ impl SnapshotService {
                 ActiveGroupEntry {
                     group: ActiveGroup {
                         scan_sequence: event.scan_sequence,
+                        modified_ms: event.modified_ms,
+                        paths: HashSet::new(),
                     },
                     version_id: version_id.clone(),
                     parent_version: parent_version.clone(),
@@ -353,6 +370,10 @@ impl SnapshotService {
                 event.relative_path
             )));
             return false;
+        }
+
+        if let Some(entry) = self.active_group_by_artifact.get_mut(&artifact) {
+            entry.group.paths.insert(event.relative_path.clone());
         }
 
         self.compact_staged_copies(&event.relative_path);
@@ -539,6 +560,47 @@ impl SnapshotService {
 impl Default for SnapshotService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundle_files_from_adjacent_scans_share_one_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_root = temp.path().join("MySong");
+        let root = project_root.to_string_lossy().to_string();
+        let mut service = SnapshotService::new();
+        assert!(service.set_project_root(&root));
+
+        let files = [
+            "Song.logicx/Metadata.plist",
+            "Song.logicx/Alternatives/000/ProjectData",
+        ];
+        for save in 1..=2 {
+            for (index, relative) in files.iter().enumerate() {
+                let path = project_root.join(relative);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, format!("save {save}, file {index}")).unwrap();
+                service.on_file_event(&FileEvent {
+                    event_type: FileEventType::Modified,
+                    absolute_path: path.to_string_lossy().to_string(),
+                    relative_path: relative.to_string(),
+                    scan_sequence: save * 10 + index as i64,
+                    modified_ms: save * 3_000 + index as i64 * 800,
+                });
+            }
+        }
+
+        let log = join_path(
+            &root,
+            crate::backend::strings::MUSIT_VERSION_LOG_RELATIVE_PATH,
+        );
+        let versions = crate::backend::parse_versions_from_log(&log, "Song.logicx");
+        assert_eq!(versions.len(), 2);
+        assert!(versions.iter().all(|version| version.files.len() == 2));
     }
 }
 
