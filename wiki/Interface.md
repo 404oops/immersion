@@ -2,7 +2,7 @@
 
 The window has folder tabs across the top, a project list on the left, a version graph on the right, and a details panel below. Drag the dividers to give the list, graph, or details more room.
 
-![A second folder with illustrative Blender and Affinity projects](images/immersion-visual.jpg)
+![A second folder with illustrative Blender and Affinity projects](images/immersion-visual.png)
 
 ## Folder tabs
 

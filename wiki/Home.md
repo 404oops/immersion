@@ -2,7 +2,7 @@
 
 Immersion watches folders containing creative projects, records versions of supported project files, and shows their history as a graph. This manual describes version 0.2.2.
 
-![Immersion with illustrative music projects and a branched version history](images/immersion-music.jpg)
+![Immersion with illustrative music projects and a branched version history](images/immersion-music.png)
 
 *Illustrative sample projects. The history, project note, and version note are shown in the real app.*
 

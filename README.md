@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="crates/immersion/assets/icons/app.png" alt="Immersion app icon" width="112">
+  <img src="crates/immersion/assets/icons/iconcomposer-macOS-Default-1024x1024@1x.png" alt="Immersion app icon" width="112">
   <h1>Immersion</h1>
   <p><strong>A visual history for your creative projects.</strong></p>
   <p>Immersion watches your project folders, saves versions as you work, and lets you return to an earlier version from a visual graph.</p>
@@ -7,7 +7,7 @@
 
 ## At a glance
 
-| | |
+| Detail | Information |
 | --- | --- |
 | **Made for** | Music, video, design, and other supported creative project formats |
 | **Works on** | macOS and Windows releases; [Linux builds](packaging/linux/README.md) |
@@ -20,9 +20,9 @@ Choose where your projects live and whether they are kept in their own folders o
 
 These screenshots show Immersion with illustrative sample projects and version notes.
 
-![Immersion showing FL Studio and Ableton projects, a branched version graph, and project and version notes](assets/screenshots/immersion-music.jpg)
+![Immersion showing FL Studio and Ableton projects, a branched version graph, and project and version notes](assets/screenshots/immersion-music.png)
 
-![Immersion showing Blender and Affinity projects in a second folder](assets/screenshots/immersion-visual.jpg)
+![Immersion showing Blender and Affinity projects in a second folder](assets/screenshots/immersion-visual.png)
 
 ## Get started
 

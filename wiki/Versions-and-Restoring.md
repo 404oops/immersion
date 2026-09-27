@@ -10,7 +10,7 @@ Versions are local to your project storage. There is no cloud sync or account. A
 
 **Current** means the files on disk match a saved version. If no saved version matches, you may have unsaved, recently changed, or otherwise modified data on disk. When you restore an earlier version and then save new changes, history branches from the restored version. The graph keeps the older history visible.
 
-![An earlier version selected beside a newer branch, with its change note and current-version label](images/immersion-version-notes.jpg)
+![An earlier version selected beside a newer branch, with its change note and current-version label](images/immersion-version-notes.png)
 
 *Illustrative history: v3.1 and v3.2 branch from v3. The selected v4 shows its saved note while v3.2 remains current.*
 
