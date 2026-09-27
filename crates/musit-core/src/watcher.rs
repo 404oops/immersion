@@ -209,7 +209,12 @@ impl WorkerState {
         }
 
         self.dirty_relative.insert(relative_path);
-        self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
+        // Keep the first deadline for this batch. Continuous filesystem
+        // notifications must not postpone it forever; observe_path handles
+        // files that are still changing by scheduling a stabilization pass.
+        if self.debounce_deadline.is_none() {
+            self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
+        }
     }
 
     /// Remaps a symlink-resolved event path back into the configured root's
