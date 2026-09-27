@@ -15,6 +15,9 @@
 !ifndef OUTFILE
   !define OUTFILE "..\..\dist\ImmersionSetup-${VERSION}.exe"
 !endif
+!ifndef LICENSE_SOURCE
+  !define LICENSE_SOURCE "..\..\LICENSE"
+!endif
 
 !define APP_NAME "Immersion"
 !define REG_UNINSTALL "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
@@ -43,6 +46,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 404oops"
 ; ---- Pages -----------------------------------------------------------------
 
 !insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "${LICENSE_SOURCE}"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 Page custom StartupPageCreate StartupPageLeave
@@ -91,6 +95,7 @@ FunctionEnd
 Section "Immersion" SecMain
   SetOutPath "$INSTDIR"
   File "/oname=Immersion.exe" "${EXE_SOURCE}"
+  File "/oname=LICENSE.txt" "${LICENSE_SOURCE}"
 
   WriteRegStr HKCU "Software\${APP_NAME}" "InstallDir" "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -115,6 +120,7 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\Immersion.exe"
+  Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"
 

@@ -28,10 +28,12 @@ mkdir -p dist
 STAGING=$(mktemp -d)/Immersion
 mkdir -p "${STAGING}"
 cp -R "${APP_DIR}" "${STAGING}/"
+cp LICENSE "${STAGING}/LICENSE.txt"
 ln -s /Applications "${STAGING}/Applications"
 
 rm -f "${DMG}"
 hdiutil create -volname "Immersion ${VERSION}" -srcfolder "${STAGING}" \
     -ov -format UDZO "${DMG}" >/dev/null
+python3 scripts/add-dmg-license.py "${DMG}"
 
 echo "Packaged ${DMG}"

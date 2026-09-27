@@ -35,6 +35,7 @@ $outFile = Join-Path $root "dist\ImmersionSetup-$version.exe"
 makensis `
     "/DVERSION=$version" `
     "/DEXE_SOURCE=$exeSource" `
+    "/DLICENSE_SOURCE=$(Join-Path $root 'LICENSE')" `
     "/DOUTFILE=$outFile" `
     (Join-Path $root "packaging\nsis\Immersion.nsi")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

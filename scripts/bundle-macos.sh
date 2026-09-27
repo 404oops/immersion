@@ -34,6 +34,7 @@ sed "s/__VERSION__/${VERSION}/g" crates/immersion/resources/Info.plist \
 
 # Menu bar template icon, looked up via NSBundle pathForResource.
 cp "${ICONS}/menubar.png" "${APP_DIR}/Contents/Resources/menubar.png"
+cp LICENSE "${APP_DIR}/Contents/Resources/LICENSE.txt"
 
 # App icon: build an .icns from the 1024px master.
 MASTER="${ICONS}/iconcomposer-macOS-Default-1024x1024@1x.png"

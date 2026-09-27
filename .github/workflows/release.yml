@@ -149,6 +149,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/Immersion-${version}.dmg#macOS — disk image (.dmg)" \
+            "dist/ImmersionSetup-${version}.exe#Windows — installer (.exe)" \
+            "dist/Immersion-${version}-linux-x86_64.deb#Linux (Debian/Ubuntu) — x86_64 .deb" \
+            "dist/Immersion-${version}-linux-x86_64.rpm#Linux (Fedora/RHEL) — x86_64 .rpm" \
+            "dist/Immersion-${version}-linux-x86_64.pkg.tar.zst#Linux (Arch) — x86_64 .pkg.tar.zst" \
+            "dist/Immersion-${version}-linux-x86_64.AppImage#Linux (AppImage) — x86_64" \
+            "dist/Immersion-${version}-linux-x86_64.tar.gz#Linux (tar.gz) — x86_64 portable archive" \
             --title "$(cat RELEASE_TITLE)" \
             --generate-notes
