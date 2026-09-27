@@ -313,6 +313,19 @@ impl WorkerState {
         self.safety_deadline = Some(Instant::now() + SAFETY_SCAN);
     }
 
+    fn process_due_timers(&mut self) {
+        let now = Instant::now();
+        if self
+            .debounce_deadline
+            .is_some_and(|deadline| deadline <= now)
+        {
+            self.process_dirty_batch();
+        }
+        if self.safety_deadline.is_some_and(|deadline| deadline <= now) {
+            self.on_safety_scan();
+        }
+    }
+
     fn queue_full_tree_reconcile(&mut self) {
         if self.root_path.is_empty() {
             return;
@@ -485,6 +498,10 @@ impl HybridFileWatcher {
                 let mut os_watcher: Option<RecommendedWatcher> = None;
 
                 loop {
+                    // A busy OS event queue must not starve debounce or the
+                    // periodic full-tree scan. recv_timeout only reports a
+                    // timeout when no message is already queued.
+                    state.process_due_timers();
                     let now = Instant::now();
                     let deadline = [state.debounce_deadline, state.safety_deadline]
                         .into_iter()
@@ -530,21 +547,7 @@ impl HybridFileWatcher {
                             drop(os_watcher);
                             break;
                         }
-                        Err(RecvTimeoutError::Timeout) => {
-                            let now = Instant::now();
-                            if state
-                                .debounce_deadline
-                                .is_some_and(|deadline| deadline <= now)
-                            {
-                                state.process_dirty_batch();
-                            }
-                            if state
-                                .safety_deadline
-                                .is_some_and(|deadline| deadline <= now)
-                            {
-                                state.on_safety_scan();
-                            }
-                        }
+                        Err(RecvTimeoutError::Timeout) => {}
                     }
                 }
             })
