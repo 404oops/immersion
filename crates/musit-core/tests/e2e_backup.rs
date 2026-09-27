@@ -551,7 +551,9 @@ fn e2e_backup() {
                 // have landed.
                 version_by_id(&versions, &save_id).is_some_and(|v| v.files.len() == 2)
             }),
-            "watcher: version {save} never appeared"
+            "watcher: version {save} never appeared; versions={versions:?}; status={}; activity={:?}",
+            backend.status_message(),
+            backend.activity()
         );
     }
     assert_eq!(
