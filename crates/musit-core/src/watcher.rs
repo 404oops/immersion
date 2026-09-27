@@ -22,6 +22,7 @@ const SAFETY_SCAN: Duration = Duration::from_millis(5000);
 /// (scan_kind, root_path, item_count, elapsed_ms)
 pub type ScanLogFn = Box<dyn Fn(&str, &str, usize, u128) + Send>;
 pub type EventFn = Box<dyn Fn(FileEvent) + Send>;
+pub type ReadyFn = Box<dyn Fn(&str) + Send>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct FileState {
@@ -456,7 +457,11 @@ pub struct HybridFileWatcher {
 }
 
 impl HybridFileWatcher {
-    pub fn new(on_event: impl Fn(FileEvent) + Send + 'static, log_scan: Option<ScanLogFn>) -> Self {
+    pub fn new(
+        on_event: impl Fn(FileEvent) + Send + 'static,
+        log_scan: Option<ScanLogFn>,
+        on_ready: ReadyFn,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<Msg>();
         let fs_tx = tx.clone();
 
@@ -510,6 +515,7 @@ impl HybridFileWatcher {
                                     .watch(Path::new(&state.root_path), RecursiveMode::Recursive);
                             }
                             os_watcher = created;
+                            on_ready(&state.root_path);
                         }
                         Ok(Msg::Stop) => {
                             os_watcher = None;

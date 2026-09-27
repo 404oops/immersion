@@ -14,7 +14,7 @@ FreeType, Vulkan, and Wayland (a transitive GPUI build requirement despite
 X11-only runtime), plus pkg-config. On Debian/Ubuntu:
 
 ```sh
-sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan-dev pkg-config
+sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan-dev pkg-config
 scripts/install-linux.sh
 ```
 

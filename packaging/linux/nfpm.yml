@@ -28,6 +28,7 @@ overrides:
       - libx11-6
       - libxcb1
       - libxkbcommon0
+      - libxkbcommon-x11-0
       - libfontconfig1
       - libfreetype6
       - libvulkan1
@@ -37,6 +38,7 @@ overrides:
       - libX11
       - libxcb
       - libxkbcommon
+      - libxkbcommon-x11
       - fontconfig
       - freetype
       - vulkan-loader
@@ -46,6 +48,7 @@ overrides:
       - libx11
       - libxcb
       - libxkbcommon
+      - libxkbcommon-x11
       - fontconfig
       - freetype2
       - vulkan-icd-loader

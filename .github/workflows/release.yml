@@ -98,7 +98,7 @@ jobs:
           go-version: '1.25'
 
       - name: Native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libfontconfig1-dev libfreetype-dev libvulkan-dev libx11-dev libxcb1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig1-dev libfreetype-dev libvulkan-dev libx11-dev libxcb1-dev pkg-config
 
       - name: Build Linux binary
         run: cargo build --release --locked -p immersion

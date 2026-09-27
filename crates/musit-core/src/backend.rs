@@ -267,6 +267,9 @@ enum BackendMsg {
         watch_root: String,
         event: FileEvent,
     },
+    WatcherReady {
+        root_path: String,
+    },
     WatcherScanLog {
         scan_kind: String,
         root_path: String,
@@ -1476,6 +1479,19 @@ impl AppBackend {
                     return;
                 }
                 self.dispatch_file_event(&event);
+            }
+            BackendMsg::WatcherReady { root_path } => {
+                if self
+                    .workspace_index_by_root(&root_path)
+                    .is_some_and(|index| self.workspaces[index].watcher.is_some())
+                {
+                    self.set_status_for_folder(&root_path, format!("Monitoring: {root_path}"));
+                    self.append_activity(&format!(
+                        "[{}] monitoring started for {}",
+                        Local::now().format("%Y-%m-%dT%H:%M:%S"),
+                        root_path
+                    ));
+                }
             }
             BackendMsg::WatcherScanLog {
                 scan_kind,
@@ -3779,6 +3795,7 @@ impl AppBackend {
 
         let event_tx = self.msg_tx.clone();
         let log_tx = self.msg_tx.clone();
+        let ready_tx = self.msg_tx.clone();
         let watch_root = folder_root.to_string();
         let watcher = HybridFileWatcher::new(
             move |event| {
@@ -3797,6 +3814,11 @@ impl AppBackend {
                     });
                 },
             )),
+            Box::new(move |root_path| {
+                let _ = ready_tx.send(BackendMsg::WatcherReady {
+                    root_path: root_path.to_string(),
+                });
+            }),
         );
 
         if !watcher.start_watching(folder_root) {
@@ -3812,14 +3834,6 @@ impl AppBackend {
         if let Some(index) = self.workspace_index_by_root(folder_root) {
             self.workspaces[index].watcher = Some(watcher);
         }
-
-        self.set_status_for_folder(folder_root, format!("Monitoring: {folder_root}"));
-
-        self.append_activity(&format!(
-            "[{}] monitoring started for {}",
-            Local::now().format("%Y-%m-%dT%H:%M:%S"),
-            folder_root
-        ));
     }
 
     fn stop_monitoring_for_folder(&mut self, folder_root: &str) {
