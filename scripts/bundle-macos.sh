@@ -38,7 +38,9 @@ cp LICENSE "${APP_DIR}/Contents/Resources/LICENSE.txt"
 
 # App icon: build an .icns from the 1024px master.
 MASTER="${ICONS}/iconcomposer-macOS-Default-1024x1024@1x.png"
-ICONSET=$(mktemp -d)/app.iconset
+ICONSET_WORKDIR=$(mktemp -d)
+trap 'rm -rf "$ICONSET_WORKDIR"' EXIT
+ICONSET="${ICONSET_WORKDIR}/app.iconset"
 mkdir -p "${ICONSET}"
 for size in 16 32 64 128 256 512; do
     sips -z ${size} ${size} "${MASTER}" --out "${ICONSET}/icon_${size}x${size}.png" >/dev/null

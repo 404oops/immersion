@@ -1,6 +1,6 @@
 name: Release
 
-# Pushing a tag such as v0.2.1 builds the distributable installers and
+# Pushing a version tag builds the distributable installers and
 # publishes them on a GitHub release: the macOS DMG and Windows installer use
 # the `production` cargo profile, and Linux native packages, AppImage, and
 # tarball use `release`. The tag must match the workspace version in

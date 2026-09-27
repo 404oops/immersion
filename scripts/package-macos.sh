@@ -10,22 +10,23 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PROFILE="release"
-BUNDLE_ARGS=()
 for arg in "$@"; do
     case "$arg" in
-        --production) PROFILE="production"; BUNDLE_ARGS+=("--production") ;;
+        --production) PROFILE="production" ;;
         *) echo "unknown argument: $arg" >&2; exit 2 ;;
     esac
 done
 
-scripts/bundle-macos.sh ${BUNDLE_ARGS[@]+"${BUNDLE_ARGS[@]}"}
+scripts/bundle-macos.sh "$@"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 APP_DIR="target/${PROFILE}/Immersion.app"
 DMG="dist/Immersion-${VERSION}.dmg"
 
 mkdir -p dist
-STAGING=$(mktemp -d)/Immersion
+STAGING_WORKDIR=$(mktemp -d)
+trap 'rm -rf "$STAGING_WORKDIR"' EXIT
+STAGING="${STAGING_WORKDIR}/Immersion"
 mkdir -p "${STAGING}"
 cp -R "${APP_DIR}" "${STAGING}/"
 cp LICENSE "${STAGING}/LICENSE.txt"

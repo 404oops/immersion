@@ -1,7 +1,5 @@
-; Immersion Windows installer. Standalone port of the old CPack/NSIS setup
-; (packaging/nsis/ImmersionInstaller.nsh supplied the startup-options page;
-; CPack generated the rest). Built by scripts/package-windows.ps1, which
-; passes VERSION, EXE_SOURCE, and OUTFILE.
+; Immersion Windows installer. Built by scripts/package-windows.ps1, which
+; passes VERSION, EXE_SOURCE, LICENSE_SOURCE, and OUTFILE.
 
 !include "MUI2.nsh"
 !include "nsDialogs.nsh"
