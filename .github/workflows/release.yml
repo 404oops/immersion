@@ -1,10 +1,10 @@
 name: Release
 
-# Pushing a tag such as v0.2.1 builds the distributable installers with the
-# `production` cargo profile (fat LTO, stripped) and publishes them on a
-# GitHub release: the macOS DMG from scripts/package-macos.sh and the Windows
-# installer from scripts/package-windows.ps1. The tag must match the
-# workspace version in Cargo.toml, so the file names and the release agree.
+# Pushing a tag such as v0.2.1 builds the distributable installers and
+# publishes them on a GitHub release: the macOS DMG and Windows installer use
+# the `production` cargo profile, and Linux native packages, AppImage, and
+# tarball use `release`. The tag must match the workspace version in
+# Cargo.toml, so the file names and the release agree.
 #
 # The macOS bundle is ad-hoc signed unless IMMERSION_SIGN_IDENTITY is set;
 # to sign with a Developer ID, import the certificate into the runner's
@@ -86,8 +86,50 @@ jobs:
           path: dist/ImmersionSetup-*.exe
           if-no-files-found: error
 
+  linux:
+    needs: check
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libfontconfig1-dev libfreetype-dev libvulkan-dev libx11-dev libxcb1-dev pkg-config
+
+      - name: Build Linux binary
+        run: cargo build --release --locked -p immersion
+
+      - name: Packaging tools
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          curl -fsSL -o /tmp/linuxdeploy.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+          chmod +x /tmp/linuxdeploy.AppImage
+          mkdir -p "$HOME/.local/bin"
+          printf '#!/bin/sh\nexec /tmp/linuxdeploy.AppImage --appimage-extract-and-run "$@"\n' > "$HOME/.local/bin/linuxdeploy"
+          chmod +x "$HOME/.local/bin/linuxdeploy"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Package Linux releases
+        run: scripts/package-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/*.AppImage
+            dist/*.tar.gz
+          if-no-files-found: error
+
   release:
-    needs: [macos, windows]
+    needs: [macos, windows, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

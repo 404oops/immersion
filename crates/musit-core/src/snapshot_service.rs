@@ -7,7 +7,7 @@ use crate::backup_template::{
 };
 use crate::file_event::{FileEvent, FileEventType};
 use crate::metadata_store::MetadataStore;
-use crate::object_store::{ObjectStore, write_atomically};
+use crate::object_store::{ObjectStore, is_staged_file, write_atomically};
 use crate::path_cleanup::{join_path, parent_path, relative_file_path, remove_empty_parent_dirs};
 use crate::project_config::ProjectConfig;
 use serde_json::{Map, Value};
@@ -394,7 +394,7 @@ impl SnapshotService {
                 join_path(root, &staged_path)
             };
 
-            if Path::new(&absolute_staged_path).exists()
+            if is_staged_file(&self.project_config.musit_path(), &absolute_staged_path)
                 && fs::remove_file(&absolute_staged_path).is_ok()
             {
                 remove_empty_parent_dirs(&parent_path(&absolute_staged_path), &staging_root);

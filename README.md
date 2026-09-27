@@ -26,10 +26,12 @@ These screenshots show Immersion with illustrative sample projects and version n
 
 ## Get started
 
-1. Download the latest [macOS DMG or Windows installer](https://github.com/404oops/immersion/releases/latest).
+1. Download an available package from the latest [release](https://github.com/404oops/immersion/releases/latest). For Linux build and package options, see the guide below.
 2. Open Immersion and choose a projects folder.
 3. Select **Bundles** for one folder or bundle per project, or **Files** for loose project files. You can add more folders later with **+**.
 4. Select a project to explore its version graph. Double-click a project to open it in its usual app.
+
+For Linux install and build details, including Flatpak, follow the [Linux build guide](packaging/linux/README.md).
 
 The [user manual](wiki/Home.md) covers every control, supported formats, storage, restore behavior, settings, and troubleshooting. Once published, it is also available in the [GitHub Wiki](https://github.com/404oops/immersion/wiki).
 

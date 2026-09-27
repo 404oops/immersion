@@ -678,6 +678,44 @@ fn e2e_backup() {
         assert_eq!(v11.files.len(), 2, "branch: 1.1 groups both bundle files");
     }
 
+    // A recent staged copy is an optimization, not the source of truth.
+    // If it changes after capture, restore must fall back to the object.
+    {
+        let suppressed_before = suppressed_count(&backend);
+        let v11 = version_by_id(&versions, "1.1").unwrap();
+        let staged = &v11
+            .files
+            .iter()
+            .find(|file| file.path.ends_with("ProjectData"))
+            .unwrap()
+            .staged_path;
+        let absolute_staged = if staged.starts_with('/') {
+            staged.clone()
+        } else {
+            format!("{project_root}/{staged}")
+        };
+        assert!(write_file(&absolute_staged, b"tampered staged copy"));
+        assert!(backend.restore_version_by_id("1.1"));
+        assert!(
+            wait_for(&mut backend, WAIT, |backend| {
+                backend.take_events();
+                backend
+                    .activity()
+                    .iter()
+                    .any(|line| line.contains("restored") && line.contains("version 1.1"))
+            }),
+            "restore: tampered staged copy was handled"
+        );
+        assert_eq!(read_file(&project_data_path), b"projectdata branch");
+        assert!(
+            wait_for(&mut backend, WAIT, |backend| {
+                backend.take_events();
+                suppressed_count(backend) >= suppressed_before + 2
+            }),
+            "restore: watcher events for verified files were suppressed"
+        );
+    }
+
     // ---- Multiple projects folders (workspaces/tabs) ----
     let second_dir = tempfile::tempdir().unwrap();
     let second_root = second_dir.path().to_string_lossy().to_string();

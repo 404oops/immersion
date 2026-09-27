@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Immersion
+Comment=Automatic version history for music projects
+Exec=immersion
+Icon=io.github._404oops.immersion
+Categories=AudioVideo;Audio;Utility;
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github._404oops.immersion

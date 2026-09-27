@@ -67,6 +67,19 @@ pub fn write_atomically(file_path: &str, bytes: &[u8]) -> bool {
     write_atomically_with(file_path, |file| file.write_all(bytes).is_ok())
 }
 
+/// Only log paths that still resolve inside this project's staging area may
+/// be removed. Logs can contain legacy absolute paths and are not trusted.
+pub fn is_staged_file(musit_root: &str, file_path: &str) -> bool {
+    let staging_root = Path::new(musit_root).join("staging");
+    let (Ok(root), Ok(file)) = (
+        staging_root.canonicalize(),
+        Path::new(file_path).canonicalize(),
+    ) else {
+        return false;
+    };
+    file.is_file() && file.starts_with(&root)
+}
+
 /// Streams the object file through decompression, comparing the content's
 /// SHA-256 — constant memory regardless of object size.
 fn object_file_matches_hash(object_path: &str, hash_hex: &str) -> bool {
@@ -153,8 +166,29 @@ impl ObjectStore {
             .as_millis()
             .to_string();
 
-        let target_dir_path = join_path(&self.musit_root, &format!("staging/{stamp}"));
-        fs::create_dir_all(&target_dir_path).ok()?;
+        // Each staged copy needs its own directory. A timestamp alone can
+        // collide when two saves arrive in the same millisecond, and
+        // File::create below would otherwise truncate the earlier copy.
+        let staging_root = join_path(&self.musit_root, "staging");
+        fs::create_dir_all(&staging_root).ok()?;
+        let mut target_dir_path = None;
+        for attempt in 0..1024 {
+            let name = if attempt == 0 {
+                stamp.clone()
+            } else {
+                format!("{stamp}-{attempt}")
+            };
+            let path = join_path(&staging_root, &name);
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    target_dir_path = Some(path);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return None,
+            }
+        }
+        let target_dir_path = target_dir_path?;
 
         let target_file_path = join_path(&target_dir_path, &normalized_relative);
         fs::create_dir_all(parent_path(&target_file_path)).ok()?;
@@ -169,6 +203,7 @@ impl ObjectStore {
         if std::io::copy(&mut source, &mut target).is_err() {
             drop(target);
             let _ = fs::remove_file(&target_file_path);
+            let _ = fs::remove_dir_all(&target_dir_path);
             return None;
         }
 
@@ -477,5 +512,41 @@ mod tests {
                 .is_none()
         );
         assert!(store.stage_file(source.to_str().unwrap(), "/abs").is_none());
+    }
+
+    #[test]
+    fn staged_saves_of_same_file_do_not_overwrite_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let musit_root = dir.path().join(".musit");
+        let store = ObjectStore::new(musit_root.to_string_lossy().to_string());
+        assert!(store.init());
+        let source = dir.path().join("song.als");
+        fs::write(&source, b"first save").unwrap();
+        let first = store
+            .stage_file(source.to_str().unwrap(), "song.als")
+            .unwrap();
+        fs::write(&source, b"second save").unwrap();
+        let second = store
+            .stage_file(source.to_str().unwrap(), "song.als")
+            .unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&first).unwrap(), b"first save");
+        assert_eq!(fs::read(&second).unwrap(), b"second save");
+        assert!(is_staged_file(musit_root.to_str().unwrap(), &first));
+        assert!(!is_staged_file(
+            musit_root.to_str().unwrap(),
+            source.to_str().unwrap()
+        ));
+
+        #[cfg(unix)]
+        {
+            let link = musit_root.join("staging").join("outside-link");
+            std::os::unix::fs::symlink(&source, &link).unwrap();
+            assert!(!is_staged_file(
+                musit_root.to_str().unwrap(),
+                link.to_str().unwrap()
+            ));
+        }
     }
 }

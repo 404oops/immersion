@@ -1,0 +1,52 @@
+name: immersion
+arch: amd64
+platform: linux
+version: ${IMMERSION_VERSION}
+release: 1
+section: sound
+priority: optional
+maintainer: Immersion contributors <404oops@users.noreply.github.com>
+description: Automatic version history for music projects
+homepage: https://github.com/404oops/immersion
+license: GPL-3.0-only
+contents:
+  - src: target/release/immersion
+    dst: /usr/bin/immersion
+  - src: packaging/linux/io.github._404oops.immersion.desktop
+    dst: /usr/share/applications/io.github._404oops.immersion.desktop
+  - src: packaging/linux/io.github._404oops.immersion.metainfo.xml
+    dst: /usr/share/metainfo/io.github._404oops.immersion.metainfo.xml
+  - src: packaging/linux/icon-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/io.github._404oops.immersion.png
+  - src: packaging/linux/icon-512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/io.github._404oops.immersion.png
+  - src: LICENSE
+    dst: /usr/share/licenses/immersion/LICENSE
+overrides:
+  deb:
+    depends:
+      - libx11-6
+      - libxcb1
+      - libxkbcommon0
+      - libfontconfig1
+      - libfreetype6
+      - libvulkan1
+      - xdg-utils
+  rpm:
+    depends:
+      - libX11
+      - libxcb
+      - libxkbcommon
+      - fontconfig
+      - freetype
+      - vulkan-loader
+      - xdg-utils
+  archlinux:
+    depends:
+      - libx11
+      - libxcb
+      - libxkbcommon
+      - fontconfig
+      - freetype2
+      - vulkan-icd-loader
+      - xdg-utils

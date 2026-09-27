@@ -26,4 +26,4 @@ The `.musit` format remains compatible with Immersion's earlier 0.1.x Qt builds.
 
 ## Closing the window
 
-On macOS, closing the window hides Immersion in the menu bar while monitoring continues. Use the menu bar item to reopen it or quit. If you already configured folders, the app can start hidden on later launches. On Windows and Linux, closing the window quits because this version has no equivalent status item there. Use the app's quit action when you intend to stop monitoring on macOS.
+On macOS, closing the window hides Immersion in the menu bar while monitoring continues. Use the menu bar item to reopen it or quit. If you already configured folders, the app can start hidden on later launches. On Linux, closing the window minimizes it while monitoring continues when a StatusNotifierItem tray host is available; without one, closing quits. On Windows, closing the window quits. Use the app's quit action when you intend to stop monitoring on macOS or Linux.

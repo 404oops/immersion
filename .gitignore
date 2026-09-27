@@ -2,4 +2,6 @@
 .cache/
 target/
 dist/
+packaging/flatpak/build/
+.flatpak-builder/
 *.vscode

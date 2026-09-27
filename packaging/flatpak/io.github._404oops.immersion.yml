@@ -1,0 +1,48 @@
+app-id: io.github._404oops.immersion
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: immersion
+
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --device=dri
+  # Projects are long-lived, watched recursively, and contain writable .musit data.
+  - --filesystem=home
+  - --filesystem=/run/media
+  - --filesystem=/media
+  - --filesystem=/mnt
+  - --filesystem=xdg-run/immersion:create
+  # GPUI's Linux notification backend uses org.freedesktop.Notifications.
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+
+modules:
+  - name: immersion
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/immersion/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo build --offline --locked --release -p immersion
+      - install -Dm755 target/release/immersion /app/bin/immersion
+      - install -Dm644 packaging/linux/icon-512.png /app/share/icons/hicolor/512x512/apps/io.github._404oops.immersion.png
+      - install -Dm644 packaging/linux/icon-256.png /app/share/icons/hicolor/256x256/apps/io.github._404oops.immersion.png
+      - install -Dm644 packaging/linux/io.github._404oops.immersion.desktop /app/share/applications/io.github._404oops.immersion.desktop
+      - install -Dm644 packaging/linux/io.github._404oops.immersion.metainfo.xml /app/share/metainfo/io.github._404oops.immersion.metainfo.xml
+      - install -Dm644 LICENSE /app/share/licenses/io.github._404oops.immersion/LICENSE
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - target
+          - dist
+          - .flatpak-builder
+          - packaging/flatpak/build
+      - cargo-sources.json

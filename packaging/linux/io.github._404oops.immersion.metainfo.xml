@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github._404oops.immersion</id>
+  <name>Immersion</name>
+  <summary>Automatic version history for music projects</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <url type="homepage">https://github.com/404oops/immersion</url>
+  <url type="bugtracker">https://github.com/404oops/immersion/issues</url>
+  <description>
+    <p>Immersion watches music project folders and saves a version whenever a project file changes. Browse the version graph, add notes, and restore an earlier save.</p>
+    <p>Supported projects include Ableton Live, Bitwig Studio, FL Studio, REAPER, and Logic Pro files.</p>
+  </description>
+  <launchable type="desktop-id">io.github._404oops.immersion.desktop</launchable>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.2.1" date="2026-09-14" />
+  </releases>
+</component>

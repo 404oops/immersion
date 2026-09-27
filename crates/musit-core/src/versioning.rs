@@ -18,7 +18,7 @@ use crate::backend::{
     parse_versions_from_log, resolve_staged_path, sha256_file_hex,
 };
 use crate::file_event::FileEvent;
-use crate::object_store::ObjectStore;
+use crate::object_store::{ObjectStore, is_staged_file};
 use crate::path_cleanup::{join_path, parent_path, path_equals, path_key};
 use crate::project_discovery::DiscoveredProject;
 use crate::snapshot_service::{SnapshotNotice, SnapshotService};
@@ -397,8 +397,16 @@ impl State {
 
             let staged_path = resolve_staged_path(&project.root_path, &file_entry.staged_path);
             let mut materialized = false;
-            if !staged_path.is_empty() && Path::new(&staged_path).exists() {
-                materialized = fs::copy(&staged_path, &temp_path).is_ok();
+            if is_staged_file(&join_path(&project.root_path, ".musit"), &staged_path)
+                && fs::copy(&staged_path, &temp_path).is_ok()
+            {
+                // A staged copy can be edited after the snapshot. Verify the
+                // bytes actually copied, then use the content-addressed
+                // object if they no longer match this version.
+                materialized = file_entry.object_hash.is_empty()
+                    || file_entry
+                        .object_hash
+                        .eq_ignore_ascii_case(&sha256_file_hex(&temp_path));
             }
             if !materialized && !file_entry.object_hash.is_empty() {
                 materialized = object_store.extract_object(&file_entry.object_hash, &temp_path);

@@ -19,6 +19,13 @@ const PEER_READ_TIMEOUT: Duration = Duration::from_millis(500);
 /// type-checks it; only Unix targets call it.
 #[cfg_attr(not(unix), allow(dead_code))]
 fn socket_path() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let app_dir = PathBuf::from(runtime_dir).join("immersion");
+        if std::fs::create_dir_all(&app_dir).is_ok() {
+            return app_dir.join(SERVER_NAME);
+        }
+    }
     std::env::temp_dir().join(SERVER_NAME)
 }
 

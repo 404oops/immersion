@@ -12,12 +12,19 @@ use gpui::{
     App, AsyncApp, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowHandle, WindowOptions,
     actions, prelude::*, px, size,
 };
+#[cfg(target_os = "macos")]
+use gpui::{Menu, MenuItem as OsMenuItem, SystemMenuType};
 use gpui_platform::application;
 
 use crate::platform::single_instance::{self, InstanceGuard};
 use vampir::text_input as ti;
 
-actions!(immersion, [Quit]);
+#[cfg(target_os = "linux")]
+const LINUX_APP_ID: &str = "io.github._404oops.immersion";
+#[cfg(target_os = "linux")]
+const LINUX_ICON: vampir::AppIcon = vampir::AppIcon::png(include_bytes!("../assets/icons/app.png"));
+
+actions!(immersion, [Quit, Hide, HideOthers, ShowAll]);
 
 thread_local! {
     static MAIN_WINDOW: RefCell<Option<WindowHandle<app::RootView>>> = const { RefCell::new(None) };
@@ -49,6 +56,13 @@ fn present_main_window(cx: &mut App) {
 }
 
 fn main() {
+    // gpui-ce enables its Wayland feature transitively. Force X11 at process
+    // startup so Wayland sessions use XWayland instead of the broken backend.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        std::env::remove_var("WAYLAND_DISPLAY");
+    }
+
     // Single instance: secondary instances ask the primary to raise itself.
     let raise_rx = match single_instance::acquire() {
         InstanceGuard::Primary(rx) => rx,
@@ -71,6 +85,9 @@ fn main() {
     gpui_app.on_reopen(|cx| present_main_window(cx));
 
     gpui_app.run(move |cx: &mut App| {
+        #[cfg(target_os = "linux")]
+        cx.set_app_identity(LINUX_APP_ID, "Immersion");
+
         // Dev builds run outside a .app bundle; give the Dock the real icon.
         platform::set_dock_icon_if_unbundled();
 
@@ -83,9 +100,33 @@ fn main() {
                 ti::ShowCharacterPalette,
                 Some("TextInput"),
             ),
-            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("secondary-q", Quit, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+
+        #[cfg(target_os = "macos")]
+        {
+            cx.bind_keys([
+                KeyBinding::new("cmd-h", Hide, None),
+                KeyBinding::new("cmd-alt-h", HideOthers, None),
+            ]);
+            cx.on_action(|_: &Hide, cx: &mut App| cx.hide());
+            cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
+            cx.on_action(|_: &ShowAll, cx: &mut App| cx.unhide_other_apps());
+            cx.set_menus(vec![
+                Menu::new("Immersion").items([
+                    OsMenuItem::os_submenu("Services", SystemMenuType::Services),
+                    OsMenuItem::separator(),
+                    OsMenuItem::action("Hide Immersion", Hide),
+                    OsMenuItem::action("Hide Others", HideOthers),
+                    OsMenuItem::action("Show All", ShowAll),
+                    OsMenuItem::separator(),
+                    OsMenuItem::action("Quit Immersion", Quit),
+                ]),
+                vampir::edit_menu(),
+                Menu::new("Window").items(Vec::<OsMenuItem>::new()),
+            ]);
+        }
 
         // gpui's quit path never returns from run(), so shutdown work has to
         // hang off the quit hook: flush debounced settings and remove the
@@ -102,29 +143,34 @@ fn main() {
         .detach();
 
         let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(880.0), px(560.0))),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Immersion".into()),
+                ..Default::default()
+            }),
+            show: !start_hidden,
+            ..Default::default()
+        };
+        #[cfg(target_os = "linux")]
+        {
+            options.app_id = Some(LINUX_APP_ID.to_string());
+            options.icon = LINUX_ICON.window_icon();
+        }
         let window = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    window_min_size: Some(size(px(880.0), px(560.0))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Immersion".into()),
-                        ..Default::default()
-                    }),
-                    show: !start_hidden,
-                    ..Default::default()
-                },
-                |window, cx| cx.new(|cx| app::RootView::new(window, cx)),
-            )
+            .open_window(options, |window, cx| {
+                cx.new(|cx| app::RootView::new(window, cx))
+            })
             .expect("failed to open main window");
 
         MAIN_WINDOW.with(|slot| *slot.borrow_mut() = Some(window));
         // Take ownership of the NSWindow for animated hide/show.
         platform::adopt_main_window("Immersion");
 
-        // Closing the window hides the app into the status bar (tray app) on
-        // macOS. On other platforms gpui's hide() is a no-op and there is no
-        // status item, so closing quits instead of stranding the process.
+        // Closing the window leaves monitoring active where a tray control is
+        // available. GPUI cannot hide on Linux, so minimize its X11 window.
         window
             .update(cx, |_view, win, cx| {
                 win.on_window_should_close(cx, |_win, cx| {
@@ -136,6 +182,10 @@ fn main() {
                             cx.hide();
                         }
                         platform::set_background_agent_mode(true);
+                        APP_HIDDEN.with(|hidden| hidden.set(true));
+                        false
+                    } else if cfg!(target_os = "linux") && platform::status_item_available() {
+                        _win.minimize_window();
                         APP_HIDDEN.with(|hidden| hidden.set(true));
                         false
                     } else {
@@ -182,6 +232,7 @@ fn main() {
                 cx.background_executor()
                     .timer(Duration::from_millis(200))
                     .await;
+                platform::poll_status_item();
                 if raise_rx.try_recv().is_ok() {
                     cx.update(|cx| present_main_window(cx));
                 }

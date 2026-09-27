@@ -3165,13 +3165,13 @@ impl AppBackend {
 
         let staged_root = join_path(&project.root_path, strings::MUSIT_STAGING_RELATIVE_PATH);
         for staged_path in &deleted_staged_paths {
-            if staged_path.is_empty() {
-                continue;
+            if crate::object_store::is_staged_file(
+                &join_path(&project.root_path, ".musit"),
+                staged_path,
+            ) && fs::remove_file(staged_path).is_ok()
+            {
+                remove_empty_parent_dirs(&parent_path(staged_path), &staged_root);
             }
-            if Path::new(staged_path).exists() {
-                let _ = fs::remove_file(staged_path);
-            }
-            remove_empty_parent_dirs(&parent_path(staged_path), &staged_root);
         }
 
         // Remove compressed objects no other version references (objects are

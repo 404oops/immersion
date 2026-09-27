@@ -17,13 +17,17 @@ vampir = "0.1.5"
 gpui.workspace = true
 # The platform backend for gpui-ce. `runtime_shaders` compiles the Metal
 # shaders at startup so a machine with only the command line tools can build.
-gpui_platform = { package = "gpui_ce_platform", version = "0.1.0", features = ["font-kit", "runtime_shaders"] }
+gpui_platform = { package = "gpui_ce_platform", version = "0.1.0", features = ["font-kit", "runtime_shaders", "x11"] }
 unicode-segmentation.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 once_cell.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.6", features = ["blocking"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

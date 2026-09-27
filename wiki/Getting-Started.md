@@ -2,7 +2,7 @@
 
 ## Install
 
-Download the current package from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). On macOS, open the DMG and install the app. On Windows, run the per-user installer; administrator access is not required. The Windows installer can enable launch at login. Releases are built for macOS and Windows. Linux is not currently a packaged or fully supported desktop release.
+Download an available package from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). On macOS, open the DMG and install the app. On Windows, run the per-user installer; administrator access is not required. The Windows installer can enable launch at login. On Linux, follow the [Linux build guide](https://github.com/404oops/immersion/blob/main/packaging/linux/README.md) for native packages, AppImage, tarball, and Flatpak options and desktop requirements.
 
 ## First launch
 

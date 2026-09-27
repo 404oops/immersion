@@ -2,7 +2,11 @@
 //! launch-at-login and the single-instance guard, with no-op fallbacks on
 //! platforms that have no implementation yet.
 
+#[cfg(target_os = "linux")]
+mod linux;
 pub mod single_instance;
+#[cfg(target_os = "linux")]
+pub use linux::{install_status_item, poll_status_item, status_item_available};
 
 #[cfg(target_os = "macos")]
 pub mod mac;
@@ -94,8 +98,16 @@ pub fn is_launch_at_startup_supported() -> bool {
 #[cfg(not(target_os = "macos"))]
 pub fn show_notification(_title: &str, _body: &str) {}
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn install_status_item(_on_open: Box<dyn Fn()>, _on_quit: Box<dyn Fn()>) {}
+
+#[cfg(not(target_os = "linux"))]
+pub fn status_item_available() -> bool {
+    cfg!(target_os = "macos")
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn poll_status_item() {}
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_dock_icon_if_unbundled() {}
