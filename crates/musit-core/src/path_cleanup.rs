@@ -30,8 +30,6 @@ pub fn clean_path(path: &str) -> String {
                     matches!(parts.last(), Some(&last) if last != ".." && !is_drive(last));
                 if can_pop {
                     parts.pop();
-                } else if !absolute && parts.last() != Some(&"..") {
-                    parts.push("..");
                 } else if !absolute {
                     parts.push("..");
                 }

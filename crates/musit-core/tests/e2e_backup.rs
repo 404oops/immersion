@@ -40,10 +40,10 @@ fn wait_for(
 }
 
 fn write_file(path: &str, contents: &[u8]) -> bool {
-    if let Some(parent) = Path::new(path).parent() {
-        if fs::create_dir_all(parent).is_err() {
-            return false;
-        }
+    if let Some(parent) = Path::new(path).parent()
+        && fs::create_dir_all(parent).is_err()
+    {
+        return false;
     }
     fs::write(path, contents).is_ok()
 }

@@ -285,16 +285,16 @@ impl RootView {
             prompt: Some("Select Projects Folder".into()),
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await {
-                if let Some(path) = paths.first() {
-                    let folder = path.to_string_lossy().to_string();
-                    this.update(cx, |root: &mut RootView, cx| {
-                        let local = root.backend.display_local_path(&folder);
-                        root.onboarding = Some(OnboardingStep::ChooseLayout { folder: local });
-                        cx.notify();
-                    })
-                    .ok();
-                }
+            if let Ok(Ok(Some(paths))) = receiver.await
+                && let Some(path) = paths.first()
+            {
+                let folder = path.to_string_lossy().to_string();
+                this.update(cx, |root: &mut RootView, cx| {
+                    let local = root.backend.display_local_path(&folder);
+                    root.onboarding = Some(OnboardingStep::ChooseLayout { folder: local });
+                    cx.notify();
+                })
+                .ok();
             }
         })
         .detach();

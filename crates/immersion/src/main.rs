@@ -82,7 +82,7 @@ fn main() {
     let gpui_app = application();
 
     // Dock icon click / Spotlight reopen shows the window.
-    gpui_app.on_reopen(|cx| present_main_window(cx));
+    gpui_app.on_reopen(present_main_window);
 
     gpui_app.run(move |cx: &mut App| {
         #[cfg(target_os = "linux")]
@@ -203,7 +203,7 @@ fn main() {
             platform::install_status_item(
                 Box::new(move || {
                     let cx = async_open.borrow_mut();
-                    cx.update(|cx| present_main_window(cx));
+                    cx.update(present_main_window);
                 }),
                 Box::new(move || {
                     let cx = async_quit.borrow_mut();
@@ -222,7 +222,7 @@ fn main() {
                     return;
                 }
                 let cx = async_activate.borrow_mut();
-                let _ = cx.update(|cx| present_main_window(cx));
+                cx.update(present_main_window);
             }));
         }
 
@@ -234,7 +234,7 @@ fn main() {
                     .await;
                 platform::poll_status_item();
                 if raise_rx.try_recv().is_ok() {
-                    cx.update(|cx| present_main_window(cx));
+                    cx.update(present_main_window);
                 }
             }
         })

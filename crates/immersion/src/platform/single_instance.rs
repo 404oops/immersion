@@ -92,10 +92,10 @@ fn acquire_unix() -> InstanceGuard {
                     // raise handling for later launches.
                     let _ = stream.set_read_timeout(Some(PEER_READ_TIMEOUT));
                     let mut buffer = [0u8; 64];
-                    if let Ok(read) = stream.read(&mut buffer) {
-                        if is_raise(&buffer[..read]) {
-                            let _ = tx.send(());
-                        }
+                    if let Ok(read) = stream.read(&mut buffer)
+                        && is_raise(&buffer[..read])
+                    {
+                        let _ = tx.send(());
                     }
                 }
             })
@@ -166,10 +166,10 @@ fn acquire_tcp() -> InstanceGuard {
                     let Ok(mut stream) = stream else { continue };
                     let _ = stream.set_read_timeout(Some(PEER_READ_TIMEOUT));
                     let mut buffer = [0u8; 64];
-                    if let Ok(read) = stream.read(&mut buffer) {
-                        if is_raise(&buffer[..read]) {
-                            let _ = tx.send(());
-                        }
+                    if let Ok(read) = stream.read(&mut buffer)
+                        && is_raise(&buffer[..read])
+                    {
+                        let _ = tx.send(());
                     }
                 }
             })
@@ -181,11 +181,10 @@ fn acquire_tcp() -> InstanceGuard {
         if let Some(port) = std::fs::read_to_string(port_path())
             .ok()
             .and_then(|text| text.trim().parse::<u16>().ok())
+            && let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port))
         {
-            if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-                let _ = stream.write_all(RAISE_COMMAND);
-                let _ = stream.flush();
-            }
+            let _ = stream.write_all(RAISE_COMMAND);
+            let _ = stream.flush();
         }
         InstanceGuard::Secondary
     }

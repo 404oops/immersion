@@ -36,7 +36,7 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -817,12 +817,11 @@ pub(crate) fn migrate_misrouted_history(source_root: &str, destination_root: &st
             if !Path::new(&source_object_path).exists() {
                 return 0;
             }
-            if !Path::new(&destination_object_path).exists() {
-                if fs::create_dir_all(parent_path(&destination_object_path)).is_err()
-                    || fs::copy(&source_object_path, &destination_object_path).is_err()
-                {
-                    return 0;
-                }
+            if !Path::new(&destination_object_path).exists()
+                && (fs::create_dir_all(parent_path(&destination_object_path)).is_err()
+                    || fs::copy(&source_object_path, &destination_object_path).is_err())
+            {
+                return 0;
             }
         }
 
@@ -848,13 +847,12 @@ pub(crate) fn migrate_misrouted_history(source_root: &str, destination_root: &st
         let destination_relative_staged =
             format!(".musit/staging/{stamp}/{}", json_str(obj, "path"));
         let destination_staged_path = join_path(destination_root, &destination_relative_staged);
-        if Path::new(&source_staged_path).exists() && !Path::new(&destination_staged_path).exists()
+        if Path::new(&source_staged_path).exists()
+            && !Path::new(&destination_staged_path).exists()
+            && (fs::create_dir_all(parent_path(&destination_staged_path)).is_err()
+                || fs::copy(&source_staged_path, &destination_staged_path).is_err())
         {
-            if fs::create_dir_all(parent_path(&destination_staged_path)).is_err()
-                || fs::copy(&source_staged_path, &destination_staged_path).is_err()
-            {
-                return 0;
-            }
+            return 0;
         }
         obj.insert(
             "staged".to_string(),
@@ -1389,11 +1387,8 @@ impl AppBackend {
     /// Drains queued cross-thread messages (discovery progress, watcher
     /// events, snapshot notices) and due timers. Call this regularly.
     pub fn process_pending(&mut self) {
-        loop {
-            match self.msg_rx.try_recv() {
-                Ok(msg) => self.handle_msg(msg),
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
-            }
+        while let Ok(msg) = self.msg_rx.try_recv() {
+            self.handle_msg(msg);
         }
 
         if self
@@ -2047,10 +2042,9 @@ impl AppBackend {
         if self
             .project_registry
             .save_project_primary_file(&root_path, &previous_primary, &trimmed)
+            && let Some(project) = self.active_projects().get(discovered_index).cloned()
         {
-            if let Some(project) = self.active_projects().get(discovered_index).cloned() {
-                self.project_registry.save_project(&project);
-            }
+            self.project_registry.save_project(&project);
         }
 
         self.rebuild_visible_projects();
@@ -3200,10 +3194,10 @@ impl AppBackend {
             if still_referenced_hashes.contains(object_hash) {
                 continue;
             }
-            if let Some(object_path) = object_store.object_path_for_hash(object_hash) {
-                if Path::new(&object_path).exists() {
-                    let _ = fs::remove_file(&object_path);
-                }
+            if let Some(object_path) = object_store.object_path_for_hash(object_hash)
+                && Path::new(&object_path).exists()
+            {
+                let _ = fs::remove_file(&object_path);
             }
         }
 
@@ -3748,7 +3742,7 @@ impl AppBackend {
                 }
             }
         }
-        ancestor_roots.sort_by(|left, right| right.len().cmp(&left.len()));
+        ancestor_roots.sort_by_key(|root| std::cmp::Reverse(root.len()));
         let generation = self
             .workspace_index_by_root(folder_root)
             .map(|index| self.workspaces[index].monitoring_generation)

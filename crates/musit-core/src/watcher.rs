@@ -524,10 +524,10 @@ impl HybridFileWatcher {
                             let event_tx = fs_tx.clone();
                             let mut created = notify::recommended_watcher(
                                 move |result: Result<notify::Event, notify::Error>| {
-                                    if let Ok(event) = result {
-                                        if !event.paths.is_empty() {
-                                            let _ = event_tx.send(Msg::Fs(event.paths));
-                                        }
+                                    if let Ok(event) = result
+                                        && !event.paths.is_empty()
+                                    {
+                                        let _ = event_tx.send(Msg::Fs(event.paths));
                                     }
                                 },
                             )

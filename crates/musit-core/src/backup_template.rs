@@ -15,7 +15,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProjectKind {
     // DawElectronic — clip/pattern-oriented
     Ableton,
@@ -85,6 +85,7 @@ pub enum ProjectKind {
     Godot,
     Unity,
 
+    #[default]
     Unknown,
 }
 

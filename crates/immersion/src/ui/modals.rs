@@ -793,23 +793,23 @@ impl RootView {
             prompt: Some("Select Projects Folder".into()),
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await {
-                if let Some(path) = paths.first() {
-                    let folder = path.to_string_lossy().to_string();
-                    this.update(cx, |root: &mut RootView, cx| {
-                        // A folder set up before keeps its type in its own
-                        // settings.json — add it straight away instead of
-                        // asking again.
-                        if musit_core::folder_settings::has_layout_setting(&folder) {
-                            root.pending_select_latest = true;
-                            root.backend.add_projects_folder(&folder, "");
-                        } else {
-                            root.open_layout_dialog_for_folder(&folder);
-                        }
-                        cx.notify();
-                    })
-                    .ok();
-                }
+            if let Ok(Ok(Some(paths))) = receiver.await
+                && let Some(path) = paths.first()
+            {
+                let folder = path.to_string_lossy().to_string();
+                this.update(cx, |root: &mut RootView, cx| {
+                    // A folder set up before keeps its type in its own
+                    // settings.json — add it straight away instead of
+                    // asking again.
+                    if musit_core::folder_settings::has_layout_setting(&folder) {
+                        root.pending_select_latest = true;
+                        root.backend.add_projects_folder(&folder, "");
+                    } else {
+                        root.open_layout_dialog_for_folder(&folder);
+                    }
+                    cx.notify();
+                })
+                .ok();
             }
         })
         .detach();

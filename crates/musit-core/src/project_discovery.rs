@@ -29,12 +29,6 @@ pub struct DiscoveredProject {
     pub primary_file_modified: Option<SystemTime>,
 }
 
-impl Default for ProjectKind {
-    fn default() -> Self {
-        ProjectKind::Unknown
-    }
-}
-
 /// Filesystem metadata for an entry, as much as classifyPath needs.
 #[derive(Clone, Debug)]
 struct EntryInfo {
@@ -606,11 +600,11 @@ pub fn discover_all(
             callback(current_folder);
         }
         *ctx.directories_scanned += 1;
-        if let Some(progress) = on_progress.as_deref_mut() {
-            if *ctx.directories_scanned % ctx.progress_interval == 0 {
-                let partial = build_projects_from_state(&ctx.state);
-                progress(&partial, *ctx.directories_scanned);
-            }
+        if let Some(progress) = on_progress.as_deref_mut()
+            && *ctx.directories_scanned % ctx.progress_interval == 0
+        {
+            let partial = build_projects_from_state(&ctx.state);
+            progress(&partial, *ctx.directories_scanned);
         }
 
         for entry in read_entries(current_folder) {

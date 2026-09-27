@@ -559,9 +559,9 @@ impl RootView {
                     project_name,
                     version_label,
                     relative_path,
-                } => {
+                }
                     // Desktop notification for a recorded save.
-                    if self.backend.notifications_enabled() {
+                    if self.backend.notifications_enabled() => {
                         let artifact_path =
                             musit_core::backup_template::artifact_for_path(&relative_path);
                         let artifact_name = musit_core::path_cleanup::file_name(&artifact_path);
@@ -580,7 +580,6 @@ impl RootView {
                         #[cfg(not(target_os = "linux"))]
                         crate::platform::show_notification("Snapshot saved", &body);
                     }
-                }
                 _ => {}
             }
         }

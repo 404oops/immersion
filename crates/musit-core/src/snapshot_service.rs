@@ -507,22 +507,22 @@ impl SnapshotService {
         // Deletions count too: replacing a file briefly removes it, and that
         // gap must not be recorded as the user deleting their project.
         {
-            if let Some(&pending) = self.suppressed_events_by_path.get(&event.relative_path) {
-                if pending > 0 {
-                    let remaining = pending - 1;
-                    if remaining > 0 {
-                        self.suppressed_events_by_path
-                            .insert(event.relative_path.clone(), remaining);
-                    } else {
-                        self.suppressed_events_by_path.remove(&event.relative_path);
-                    }
-
-                    self.emit(SnapshotNotice::Skipped(format!(
-                        "Suppressed self-triggered update: {}",
-                        event.relative_path
-                    )));
-                    return;
+            if let Some(&pending) = self.suppressed_events_by_path.get(&event.relative_path)
+                && pending > 0
+            {
+                let remaining = pending - 1;
+                if remaining > 0 {
+                    self.suppressed_events_by_path
+                        .insert(event.relative_path.clone(), remaining);
+                } else {
+                    self.suppressed_events_by_path.remove(&event.relative_path);
                 }
+
+                self.emit(SnapshotNotice::Skipped(format!(
+                    "Suppressed self-triggered update: {}",
+                    event.relative_path
+                )));
+                return;
             }
         }
 
@@ -561,6 +561,35 @@ impl Default for SnapshotService {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Recursive file walk including hidden files.
+fn walk_files(dir: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_string()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let path_str = path.to_string_lossy().replace('\\', "/");
+            // Never follow symlinks:
+            // a symlinked dir inside a bundle could form a cycle and hang.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                stack.push(path_str);
+            } else if file_type.is_file() {
+                out.push(path_str);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -602,33 +631,4 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert!(versions.iter().all(|version| version.files.len() == 2));
     }
-}
-
-/// Recursive file walk including hidden files.
-fn walk_files(dir: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_string()];
-    while let Some(current) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&current) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let path_str = path.to_string_lossy().replace('\\', "/");
-            // Never follow symlinks:
-            // a symlinked dir inside a bundle could form a cycle and hang.
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_symlink() {
-                continue;
-            }
-            if file_type.is_dir() {
-                stack.push(path_str);
-            } else if file_type.is_file() {
-                out.push(path_str);
-            }
-        }
-    }
-    out
 }

@@ -552,10 +552,10 @@ impl ProjectRegistry {
             .and_then(|v| v.as_object())
         {
             for (path, value) in map {
-                if let Some(name) = value.as_str() {
-                    if !name.trim().is_empty() {
-                        names.insert(clean_path(path), name.trim().to_string());
-                    }
+                if let Some(name) = value.as_str()
+                    && !name.trim().is_empty()
+                {
+                    names.insert(clean_path(path), name.trim().to_string());
                 }
             }
         }
