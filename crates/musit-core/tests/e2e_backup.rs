@@ -277,6 +277,7 @@ fn e2e_backup() {
 
     {
         let mut routing_backend = AppBackend::with_platform(test_platform());
+        routing_backend.set_log_level("debug");
         let mut projects_changed_count = 0usize;
         routing_backend.confirm_projects_folder(&routing_root, "Bundles");
 
@@ -321,7 +322,15 @@ fn e2e_backup() {
                     .count();
                 project_index_by_file(backend, "New Project.flp") >= 0
             }),
-            "rediscovery routing: new project initialized"
+            "rediscovery routing: new project initialized; status={}; direct_discovery={:?}; activity={:?}",
+            routing_backend.status_message(),
+            project_discovery::discover_project_for_changed_path(
+                &routing_root,
+                &new_project_file,
+                ProjectsFolderLayout::Bundles
+            )
+            .map(|project| project.root_path),
+            routing_backend.activity()
         );
         assert!(
             projects_changed_count > changes_before_new_project,

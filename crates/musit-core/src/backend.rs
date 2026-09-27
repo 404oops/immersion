@@ -115,6 +115,7 @@ struct FolderWorkspace {
     scan_progress: String,
     discovered_projects: Vec<DiscoveredProject>,
     watcher: Option<HybridFileWatcher>,
+    watcher_ready: bool,
     scanning: bool,
     /// Bumped whenever this folder's monitoring is torn down, so versioning
     /// init replies from before that are recognised as stale.
@@ -131,6 +132,7 @@ impl FolderWorkspace {
             scan_progress: String::new(),
             discovered_projects: Vec::new(),
             watcher: None,
+            watcher_ready: false,
             scanning: false,
             monitoring_generation: 0,
         }
@@ -1185,7 +1187,7 @@ impl AppBackend {
         };
         let root = workspace.root.clone();
         let scanning = workspace.scanning;
-        let watched = workspace.watcher.is_some();
+        let watched = workspace.watcher_ready;
         let count = workspace.discovered_projects.len();
         let queued = self.scan_queue.iter().any(|q| path_equals(q, &root));
 
@@ -1481,10 +1483,11 @@ impl AppBackend {
                 self.dispatch_file_event(&event);
             }
             BackendMsg::WatcherReady { root_path } => {
-                if self
+                if let Some(index) = self
                     .workspace_index_by_root(&root_path)
-                    .is_some_and(|index| self.workspaces[index].watcher.is_some())
+                    .filter(|&index| self.workspaces[index].watcher.is_some())
                 {
+                    self.workspaces[index].watcher_ready = true;
                     self.set_status_for_folder(&root_path, format!("Monitoring: {root_path}"));
                     self.append_activity(&format!(
                         "[{}] monitoring started for {}",
@@ -3635,6 +3638,7 @@ impl AppBackend {
         if let Some(watcher) = self.workspaces[index].watcher.take() {
             watcher.stop_watching();
         }
+        self.workspaces[index].watcher_ready = false;
         self.drop_services_under(folder_root);
 
         let root = self.workspaces[index].root.clone();
@@ -3833,6 +3837,7 @@ impl AppBackend {
         }
         if let Some(index) = self.workspace_index_by_root(folder_root) {
             self.workspaces[index].watcher = Some(watcher);
+            self.workspaces[index].watcher_ready = false;
         }
     }
 
@@ -3841,6 +3846,7 @@ impl AppBackend {
             if let Some(watcher) = self.workspaces[index].watcher.take() {
                 watcher.stop_watching();
             }
+            self.workspaces[index].watcher_ready = false;
             self.workspaces[index].monitoring_generation += 1;
         }
         if self
@@ -3872,6 +3878,7 @@ impl AppBackend {
             if let Some(watcher) = workspace.watcher.take() {
                 watcher.stop_watching();
             }
+            workspace.watcher_ready = false;
         }
 
         self.monitoring_init_queue.clear();
