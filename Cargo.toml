@@ -5,6 +5,7 @@ resolver = "2"
 [workspace.package]
 version = "0.2.1"
 edition = "2024"
+license = "GPL-3.0-only"
 
 [workspace.dependencies]
 # gpui-ce is the community edition of Zed's GPUI, synced from Zed and published

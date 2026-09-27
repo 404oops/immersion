@@ -1,71 +1,42 @@
-# Immersion — Music Project Versioning
+<div align="center">
+  <img src="crates/immersion/assets/icons/app.png" alt="Immersion app icon" width="112">
+  <h1>Immersion</h1>
+  <p><strong>A visual history for your creative projects.</strong></p>
+  <p>Immersion watches your project folders, saves versions as you work, and lets you return to an earlier version from a visual graph.</p>
+</div>
 
-Automatic version snapshots for DAW project files (Bitwig, Ableton, FL
-Studio, Reaper, Logic, ...). Rust + [GPUI](https://www.gpui.rs/) rewrite of
-the original Qt/QML app; on-disk data (`.musit` folders, config, registry)
-is fully compatible with the 0.1.x Qt builds.
+## At a glance
 
-The main window shows your projects folders as tabs (all of them watched and
-versioned simultaneously; discovery scans run on a worker thread, one folder
-at a time). Each tab splits into the project list (left, click to select,
-double-click to open) and the version graph (right), with a draggable
-details panel below holding project info, notes, and version actions. The
-activity log lives in Settings. First run walks through a wizard: pick a
-folder, choose its layout, then optionally add more folders.
+| | |
+| --- | --- |
+| **Made for** | Music, video, design, and other supported creative project formats |
+| **Works on** | macOS and Windows releases; [Linux builds](packaging/linux/README.md) |
+| **What it saves** | Project files and selected companion data; large media and caches are generally excluded |
+| **Price and source** | Free and open source under [GPLv3](LICENSE) |
 
-## Workspace
+Choose where your projects live and whether they are kept in their own folders or as loose files. Immersion finds supported projects, takes an initial snapshot, then records new versions when their files change. Search and sort projects, add notes to projects and versions, and restore a version when you need it. Your history stays in a `.musit` folder beside the project.
 
-- `crates/musit-core` — engine: project discovery, file watching, snapshot
-  service, content-addressed object store (SHA-256 + Qt-compatible zlib
-  framing), version metadata log.
-- `crates/immersion` — GPUI desktop app and platform glue (menu bar status
-  item, notifications, launch-at-login, single instance).
+## A look inside
 
-The widget toolkit the app is built from is [vampir], pulled from crates.io.
-It depends on nothing but GPUI, and is MIT licensed.
+These screenshots show Immersion with illustrative sample projects and version notes.
 
-[vampir]: https://github.com/404oops/vampir
+![Immersion showing FL Studio and Ableton projects, a branched version graph, and project and version notes](assets/screenshots/immersion-music.jpg)
 
-## Build & run
+![Immersion showing Blender and Affinity projects in a second folder](assets/screenshots/immersion-visual.jpg)
 
-```bash
-cargo run -p immersion            # debug build, runs unbundled
-cargo test -p musit-core          # engine test suite (incl. e2e parity test)
-```
+## Get started
 
-## Packaging
+1. Download the latest [macOS DMG or Windows installer](https://github.com/404oops/immersion/releases/latest).
+2. Open Immersion and choose a projects folder.
+3. Select **Bundles** for one folder or bundle per project, or **Files** for loose project files. You can add more folders later with **+**.
+4. Select a project to explore its version graph. Double-click a project to open it in its usual app.
 
-Distribution builds use the `production` cargo profile (fat LTO, stripped);
-without the flag the scripts package a plain `release` build. Output lands
-in `dist/`.
+The [user manual](wiki/Home.md) covers every control, supported formats, storage, restore behavior, settings, and troubleshooting. Once published, it is also available in the [GitHub Wiki](https://github.com/404oops/immersion/wiki).
 
-```bash
-scripts/bundle-macos.sh [--production]    # target/<profile>/Immersion.app only
-scripts/package-macos.sh [--production]   # dist/Immersion-<version>.dmg
-```
+> Immersion versions project data, not an entire media library. Keep your normal backups for audio, video, assets, and the device that holds your projects.
 
-On macOS, notifications and launch-at-login require the real `.app` bundle —
-the bare cargo binary skips both. Set `IMMERSION_SIGN_IDENTITY` to sign with
-a Developer ID certificate instead of the ad-hoc signature.
+## Contribute
 
-```powershell
-# Requires NSIS (winget install NSIS.NSIS)
-powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 [-Production]
-# -> dist\ImmersionSetup-<version>.exe
-```
+Bug reports and feature requests are welcome in [Issues](https://github.com/404oops/immersion/issues). To build locally, install Rust and run `cargo run -p immersion`; run the engine tests with `cargo test -p musit-core`. The manual's [development page](wiki/Development.md) has the repository layout and packaging details.
 
-The Windows installer is per-user (no admin prompt), offers a
-launch-at-login checkbox, and registers an Add/Remove Programs entry. The
-exe icon/version block is embedded at build time via `build.rs`.
-
-Releases are built by CI: bump `version` in `Cargo.toml`, commit, then push
-a matching `v<version>` tag. `.github/workflows/release.yml` runs the tests,
-packages the DMG and the Windows installer with the `production` profile,
-and publishes both on the GitHub release for that tag.
-
-## Platform support
-
-macOS is fully supported. The crates compile on Windows/Linux and the
-single-instance guard works there, but the status item, notifications, and
-hide-to-tray behavior are currently macOS-only (closing the window quits on
-other platforms).
+Immersion is licensed under the [GNU General Public License, version 3](LICENSE).
