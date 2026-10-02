@@ -17,7 +17,7 @@ The window has folder tabs across the top, a project list on the left, a version
 - Click a project to select it; double-click to open its primary file in the associated app.
 - Type in **Search projects…** to narrow the visible list.
 - Use **Sort by** to switch between **Name** and **Last Opened**. The setting also appears in Settings as the default sort mode.
-- The list shows the project type and primary file. If a project is missing, check its format and the folder layout in [Supported projects](https://github.com/404oops/immersion/wiki/Supported-Projects).
+- The list shows the project type and primary file. If a project is missing, check its format and the folder layout in [Supported projects](Supported-Projects.md).
 
 ## Version graph
 

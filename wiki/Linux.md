@@ -1,97 +1,38 @@
 # Linux builds
 
-Linux support is experimental. No support is provided for Linux builds or
-Linux-specific issues: distributions, desktop environments, graphics drivers,
-portals, and packaging differ enough that problems are often difficult to
-reproduce and cannot be fixed reliably across setups. These instructions are
-provided for people who want to try the builds on their own.
+Immersion can run on Linux, but Linux builds are experimental and unsupported.
+Distributions, desktop environments, graphics drivers, portals, and package
+setups vary enough that Linux-specific problems are often hard to reproduce or
+fix reliably across systems. Use these builds if you are comfortable checking
+your own desktop setup and troubleshooting installation issues.
 
-Immersion uses X11. On Wayland desktops it needs XWayland; the native Wayland
-backend is disabled. With a StatusNotifierItem tray host, closing the window
-minimizes it and project watching continues. Use the tray icon to open or quit
-Immersion. If the desktop has no tray host, closing the window quits so the
-process cannot become inaccessible. Launching Immersion again also reopens a
-running instance. Launch at login creates an XDG autostart entry for native
-installs. Once folders are configured, a login launch withdraws its window
-when the tray appears; if no tray appears within 30 seconds, the window stays
-open. Launch at login is not available in the Flatpak.
+## Get started
 
-## Native install
+1. Download the package for your CPU and distribution from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). Releases provide x86_64 and aarch64 `.deb`, `.rpm`, `.pkg.tar.zst`, `.AppImage`, and `.tar.gz` packages. Use the package manager format for your distribution when possible.
+2. Install the package with your package manager, or make the AppImage executable and run it. The tarball contains a binary and matching desktop files for a manual install. See the [Linux install and build instructions](https://github.com/404oops/immersion/blob/main/packaging/linux/README.md) for details.
+3. Open Immersion and choose a folder containing your creative projects. Select **Files** for loose documents such as `.blend`, `.afphoto`, or `.sketch`; select **Bundles** when each project has its own folder or is an application bundle.
+4. Save a project and check that a new version appears. Immersion writes its history to a `.musit` folder beside your projects, so it needs read and write access to the selected folder.
 
-Install Rust and the development packages for xkbcommon, X11, fontconfig,
-FreeType, Vulkan, and Wayland (a transitive GPUI build requirement despite
-X11-only runtime), plus pkg-config. On Debian/Ubuntu:
+Immersion needs an X11 session or XWayland on a Wayland desktop. Your desktop
+also needs an `xdg-desktop-portal` file chooser backend to select folders.
+Opening a project uses the system's default file association through
+`xdg-open`.
 
-```sh
-sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev libxcb1-dev libfontconfig1-dev libfreetype-dev libvulkan-dev pkg-config
-scripts/install-linux.sh
-```
+## Window and tray behavior
 
-The script builds the release binary and installs it, the desktop entry, and
-256/512-pixel icons under `~/.local`. Pass a prefix to install elsewhere.
-X11 receives the app icon directly from Immersion.
+If your desktop has a StatusNotifierItem tray host, closing the window hides
+Immersion in the tray while it continues watching projects. Use the tray icon
+to reopen or quit it. Without a tray host, closing the window quits. Starting
+Immersion again reopens a running instance.
 
-The host desktop needs an `xdg-desktop-portal` file chooser backend. Immersion
-uses GPUI's portal picker to choose project folders. `xdg-open` opens project
-files in their associated creative app.
+**Launch at login** is available for native installs. Once you have configured
+folders, a login launch starts in the tray when a tray host appears. If no
+tray appears within 30 seconds, the window stays open. Launch at login is not
+available in the Flatpak development build.
 
-## Release packages
+## Build or install manually
 
-Tagged releases produce x86_64 and aarch64 `.deb` (Debian/Ubuntu), `.rpm`
-(Fedora), `.pkg.tar.zst` (Arch), `.AppImage`, and `.tar.gz` files. The native packages
-install the desktop entry and icons. The tarball contains `bin/immersion` and
-matching `share/` files; run it from the extracted folder or copy them under
-`~/.local` with the same relative paths. The AppImage is executable directly.
-
-On x86_64 or aarch64 Linux, build all five formats with:
-
-```sh
-cargo build --release --locked -p immersion
-scripts/package-linux.sh
-```
-
-The packaging script needs [nFPM](https://nfpm.goreleaser.com/) and
-[linuxdeploy](https://github.com/linuxdeploy/linuxdeploy). It uses the same
-binary for each native format. The AppImage bundles host shared libraries via
-linuxdeploy; the `.tar.gz` binary uses host libraries and needs compatible
-X11, fontconfig, FreeType, Vulkan, and desktop portal packages. The release
-workflow builds on Ubuntu 22.04 for an older glibc baseline. Check the
-release artifacts on each distribution before treating them as certified.
-
-## Flatpak development build
-
-Install Flatpak and flatpak-builder on Linux, add Flathub, then run:
-
-```sh
-flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install --user flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08 org.freedesktop.Sdk.Extension.rust-stable//26.08
-flatpak-builder --user --install --install-deps-from=flathub --force-clean packaging/flatpak/build packaging/flatpak/io.github._404oops.immersion.yml
-flatpak run io.github._404oops.immersion
-```
-
-The manifest builds with network access disabled. Its checked-in
-`cargo-sources.json` lists every crate in `Cargo.lock`; regenerate it whenever
-the lockfile changes using the
-[Flatpak Cargo generator](https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo):
-
-```sh
-python3 flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
-```
-
-The Flatpak can read and write projects in the home directory and common
-removable-drive mounts (`/run/media`, `/media`, `/mnt`). Immersion must watch
-whole folders and write `.musit` history alongside project files. For a
-project mounted elsewhere, grant that path explicitly:
-
-```sh
-flatpak override --user --filesystem=/path/to/projects io.github._404oops.immersion
-```
-
-Flatpak keeps Immersion's app settings under its own `~/.var/app/` directory;
-it does not automatically import settings from a native install. Project
-history in each `.musit` directory remains compatible.
-
-Flatpak is lower priority than the native packages. Tray support depends on
-the desktop's StatusNotifierItem host and sandbox D-Bus behavior. When no tray
-is available, closing the window quits. Save notifications use GPUI's Linux
-notification backend and the manifest's notification D-Bus permission.
+The [Linux install and build instructions](https://github.com/404oops/immersion/blob/main/packaging/linux/README.md)
+cover native dependencies, package building, the Flatpak development build,
+filesystem permissions, and desktop integration. Flatpak is a development
+option; native release packages are the simpler starting point.

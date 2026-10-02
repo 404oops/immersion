@@ -2,7 +2,7 @@
 
 ## Install
 
-Download an available package from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). On macOS, open the DMG and install the app. On Windows, run the per-user installer; administrator access is not required. The Windows installer can enable launch at login. On Linux, follow the [Linux build guide](https://github.com/404oops/immersion/wiki/Linux) for native packages, AppImage, tarball, and Flatpak options and desktop requirements.
+Download an available package from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). On macOS, open the DMG and install the app. On Windows, run the per-user installer; administrator access is not required. The Windows installer can enable launch at login. On Linux, follow the [Linux build guide](Linux.md) for native packages, AppImage, tarball, and Flatpak options and desktop requirements.
 
 ## First launch
 
@@ -19,4 +19,4 @@ Each watched folder has its own layout, stored in `<projects folder>/.immersion/
 
 Leave Immersion running while you save in your creative app. File changes trigger new versions after they settle. Select a project in the list to view its history; double-click a project to open its primary file with the system's file association. When several files belong to a project, use the **File** picker in the details panel to choose the primary file you want to open and version.
 
-See [the interface guide](https://github.com/404oops/immersion/wiki/Interface) for the controls and [versions and restoring](https://github.com/404oops/immersion/wiki/Versions-and-Restoring) before you replace a current file with an older one.
+See [the interface guide](Interface.md) for the controls and [versions and restoring](Versions-and-Restoring.md) before you replace a current file with an older one.

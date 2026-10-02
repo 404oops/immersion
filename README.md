@@ -10,7 +10,7 @@
 | Detail | Information |
 | --- | --- |
 | **Made for** | Music, video, design, and other supported creative project formats |
-| **Works on** | macOS and Windows releases; [experimental Linux builds](https://github.com/404oops/immersion/wiki/Linux) (unsupported) |
+| **Works on** | macOS and Windows releases; [experimental Linux builds](wiki/Linux.md) (unsupported) |
 | **What it saves** | Project files and selected companion data; large media and caches are generally excluded |
 | **Price and source** | Free and open source under [GPLv3](LICENSE) |
 
@@ -31,14 +31,14 @@ These screenshots show Immersion with illustrative sample projects and version n
 3. Select **Bundles** for one folder or bundle per project, or **Files** for loose project files. You can add more folders later with **+**.
 4. Select a project to explore its version graph. Double-click a project to open it in its usual app.
 
-Linux support is experimental and provided without support. Distributions, desktop environments, graphics stacks, portals, and package setups vary too much to reliably reproduce or fix Linux-specific problems. For install and build details, including Flatpak, follow the [Linux build guide](https://github.com/404oops/immersion/wiki/Linux).
+Linux support is experimental and provided without support. Distributions, desktop environments, graphics stacks, portals, and package setups vary too much to reliably reproduce or fix Linux-specific problems. For install and build details, including Flatpak, follow the [Linux build guide](wiki/Linux.md).
 
-The [user manual](https://github.com/404oops/immersion/wiki/Home) covers every control, supported formats, storage, restore behavior, settings, and troubleshooting.
+The [user manual](wiki/Home.md) covers every control, supported formats, storage, restore behavior, settings, and troubleshooting.
 
 > Immersion versions project data, not an entire media library. Keep your normal backups for audio, video, assets, and the device that holds your projects.
 
 ## Contribute
 
-Bug reports and feature requests for supported platforms are welcome in [Issues](https://github.com/404oops/immersion/issues). To build locally, install Rust and run `cargo run -p immersion`; run the engine tests with `cargo test -p musit-core`. The manual's [development page](https://github.com/404oops/immersion/wiki/Development) has the repository layout and packaging details.
+Bug reports and feature requests for supported platforms are welcome in [Issues](https://github.com/404oops/immersion/issues). To build locally, install Rust and run `cargo run -p immersion`; run the engine tests with `cargo test -p musit-core`. The manual's [development page](wiki/Development.md) has the repository layout and packaging details.
 
 Immersion is licensed under the [GNU General Public License, version 3](LICENSE).

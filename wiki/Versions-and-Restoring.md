@@ -33,4 +33,4 @@ Select the version, choose **Delete**, and confirm. This permanently removes tha
 
 ## What is covered
 
-Templates include primary project data and, for some formats, selected companion manifests. Large audio, video, rendered media, samples, and caches are usually excluded. The exact file set depends on format; see [Supported projects](https://github.com/404oops/immersion/wiki/Supported-Projects). Immersion is a version history tool, not a replacement for a complete filesystem backup.
+Templates include primary project data and, for some formats, selected companion manifests. Large audio, video, rendered media, samples, and caches are usually excluded. The exact file set depends on format; see [Supported projects](Supported-Projects.md). Immersion is a version history tool, not a replacement for a complete filesystem backup.

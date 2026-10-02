@@ -6,6 +6,23 @@ portals, and packaging differ enough that problems are often difficult to
 reproduce and cannot be fixed reliably across setups. These instructions are
 provided for people who want to try the builds on their own.
 
+## Start with a release package
+
+Download the x86_64 or aarch64 package for your distribution from
+[GitHub Releases](https://github.com/404oops/immersion/releases/latest). Use
+`.deb` on Debian or Ubuntu, `.rpm` on Fedora, or `.pkg.tar.zst` on Arch. An
+AppImage and a tarball are also available if you prefer a manual install.
+Install a native package with your package manager, or make the AppImage
+executable and run it. The tarball includes a binary and matching `share/`
+files; keep their relative paths when installing them manually.
+
+Open Immersion, choose a writable projects folder, and select **Files** for
+loose project documents or **Bundles** for projects kept in their own folders.
+Save a project and check that a new version appears. For a shorter overview,
+see the [Linux guide](https://github.com/404oops/immersion/blob/main/wiki/Linux.md).
+
+## Desktop requirements and behavior
+
 Immersion uses X11. On Wayland desktops it needs XWayland; the native Wayland
 backend is disabled. With a StatusNotifierItem tray host, closing the window
 hides it to the tray and project watching continues. Use the tray icon to open
