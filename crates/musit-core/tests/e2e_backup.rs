@@ -119,6 +119,7 @@ fn project_index_by_file(backend: &AppBackend, file_name: &str) -> i32 {
 fn test_platform() -> PlatformHooks {
     PlatformHooks {
         launch_at_startup_supported: false,
+        launch_at_startup_enabled: None,
         set_launch_at_startup: Box::new(|_| {}),
         // Never actually launch DAWs/Finder from the test suite.
         open_path: Box::new(|_| true),

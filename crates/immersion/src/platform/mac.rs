@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Bool, NSObjectProtocol, ProtocolObject};
+use objc2::runtime::{AnyClass, AnyObject, Bool, NSObjectProtocol, ProtocolObject};
 use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDidBecomeActiveNotification,
@@ -407,20 +407,46 @@ pub fn install_status_item(on_open: Box<dyn Fn()>, on_quit: Box<dyn Fn()>) {
 // ---- Launch at login (SMAppService) ---------------------------------------
 
 pub fn is_launch_at_startup_supported() -> bool {
-    is_bundled()
+    // SMAppService was introduced in macOS 13, while the bundle still runs
+    // on macOS 12. Looking up the class avoids messaging an unavailable API.
+    is_bundled() && AnyClass::get(c"SMAppService").is_some()
+}
+
+/// Registration can succeed while macOS still waits for the user's approval.
+pub fn launch_at_startup_needs_approval() -> bool {
+    if !is_launch_at_startup_supported() {
+        return false;
+    }
+    use objc2_service_management::{SMAppService, SMAppServiceStatus};
+    unsafe { SMAppService::mainAppService().status() == SMAppServiceStatus::RequiresApproval }
 }
 
 pub fn set_launch_at_startup(enabled: bool) {
-    if !is_bundled() {
+    if !is_launch_at_startup_supported() {
         return;
     }
     unsafe {
-        use objc2_service_management::SMAppService;
+        use objc2_service_management::{SMAppService, SMAppServiceStatus};
         let service = SMAppService::mainAppService();
-        if enabled {
-            let _ = service.registerAndReturnError();
+        let status = service.status();
+        let result = if enabled
+            && matches!(
+                status,
+                SMAppServiceStatus::NotRegistered | SMAppServiceStatus::NotFound
+            ) {
+            service.registerAndReturnError()
+        } else if !enabled
+            && matches!(
+                status,
+                SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
+            )
+        {
+            service.unregisterAndReturnError()
         } else {
-            let _ = service.unregisterAndReturnError();
+            return;
+        };
+        if let Err(error) = result {
+            eprintln!("Immersion launch at login could not be updated: {error}");
         }
     }
 }

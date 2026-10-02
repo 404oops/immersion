@@ -293,6 +293,7 @@ impl RootView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let platform_hooks = PlatformHooks {
             launch_at_startup_supported: crate::platform::is_launch_at_startup_supported(),
+            launch_at_startup_enabled: crate::platform::launch_at_startup_enabled(),
             set_launch_at_startup: Box::new(crate::platform::set_launch_at_startup),
             ..PlatformHooks::default()
         };

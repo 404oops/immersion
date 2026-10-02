@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 fn test_platform() -> PlatformHooks {
     PlatformHooks {
         launch_at_startup_supported: false,
+        launch_at_startup_enabled: None,
         set_launch_at_startup: Box::new(|_| {}),
         open_path: Box::new(|_| true),
     }
