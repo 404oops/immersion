@@ -5,12 +5,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, Context, Entity, Pixels, ScrollHandle, UniformListScrollHandle, Window,
-    WindowAppearance, div, prelude::*,
+    Bounds, Context, Entity, Pixels, ScrollHandle, UniformListScrollHandle, Window, div, prelude::*,
 };
 use musit_core::backend::{AppBackend, BackendEvent, ColorSchemeMode, PlatformHooks};
 
-use crate::theme::{MAX_SATURATION, Theme};
+use crate::theme::Theme;
 use crate::ui::controls::{
     CONFIRM_DIALOG, DETAILS_SPLIT, HUE_SLIDER, LAYOUT_DIALOG, LIST_SPLIT, SATURATION_SLIDER,
 };
@@ -299,10 +298,7 @@ impl RootView {
         };
         let backend = AppBackend::with_platform(platform_hooks);
 
-        let system_dark = matches!(
-            window.appearance(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        );
+        let system_dark = vampir::theme::system_dark(window);
         let color_scheme = backend.color_scheme_mode();
         let dark = match color_scheme {
             ColorSchemeMode::Dark => true,
@@ -407,10 +403,7 @@ impl RootView {
             .observe_window_appearance({
                 let weak = cx.entity().downgrade();
                 move |window, cx| {
-                    let dark = matches!(
-                        window.appearance(),
-                        WindowAppearance::Dark | WindowAppearance::VibrantDark
-                    );
+                    let dark = vampir::theme::system_dark(window);
                     if let Some(root) = weak.upgrade() {
                         root.update(cx, |root, cx| {
                             root.system_dark = dark;
@@ -1135,10 +1128,7 @@ impl RootView {
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Keep "System" scheme in sync even if the observer misses a change.
-        let system_dark = matches!(
-            window.appearance(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        );
+        let system_dark = vampir::theme::system_dark(window);
         if system_dark != self.system_dark {
             self.system_dark = system_dark;
             self.recompute_theme(cx);
@@ -1169,7 +1159,7 @@ impl Render for RootView {
         // the graph pan is a drag of the app's own and shares the stream.
         let root = vampir::handle_keys(div().id("root"), self, cx)
             .size_full()
-            .font_family(".SystemUIFont")
+            .font_family(vampir::ui_font())
             .bg(crate::ui::lighting::lit(theme.app_background, 0.035))
             .text_color(theme.text_primary)
             .on_action(cx.listener(Self::dismiss))
@@ -1205,7 +1195,9 @@ impl RootView {
     fn set_hue_from_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
         // Cap below 360: set_theme_hue wraps modulo 360, which would snap
         // the thumb from the right edge back to the left.
-        let value = (ratio * 360.0).round().min(359.0) as f64;
+        let value = vampir::theme::Theme::hue_from_track(ratio)
+            .round()
+            .min(359.0);
         if (self.backend.theme_hue() - value).abs() < 0.5 {
             return;
         }
@@ -1219,7 +1211,7 @@ impl RootView {
     fn set_saturation_from_ratio(&mut self, ratio: f32, cx: &mut Context<Self>) {
         // Whole percent steps, so the readout beside the slider and the
         // saved value agree.
-        let value = (ratio as f64 * MAX_SATURATION * 100.0).round() / 100.0;
+        let value = (vampir::theme::Theme::saturation_from_track(ratio) * 100.0).round() / 100.0;
         if (self.backend.theme_saturation() - value).abs() < 0.005 {
             return;
         }

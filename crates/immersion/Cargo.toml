@@ -13,7 +13,7 @@ winresource = "0.1"
 [dependencies]
 musit-core = { path = "../musit-core" }
 # The widget toolkit (https://github.com/404oops/vampir), from crates.io.
-vampir = "0.1.5"
+vampir = "0.2.0"
 gpui.workspace = true
 # The platform backend for gpui-ce. `runtime_shaders` compiles the Metal
 # shaders at startup so a machine with only the command line tools can build.

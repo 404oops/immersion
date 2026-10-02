@@ -7594,14 +7594,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/vampir/vampir-0.1.5.crate",
-        "sha256": "916a9ebed013412a74e97f2bb6cd39bfe250458cc19d49322a834f32a8f4c561",
-        "dest": "cargo/vendor/vampir-0.1.5"
+        "url": "https://static.crates.io/crates/vampir/vampir-0.2.0.crate",
+        "sha256": "4417e64bc5f488228a9aa3c1ca13b930310f74d3b826c9675894f282a4dbe45a",
+        "dest": "cargo/vendor/vampir-0.2.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"916a9ebed013412a74e97f2bb6cd39bfe250458cc19d49322a834f32a8f4c561\", \"files\": {}}",
-        "dest": "cargo/vendor/vampir-0.1.5",
+        "contents": "{\"package\": \"4417e64bc5f488228a9aa3c1ca13b930310f74d3b826c9675894f282a4dbe45a\", \"files\": {}}",
+        "dest": "cargo/vendor/vampir-0.2.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
