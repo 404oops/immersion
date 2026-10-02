@@ -37,6 +37,12 @@ pub enum Job {
         ancestor_roots: Vec<String>,
         retention: i32,
     },
+    /// Record saves the watcher could not have seen, made before it took
+    /// its baseline: while Immersion was closed or while it started up.
+    /// Queued once the watcher is ready, so later saves are its to report.
+    RecordUnseen {
+        projects: Vec<DiscoveredProject>,
+    },
     /// A watcher event already routed to the project it belongs to.
     FileEvent {
         root_key: String,
@@ -183,6 +189,19 @@ impl State {
                     );
                     on_reply(reply);
                 }
+                Job::RecordUnseen { projects } => {
+                    for project in projects {
+                        let key = path_key(&project.root_path);
+                        if project.primary_project_file.is_empty() {
+                            continue;
+                        }
+                        if let Some(service) = self.services.get_mut(&key) {
+                            let absolute =
+                                join_path(&project.root_path, &project.primary_project_file);
+                            service.record_unseen_changes(&absolute, &project.primary_project_file);
+                        }
+                    }
+                }
                 Job::FileEvent { root_key, event } => {
                     if let Some(service) = self.services.get_mut(&root_key) {
                         service.on_file_event(&event);
@@ -300,13 +319,11 @@ impl State {
         service.set_notice_sink(move |n| notice(notice_root.clone(), n));
 
         let mut seeded = false;
-        if !project.primary_project_file.is_empty() {
+        if !project.primary_project_file.is_empty()
+            && !service.has_version_for_artifact(&project.primary_project_file)
+        {
             let absolute = join_path(&project.root_path, &project.primary_project_file);
-            if service.has_version_for_artifact(&project.primary_project_file) {
-                service.record_unseen_changes(&absolute, &project.primary_project_file);
-            } else {
-                seeded = service.snapshot_path_now(&absolute, &project.primary_project_file);
-            }
+            seeded = service.snapshot_path_now(&absolute, &project.primary_project_file);
         }
 
         let key = path_key(&project.root_path);

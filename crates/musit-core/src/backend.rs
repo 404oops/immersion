@@ -1483,6 +1483,12 @@ impl AppBackend {
                     .filter(|&index| self.workspaces[index].watcher.is_some())
                 {
                     self.workspaces[index].watcher_ready = true;
+                    // The watcher reports saves from its baseline on; check
+                    // content for any made before it, while closed or while
+                    // the projects were set up.
+                    let projects = self.workspaces[index].discovered_projects.clone();
+                    self.versioning
+                        .send(VersioningJob::RecordUnseen { projects });
                     self.set_status_for_folder(&root_path, format!("Monitoring: {root_path}"));
                     self.append_activity(&format!(
                         "[{}] monitoring started for {}",

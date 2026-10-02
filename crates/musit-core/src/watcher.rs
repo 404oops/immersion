@@ -18,6 +18,11 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 const DEBOUNCE: Duration = Duration::from_millis(400);
 const SAFETY_SCAN: Duration = Duration::from_millis(5000);
+/// How soon an incomplete baseline is taken again, and how many times. A
+/// folder that stays unreadable (no permission) is then left out, as the
+/// safety scan leaves it out, rather than holding monitoring back forever.
+const BASELINE_RETRY: Duration = Duration::from_millis(1000);
+const BASELINE_ATTEMPTS: u32 = 5;
 
 /// (scan_kind, root_path, item_count, elapsed_ms)
 pub type ScanLogFn = Box<dyn Fn(&str, &str, usize, u128) + Send>;
@@ -143,10 +148,16 @@ struct WorkerState {
     /// map stays proportional to project files, not folder contents.
     previous: HashMap<String, FileState>,
     pending: HashMap<String, FileState>,
+    /// Whether `previous` covers the whole tree. Until it does, a file
+    /// missing from it may only have been unreadable, so it is not reported
+    /// as created, and the watcher is not reported ready.
+    baseline_complete: bool,
+    baseline_attempts: u32,
     debounce_deadline: Option<Instant>,
     safety_deadline: Option<Instant>,
     on_event: EventFn,
     log_scan: Option<ScanLogFn>,
+    on_ready: ReadyFn,
 }
 
 impl WorkerState {
@@ -172,22 +183,33 @@ impl WorkerState {
 
         let timer = Instant::now();
         let mut baseline = HashMap::new();
-        let complete = scan_tree_state(
+        self.baseline_complete = scan_tree_state(
             &self.root_path,
             &self.root_path,
             &self.project_config,
             &mut baseline,
         );
+        self.baseline_attempts = 1;
         self.previous = baseline;
-        // An unreadable tree would look like an empty project and turn every
-        // file into a "created" event later; reconcile again shortly instead.
-        if !complete {
-            self.debounce_deadline = Some(Instant::now() + DEBOUNCE);
-        }
         self.log("baseline", self.previous.len(), timer.elapsed().as_millis());
 
-        self.safety_deadline = Some(Instant::now() + SAFETY_SCAN);
         self.debounce_deadline = None;
+        // An unreadable tree would look like an empty project and turn every
+        // file into a "created" event later; take the baseline again soon.
+        self.safety_deadline = Some(
+            Instant::now()
+                + if self.baseline_complete {
+                    SAFETY_SCAN
+                } else {
+                    BASELINE_RETRY
+                },
+        );
+    }
+
+    /// Tells the owner the watcher holds a complete baseline: every save
+    /// from here on is reported.
+    fn report_ready(&self) {
+        (self.on_ready)(&self.root_path);
     }
 
     fn stop(&mut self) {
@@ -196,6 +218,7 @@ impl WorkerState {
         self.previous.clear();
         self.pending.clear();
         self.dirty_relative.clear();
+        self.baseline_complete = false;
         self.debounce_deadline = None;
         self.safety_deadline = None;
     }
@@ -311,11 +334,63 @@ impl WorkerState {
     }
 
     fn on_safety_scan(&mut self) {
+        if !self.baseline_complete {
+            self.complete_baseline();
+            return;
+        }
         let timer = Instant::now();
         let before_dirty = self.dirty_relative.len();
         self.queue_full_tree_reconcile();
         self.log("safety", before_dirty, timer.elapsed().as_millis());
         self.safety_deadline = Some(Instant::now() + SAFETY_SCAN);
+    }
+
+    /// Takes the baseline again after a partial one. Files it could not see
+    /// before join it silently; their content is the owner's to check once
+    /// the watcher reports ready. Files it did see are reconciled as usual,
+    /// except deletions, which only a complete listing can show.
+    fn complete_baseline(&mut self) {
+        let timer = Instant::now();
+        let mut current = HashMap::new();
+        let complete = scan_tree_state(
+            &self.root_path,
+            &self.root_path,
+            &self.project_config,
+            &mut current,
+        );
+        self.log("baseline", current.len(), timer.elapsed().as_millis());
+        self.baseline_attempts += 1;
+        if !complete && self.baseline_attempts < BASELINE_ATTEMPTS {
+            self.safety_deadline = Some(Instant::now() + BASELINE_RETRY);
+            return;
+        }
+
+        let mut changed = Vec::new();
+        for (path, state) in &current {
+            match self.previous.get(path) {
+                None => {
+                    self.previous.insert(path.clone(), *state);
+                }
+                Some(seen) if seen != state => changed.push(path.clone()),
+                Some(_) => {}
+            }
+        }
+        let deleted: Vec<String> = if complete {
+            self.previous
+                .keys()
+                .filter(|path| !current.contains_key(*path))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        for path in changed.into_iter().chain(deleted) {
+            self.mark_dirty_relative(path);
+        }
+
+        self.baseline_complete = true;
+        self.safety_deadline = Some(Instant::now() + SAFETY_SCAN);
+        self.report_ready();
     }
 
     fn process_due_timers(&mut self) {
@@ -495,10 +570,13 @@ impl HybridFileWatcher {
                     dirty_relative: HashSet::new(),
                     previous: HashMap::new(),
                     pending: HashMap::new(),
+                    baseline_complete: false,
+                    baseline_attempts: 0,
                     debounce_deadline: None,
                     safety_deadline: None,
                     on_event: Box::new(on_event),
                     log_scan,
+                    on_ready,
                 };
                 let mut os_watcher: Option<RecommendedWatcher> = None;
 
@@ -538,7 +616,9 @@ impl HybridFileWatcher {
                                     .watch(Path::new(&state.root_path), RecursiveMode::Recursive);
                             }
                             os_watcher = created;
-                            on_ready(&state.root_path);
+                            if state.baseline_complete {
+                                state.report_ready();
+                            }
                         }
                         Ok(Msg::Stop) => {
                             os_watcher = None;
@@ -635,5 +715,98 @@ mod tests {
         // by should_track), so the baseline must not spend memory on them.
         assert!(!out.contains_key("bounce.wav"));
         assert!(!out.contains_key("notes.txt"));
+    }
+
+    /// A worker that records what it reports instead of sending it.
+    fn recording_worker() -> (
+        WorkerState,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let ready = Arc::new(AtomicUsize::new(0));
+        let (seen, readied) = (events.clone(), ready.clone());
+        let state = WorkerState {
+            root_path: String::new(),
+            canonical_root: String::new(),
+            project_config: ProjectConfig::default(),
+            scan_sequence: 0,
+            continuing_batch: false,
+            dirty_relative: HashSet::new(),
+            previous: HashMap::new(),
+            pending: HashMap::new(),
+            baseline_complete: false,
+            baseline_attempts: 0,
+            debounce_deadline: None,
+            safety_deadline: None,
+            on_event: Box::new(move |event| {
+                seen.lock().unwrap().push(event.relative_path);
+            }),
+            log_scan: None,
+            on_ready: Box::new(move |_| {
+                readied.fetch_add(1, Ordering::SeqCst);
+            }),
+        };
+        (state, events, ready)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_baseline_is_retaken_before_ready() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let root = clean_path(&dir.path().to_string_lossy());
+        let locked = dir.path().join("Locked Project");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("song.als"), b"project").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Running as root reads it anyway; nothing to test then.
+        if std::fs::read_dir(&locked).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+
+        let (mut state, events, ready) = recording_worker();
+        state.start(&root);
+        assert!(!state.baseline_complete);
+
+        // Readable again: the file joins the baseline without being reported
+        // as created, and only then is the watcher ready.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        state.on_safety_scan();
+        assert!(state.baseline_complete);
+        assert!(state.previous.contains_key("Locked Project/song.als"));
+        assert_eq!(ready.load(Ordering::SeqCst), 1);
+        state.on_safety_scan();
+        state.process_dirty_batch();
+        state.process_dirty_batch();
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_that_stays_unreadable_does_not_hold_ready_back() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let root = clean_path(&dir.path().to_string_lossy());
+        let locked = dir.path().join("Locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read_dir(&locked).is_err();
+
+        let (mut state, _events, ready) = recording_worker();
+        state.start(&root);
+        for _ in 0..BASELINE_ATTEMPTS {
+            state.on_safety_scan();
+        }
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if unreadable {
+            assert!(state.baseline_complete);
+            assert_eq!(ready.load(Ordering::SeqCst), 1);
+        }
     }
 }

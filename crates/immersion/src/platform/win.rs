@@ -147,8 +147,8 @@ fn read_pixels(color: HBITMAP, mask: HBITMAP) -> Option<(u32, u32, Vec<u8>)> {
 
     // GDI hands back BGRA. Icons without an alpha channel carry their
     // transparency in the mask instead (white = transparent).
-    let has_alpha = pixels.chunks_exact(4).any(|pixel| pixel[3] != 0);
-    for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+    let has_alpha = pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0);
+    for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         pixel.swap(0, 2);
         if !has_alpha {
             let masked = mask_lines != 0 && mask_pixels[index * 4] != 0;

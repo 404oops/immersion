@@ -319,13 +319,32 @@ impl MetadataStore {
     /// The newest version id of an artifact, or None when the log could not
     /// be read in full (see [`Self::next_version_id_for_artifact`]).
     pub fn latest_staged_version_for_artifact(&self, artifact: &str) -> Option<String> {
+        self.latest_version_and_last_object(artifact, "")
+            .map(|(version, _)| version)
+    }
+
+    /// The artifact's newest version id along with the object hash of the
+    /// last entry logged for `path` ("" when that entry is a deletion, None
+    /// when there is none), from one read of the log. None when the log
+    /// could not be read in full.
+    pub fn latest_version_and_last_object(
+        &self,
+        artifact: &str,
+        path: &str,
+    ) -> Option<(String, Option<String>)> {
         if self.musit_root.is_empty() || artifact.is_empty() {
-            return Some(String::new());
+            return Some((String::new(), None));
         }
 
         let mut running_ordinal = 0i64;
         let mut latest_version_id = String::new();
+        let mut last_object: Option<String> = None;
         let complete = self.for_each_log_line(|obj| {
+            if !path.is_empty() && obj.get("path").and_then(|v| v.as_str()) == Some(path) {
+                let object = obj.get("object").and_then(|v| v.as_str()).unwrap_or("");
+                last_object = Some(object.to_ascii_lowercase());
+            }
+
             if !artifact_equals(&artifact_of_log_line(&obj), artifact) {
                 return;
             }
@@ -348,10 +367,6 @@ impl MetadataStore {
             }
         });
 
-        if complete {
-            Some(latest_version_id)
-        } else {
-            None
-        }
+        complete.then_some((latest_version_id, last_object))
     }
 }

@@ -15,6 +15,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant, SystemTime};
 
 /// Notifications about snapshot activity, delivered through a callback sink.
 #[derive(Clone, Debug)]
@@ -49,6 +50,14 @@ fn resolve_branch_base_version(explicit_branch_base: &str, latest_staged_version
 }
 
 const BUNDLE_SAVE_WINDOW_MS: i64 = 2_000;
+
+/// How long an artifact must go unwritten before the startup check trusts
+/// what is on disk, so a save still being written is not recorded torn.
+const UNSEEN_QUIET: Duration = Duration::from_millis(1_000);
+/// How long the startup check waits for a save in progress. A file still
+/// changing by then is changing after the watcher's baseline, so the
+/// watcher records it once it settles.
+const UNSEEN_WAIT_LIMIT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
 struct ActiveGroup {
@@ -268,6 +277,7 @@ impl SnapshotService {
         // Files of the same artifact stabilizing in the same watcher scan (or
         // the same synthetic batch) share one version id.
         let artifact = backup_template::artifact_for_path(&event.relative_path);
+
         let version_id: String;
         let parent_version: String;
 
@@ -304,9 +314,9 @@ impl SnapshotService {
             // A log that cannot be read in full would produce a version id
             // that is already in use, so the snapshot is abandoned with the
             // staged copy removed; the next save tries again.
-            let Some(latest_staged_version) = self
+            let Some((latest_staged_version, last_object)) = self
                 .metadata_store
-                .latest_staged_version_for_artifact(&artifact)
+                .latest_version_and_last_object(&artifact, &event.relative_path)
             else {
                 discard_staged_copy(&staged_path, &self.project_config.musit_path());
                 self.emit(SnapshotNotice::Error(format!(
@@ -315,6 +325,23 @@ impl SnapshotService {
                 )));
                 return false;
             };
+
+            // A save whose content its last entry already holds adds
+            // nothing, as when the watcher reports a save the startup check
+            // has just recorded. Only standalone files: a bundle's version
+            // is made of the files saved together, and dropping one would
+            // leave it out.
+            let unchanged = !is_baseline
+                && artifact == event.relative_path
+                && last_object.is_some_and(|last| last.eq_ignore_ascii_case(&object_hash));
+            if unchanged {
+                discard_staged_copy(&staged_path, &self.project_config.musit_path());
+                self.emit(SnapshotNotice::Skipped(format!(
+                    "Skipped {} (unchanged since its last version)",
+                    event.relative_path
+                )));
+                return false;
+            }
             let branch_base_version =
                 resolve_branch_base_version(&explicit_branch_base, &latest_staged_version);
             if !explicit_branch_base.is_empty() && explicit_branch_base == latest_staged_version {
@@ -479,18 +506,7 @@ impl SnapshotService {
         let Some(known) = self.metadata_store.object_hashes_by_path() else {
             return false;
         };
-        let files: Vec<(String, String)> = if Path::new(absolute_path).is_dir() {
-            walk_files(absolute_path)
-                .into_iter()
-                .map(|file| {
-                    let inner = relative_file_path(absolute_path, &file);
-                    (file, join_path(relative_path, &inner))
-                })
-                .filter(|(_, relative)| self.project_config.should_track(relative))
-                .collect()
-        } else if Path::new(absolute_path).is_file() {
-            vec![(absolute_path.to_string(), relative_path.to_string())]
-        } else {
+        let Some(files) = self.settled_contents(absolute_path, relative_path) else {
             return false;
         };
 
@@ -498,8 +514,7 @@ impl SnapshotService {
         self.synthetic_scan_sequence -= 1;
         let scan_sequence = self.synthetic_scan_sequence;
         let mut recorded = false;
-        for (absolute, relative) in files {
-            let on_disk = sha256_file_hex(&absolute);
+        for (absolute, relative, on_disk) in files {
             let captured = on_disk.is_empty()
                 || known
                     .get(&relative)
@@ -517,6 +532,78 @@ impl SnapshotService {
             recorded = self.create_snapshot(&event, false) || recorded;
         }
         recorded
+    }
+
+    /// The tracked files of an artifact with their content hashes, once no
+    /// file has been written for [`UNSEEN_QUIET`] and none changed while it
+    /// was read. None when the artifact is gone or did not settle within
+    /// [`UNSEEN_WAIT_LIMIT`].
+    fn settled_contents(
+        &self,
+        absolute_path: &str,
+        relative_path: &str,
+    ) -> Option<Vec<(String, String, String)>> {
+        let deadline = Instant::now() + UNSEEN_WAIT_LIMIT;
+        loop {
+            let files = self.artifact_files(absolute_path, relative_path)?;
+            let before = stamps_of(&files);
+            // A modification time ahead of the clock is skew, not a write.
+            let recently_written = before.as_ref().is_some_and(|stamps| {
+                stamps.iter().any(|(_, modified)| {
+                    SystemTime::now()
+                        .duration_since(*modified)
+                        .is_ok_and(|age| age < UNSEEN_QUIET)
+                })
+            });
+            if before.is_some() && !recently_written {
+                let contents: Vec<(String, String, String)> = files
+                    .iter()
+                    .map(|(absolute, relative)| {
+                        (
+                            absolute.clone(),
+                            relative.clone(),
+                            sha256_file_hex(absolute),
+                        )
+                    })
+                    .collect();
+                let unchanged = self
+                    .artifact_files(absolute_path, relative_path)
+                    .is_some_and(|after| after == files && stamps_of(&after) == before);
+                if unchanged {
+                    return Some(contents);
+                }
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(UNSEEN_QUIET / 4);
+        }
+    }
+
+    /// The tracked files of an artifact: the file itself, or every tracked
+    /// file inside a bundle, as (absolute, relative) paths.
+    fn artifact_files(
+        &self,
+        absolute_path: &str,
+        relative_path: &str,
+    ) -> Option<Vec<(String, String)>> {
+        let path = Path::new(absolute_path);
+        if path.is_dir() {
+            let mut files: Vec<(String, String)> = walk_files(absolute_path)
+                .into_iter()
+                .map(|file| {
+                    let inner = relative_file_path(absolute_path, &file);
+                    (file, join_path(relative_path, &inner))
+                })
+                .filter(|(_, relative)| self.project_config.should_track(relative))
+                .collect();
+            files.sort();
+            Some(files)
+        } else if path.is_file() {
+            Some(vec![(absolute_path.to_string(), relative_path.to_string())])
+        } else {
+            None
+        }
     }
 
     pub fn has_version_for_artifact(&self, artifact: &str) -> bool {
@@ -614,6 +701,19 @@ impl Default for SnapshotService {
     }
 }
 
+/// Size and modification time of each file, or None when one cannot be
+/// read (it was replaced or removed in between).
+fn stamps_of(files: &[(String, String)]) -> Option<Vec<(u64, SystemTime)>> {
+    files
+        .iter()
+        .map(|(absolute, _)| {
+            let metadata = fs::metadata(absolute).ok()?;
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((metadata.len(), modified))
+        })
+        .collect()
+}
+
 /// Recursive file walk including hidden files.
 fn walk_files(dir: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -683,6 +783,53 @@ mod tests {
         assert!(versions.iter().all(|version| version.files.len() == 2));
     }
 
+    /// Writes a file as a save that finished a while ago, so the startup
+    /// check does not wait for it to settle.
+    fn write_settled(path: &Path, content: &str) {
+        fs::write(path, content).unwrap();
+        let earlier = SystemTime::now() - Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(earlier)
+            .unwrap();
+    }
+
+    #[test]
+    fn startup_check_waits_for_a_save_in_progress() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_string_lossy().to_string();
+        let song = temp.path().join("Song.als");
+        let song_path = song.to_string_lossy().to_string();
+
+        write_settled(&song, "first");
+        let mut service = SnapshotService::new();
+        assert!(service.set_project_root(&root));
+        assert!(service.snapshot_path_now(&song_path, "Song.als"));
+
+        // The DAW is mid-save: part written now, the rest shortly after.
+        fs::write(&song, "sec").unwrap();
+        let writer = {
+            let song = song.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                fs::write(&song, "second").unwrap();
+            })
+        };
+        assert!(service.record_unseen_changes(&song_path, "Song.als"));
+        writer.join().unwrap();
+
+        let versions = versions_of(&root, "Song.als");
+        assert_eq!(versions.len(), 2);
+        let finished = sha256_file_hex(&song_path);
+        assert!(
+            versions
+                .iter()
+                .any(|version| { version.files[0].object_hash.eq_ignore_ascii_case(&finished) })
+        );
+    }
+
     fn versions_of(root: &str, artifact: &str) -> Vec<crate::backend::VersionEntry> {
         let log = join_path(
             root,
@@ -698,13 +845,13 @@ mod tests {
         let song = temp.path().join("Song.als");
         let song_path = song.to_string_lossy().to_string();
 
-        fs::write(&song, "first").unwrap();
+        write_settled(&song, "first");
         let mut service = SnapshotService::new();
         assert!(service.set_project_root(&root));
         assert!(service.snapshot_path_now(&song_path, "Song.als"));
 
         // Saved while Immersion was not running; a new session starts.
-        fs::write(&song, "second").unwrap();
+        write_settled(&song, "second");
         let mut service = SnapshotService::new();
         assert!(service.set_project_root(&root));
         assert!(service.record_unseen_changes(&song_path, "Song.als"));
@@ -712,9 +859,46 @@ mod tests {
         assert_eq!(versions_of(&root, "Song.als").len(), 2);
 
         // Content of an earlier version (a restore) is already captured.
-        fs::write(&song, "first").unwrap();
+        write_settled(&song, "first");
         assert!(!service.record_unseen_changes(&song_path, "Song.als"));
         assert_eq!(versions_of(&root, "Song.als").len(), 2);
+    }
+
+    #[test]
+    fn watcher_report_of_a_recorded_save_is_not_recorded_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_string_lossy().to_string();
+        let song = temp.path().join("Song.als");
+        let song_path = song.to_string_lossy().to_string();
+        let watcher_event = |sequence| FileEvent {
+            event_type: FileEventType::Modified,
+            absolute_path: song_path.clone(),
+            relative_path: "Song.als".to_string(),
+            scan_sequence: sequence,
+            modified_ms: 0,
+        };
+
+        write_settled(&song, "first");
+        let mut service = SnapshotService::new();
+        assert!(service.set_project_root(&root));
+        assert!(service.snapshot_path_now(&song_path, "Song.als"));
+
+        // Saved during startup: the content check records it, then the
+        // watcher reports the same save.
+        write_settled(&song, "second");
+        assert!(service.record_unseen_changes(&song_path, "Song.als"));
+        service.on_file_event(&watcher_event(1));
+        assert_eq!(versions_of(&root, "Song.als").len(), 2);
+
+        // A real change after it is recorded as usual.
+        write_settled(&song, "third");
+        service.on_file_event(&watcher_event(2));
+        assert_eq!(versions_of(&root, "Song.als").len(), 3);
+
+        // As is going back to earlier content.
+        write_settled(&song, "first");
+        service.on_file_event(&watcher_event(3));
+        assert_eq!(versions_of(&root, "Song.als").len(), 4);
     }
 
     #[test]
@@ -728,7 +912,7 @@ mod tests {
             for file in files {
                 let path = bundle.join(file);
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
-                fs::write(path, format!("{save} {file}")).unwrap();
+                write_settled(&path, &format!("{save} {file}"));
             }
         };
 
