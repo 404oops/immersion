@@ -82,7 +82,7 @@ FunctionEnd
 Function StartupPageLeave
   ${NSD_GetState} $StartupCheckbox $StartupEnabled
   ${If} $StartupEnabled == ${BST_CHECKED}
-    WriteRegStr HKCU "${REG_RUN}" "${APP_NAME}" "$INSTDIR\Immersion.exe"
+    WriteRegStr HKCU "${REG_RUN}" "${APP_NAME}" '"$INSTDIR\Immersion.exe" --autostart'
   ${Else}
     DeleteRegValue HKCU "${REG_RUN}" "${APP_NAME}"
   ${EndIf}

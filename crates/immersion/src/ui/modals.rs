@@ -327,7 +327,16 @@ impl RootView {
                                                         .child(section_label("Launch at login"))
                                                         .child(meta_label(
                                                             "Start Immersion automatically when you sign in.",
-                                                        )),
+                                                        ))
+                                                        .when(
+                                                            launch_at_startup
+                                                                && crate::platform::launch_at_startup_needs_approval(),
+                                                            |el| {
+                                                                el.child(meta_label(
+                                                                    "Allow Immersion in System Settings > General > Login Items & Extensions.",
+                                                                ))
+                                                            },
+                                                        ),
                                                 )
                                                 .child(themed_switch(
                                                     "launch-switch",

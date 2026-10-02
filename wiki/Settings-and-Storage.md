@@ -6,7 +6,7 @@ Open **Settings** from the main window. Changes to a folder layout trigger a res
 | --- | --- |
 | **Projects folder** | Shows the active folder and lets you choose or add another. Multiple folders can be watched at once. |
 | **Folder layout** | Choose **Bundles** or **Files** for the active folder. The choice is stored in that folder's `.immersion/settings.json`. |
-| **Launch at login** | Starts Immersion when you sign in where the platform supports it. The packaged macOS app is required for this integration. On Linux it writes an XDG autostart entry; it is not available in the Flatpak. |
+| **Launch at login** | Starts Immersion when you sign in where the platform supports it. On macOS 13 or later, the packaged app uses Login Items and may need approval in System Settings. On Linux it writes an XDG autostart entry; it is not available in the Flatpak. |
 | **Default sort mode** | Start the project list sorted by **Name** or **Last Opened**. |
 | **Activity log level** | **Info** shows normal events; **Debug** adds scan, watcher, and storage details. |
 | **Snapshot retention** | Number of recent versions with fast uncompressed copies, from 1 to 50; default 5. Older versions remain in compressed storage. |

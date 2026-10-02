@@ -217,6 +217,9 @@ pub enum BackendEvent {
 /// Host-provided platform hooks.
 pub struct PlatformHooks {
     pub launch_at_startup_supported: bool,
+    /// Current OS login entry, when the platform exposes one to reconcile
+    /// with the app setting (the Windows installer can create it first).
+    pub launch_at_startup_enabled: Option<bool>,
     pub set_launch_at_startup: Box<dyn Fn(bool) + Send>,
     /// Opens a file or folder with the OS default handler. Returns success.
     pub open_path: Box<dyn Fn(&str) -> bool + Send>,
@@ -226,6 +229,7 @@ impl Default for PlatformHooks {
     fn default() -> Self {
         Self {
             launch_at_startup_supported: false,
+            launch_at_startup_enabled: None,
             set_launch_at_startup: Box::new(|_| {}),
             open_path: Box::new(default_open_path),
         }
@@ -1083,9 +1087,15 @@ impl AppBackend {
             } else {
                 &saved_settings.color_scheme_mode
             });
-        backend.launch_at_startup = saved_settings.launch_at_startup;
+        backend.launch_at_startup = backend
+            .platform
+            .launch_at_startup_enabled
+            .unwrap_or(saved_settings.launch_at_startup);
         if backend.platform.launch_at_startup_supported {
             (backend.platform.set_launch_at_startup)(backend.launch_at_startup);
+        }
+        if backend.launch_at_startup != saved_settings.launch_at_startup {
+            backend.persist_app_settings();
         }
 
         for saved_folder in backend.project_registry.load_projects_folders() {

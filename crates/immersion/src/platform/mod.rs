@@ -56,9 +56,9 @@ pub use win::file_type_icon_png;
 #[cfg(target_os = "macos")]
 pub use mac::{
     adopt_main_window, file_type_icon_png, hide_main_window, install_activation_observer,
-    install_status_item, is_launch_at_startup_supported, launched_at_login,
-    set_background_agent_mode, set_dock_icon_if_unbundled, set_launch_at_startup, show_main_window,
-    show_notification, suppress_launch_activation_reveal,
+    install_status_item, is_launch_at_startup_supported, launch_at_startup_needs_approval,
+    launched_at_login, set_background_agent_mode, set_dock_icon_if_unbundled,
+    set_launch_at_startup, show_main_window, show_notification, suppress_launch_activation_reveal,
 };
 
 /// OS document icon for a file extension as PNG bytes. macOS, Windows and
@@ -70,6 +70,11 @@ pub fn file_type_icon_png(_extension: &str, _size_px: usize) -> Option<Vec<u8>> 
 
 #[cfg(not(target_os = "macos"))]
 pub fn set_background_agent_mode(_enabled: bool) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn launch_at_startup_needs_approval() -> bool {
+    false
+}
 
 #[cfg(not(target_os = "macos"))]
 pub fn adopt_main_window(_title: &str) {}
@@ -86,6 +91,25 @@ pub fn show_main_window() -> bool {
 
 #[cfg(not(target_os = "macos"))]
 pub fn install_activation_observer(_on_activate: Box<dyn Fn()>) {}
+
+// Launch at login on Windows: HKCU Run key.
+#[cfg(target_os = "windows")]
+pub fn launch_at_startup_enabled() -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    std::process::Command::new("reg")
+        .args(["query", RUN_KEY, "/v", "Immersion"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .ok()
+        .map(|status| status.success())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn launch_at_startup_enabled() -> Option<bool> {
+    None
+}
 
 // Launch at login on Windows: HKCU Run key.
 #[cfg(target_os = "windows")]
