@@ -570,14 +570,6 @@ impl RootView {
                         } else {
                             format!("{project_name} \u{2014} {artifact_name} saved {version_label}")
                         };
-                        #[cfg(target_os = "linux")]
-                        cx.show_system_notification(gpui::SystemNotification {
-                            tag: "snapshot-saved".into(),
-                            title: "Snapshot saved".into(),
-                            body: body.clone().into(),
-                            actions: Vec::new(),
-                        });
-                        #[cfg(not(target_os = "linux"))]
                         crate::platform::show_notification("Snapshot saved", &body);
                     }
                 _ => {}

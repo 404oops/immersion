@@ -2,10 +2,21 @@
 
 Immersion uses X11. On Wayland desktops it needs XWayland; the native Wayland
 backend is disabled. With a StatusNotifierItem tray host, closing the window
-minimizes it and project watching continues. Use the tray icon to open or quit
-Immersion. If the desktop has no tray host, closing the window quits so the
-process cannot become inaccessible. Launching Immersion again also reopens a
-running instance. Launch at login is not implemented on Linux yet.
+hides it to the tray and project watching continues. Use the tray icon to open
+or quit Immersion. If the desktop has no tray host, closing the window quits so
+the process cannot become inaccessible. Launching Immersion again also reopens
+a running instance.
+
+**Launch at login** writes an XDG autostart entry,
+`~/.config/autostart/io.github._404oops.immersion.desktop`. A login launch
+starts hidden in the tray once folders are configured. The panel hosting the
+tray can start after Immersion, so the window is withdrawn once the tray
+appears; if none appears within 30 seconds the window stays open. Launching
+from the app menu always opens the window. Launch at login is not available in the Flatpak.
+
+Project lists show the icon theme's document icon for each project type, found
+through the shared-mime-info database. Types the database does not know, such
+as most DAW formats, keep Immersion's own tiles.
 
 ## Native install
 
@@ -84,5 +95,6 @@ history in each `.musit` directory remains compatible.
 
 Flatpak is lower priority than the native packages. Tray support depends on
 the desktop's StatusNotifierItem host and sandbox D-Bus behavior. When no tray
-is available, closing the window quits. Save notifications use GPUI's Linux
-notification backend and the manifest's notification D-Bus permission.
+is available, closing the window quits. Launch at login needs the Background
+portal and is not offered in the Flatpak yet. Save notifications use the
+manifest's notification D-Bus permission.

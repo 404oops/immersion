@@ -2769,6 +2769,7 @@ dependencies = [
  "image",
  "ksni",
  "musit-core",
+ "notify-rust",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -2776,12 +2777,16 @@ dependencies = [
  "objc2-uniform-type-identifiers",
  "objc2-user-notifications",
  "once_cell",
+ "raw-window-handle",
+ "resvg",
  "serde",
  "serde_json",
  "unicode-segmentation",
  "vampir",
  "windows 0.62.2",
  "winresource",
+ "x11rb",
+ "zbus",
 ]
 
 [[package]]

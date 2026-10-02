@@ -15,8 +15,9 @@ finish-args:
   - --filesystem=/run/media
   - --filesystem=/media
   - --filesystem=/mnt
+  # The single-instance socket and the tray icon, which the host panel reads.
   - --filesystem=xdg-run/immersion:create
-  # GPUI's Linux notification backend uses org.freedesktop.Notifications.
+  # Save notifications (platform/linux.rs) use org.freedesktop.Notifications.
   - --talk-name=org.freedesktop.Notifications
   - --talk-name=org.kde.StatusNotifierWatcher
 

@@ -6,7 +6,7 @@ Check that the selected folder contains supported local project files and that t
 
 ## A project appears but new versions do not
 
-Keep Immersion running while you save. On macOS it can continue in the menu bar after the window closes; on Windows closing the window quits. Confirm the folder is still added and its tab says it is monitoring. Switch the activity log to **Debug** for watcher details. Check that the project folder and its `.musit` location are writable. If the log reports a failed watcher or versioning initialization, restart Immersion after fixing access to the folder.
+Keep Immersion running while you save. On macOS it can continue in the menu bar, and on Linux in the tray, after the window closes; on Windows closing the window quits. If you saved a project's main file while Immersion was closed, the next launch records that save as one new version; only the last save made while it was closed is kept. Confirm the folder is still added and its tab says it is monitoring. Switch the activity log to **Debug** for watcher details. Check that the project folder and its `.musit` location are writable. If the log reports a failed watcher or versioning initialization, restart Immersion after fixing access to the folder.
 
 ## The wrong file opens or is versioned
 

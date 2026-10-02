@@ -52,6 +52,20 @@ pub fn trim_to_content(width: u32, height: u32, rgba: &[u8]) -> (u32, u32, Vec<u
     (out_side as u32, out_side as u32, out)
 }
 
+/// Premultiplied RGBA to straight alpha, as PNG expects.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+pub fn unpremultiply(rgba: &mut [u8]) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        let alpha = pixel[3] as u32;
+        if alpha == 0 || alpha == 255 {
+            continue;
+        }
+        for channel in &mut pixel[..3] {
+            *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
+        }
+    }
+}
+
 /// PNG bytes of straight-alpha RGBA pixels.
 pub fn encode_png(width: u32, height: u32, rgba: Vec<u8>) -> Option<Vec<u8>> {
     let image = image::RgbaImage::from_raw(width, height, rgba)?;

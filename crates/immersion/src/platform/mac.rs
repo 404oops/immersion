@@ -97,6 +97,40 @@ fn suppress_activation_reveal() {
         .with(|cell| cell.set(Some(Instant::now() + Duration::from_secs(1))));
 }
 
+/// Skips activation-driven reveals while a login launch settles: the system
+/// can activate a login item as it opens, which would show the window.
+pub fn suppress_launch_activation_reveal() {
+    ACTIVATION_SUPPRESSED_UNTIL
+        .with(|cell| cell.set(Some(Instant::now() + Duration::from_secs(5))));
+}
+
+/// Whether the system opened the app as a login item. Only valid while the
+/// launch is handled, i.e. during applicationDidFinishLaunching, when the
+/// open-application Apple event is still current.
+pub fn launched_at_login() -> bool {
+    const OPEN_APPLICATION: u32 = u32::from_be_bytes(*b"oapp");
+    const PROP_DATA: u32 = u32::from_be_bytes(*b"prdt");
+    const LAUNCHED_AS_LOGIN_ITEM: u32 = u32::from_be_bytes(*b"lgit");
+    unsafe {
+        let manager: Retained<AnyObject> =
+            msg_send![objc2::class!(NSAppleEventManager), sharedAppleEventManager];
+        let event: Option<Retained<AnyObject>> = msg_send![&*manager, currentAppleEvent];
+        let Some(event) = event else {
+            return false;
+        };
+        let event_id: u32 = msg_send![&*event, eventID];
+        if event_id != OPEN_APPLICATION {
+            return false;
+        }
+        let property: Option<Retained<AnyObject>> =
+            msg_send![&*event, paramDescriptorForKeyword: PROP_DATA];
+        property.is_some_and(|property| {
+            let code: u32 = msg_send![&*property, enumCodeValue];
+            code == LAUNCHED_AS_LOGIN_ITEM
+        })
+    }
+}
+
 fn activation_reveal_suppressed() -> bool {
     ACTIVATION_SUPPRESSED_UNTIL
         .with(|cell| cell.get())
@@ -521,19 +555,6 @@ fn render_type_icon_png(extension: &str, size_px: usize) -> Option<Vec<u8>> {
         let row = unsafe { std::slice::from_raw_parts(data.add(y * bytes_per_row), size_px * 4) };
         rgba[y * size_px * 4..(y + 1) * size_px * 4].copy_from_slice(row);
     }
-    unpremultiply(&mut rgba);
+    super::icon_pixels::unpremultiply(&mut rgba);
     super::icon_pixels::trimmed_png(size_px as u32, size_px as u32, &rgba)
-}
-
-/// Premultiplied RGBA to straight alpha, as PNG expects.
-fn unpremultiply(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
-        let alpha = pixel[3] as u32;
-        if alpha == 0 || alpha == 255 {
-            continue;
-        }
-        for channel in &mut pixel[..3] {
-            *channel = ((*channel as u32 * 255 + alpha / 2) / alpha).min(255) as u8;
-        }
-    }
 }

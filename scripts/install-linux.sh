@@ -10,9 +10,10 @@ fi
 
 cd "$repo_root"
 cargo build --release --locked -p immersion
+target_dir="${CARGO_TARGET_DIR:-target}"
 
 app_id=io.github._404oops.immersion
-install -Dm755 target/release/immersion "$prefix/bin/immersion"
+install -Dm755 "$target_dir/release/immersion" "$prefix/bin/immersion"
 install -Dm644 "packaging/linux/$app_id.desktop" "$prefix/share/applications/$app_id.desktop"
 install -Dm644 "packaging/linux/$app_id.metainfo.xml" "$prefix/share/metainfo/$app_id.metainfo.xml"
 for size in 256 512; do

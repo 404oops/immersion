@@ -300,11 +300,13 @@ impl State {
         service.set_notice_sink(move |n| notice(notice_root.clone(), n));
 
         let mut seeded = false;
-        if !project.primary_project_file.is_empty()
-            && !service.has_version_for_artifact(&project.primary_project_file)
-        {
+        if !project.primary_project_file.is_empty() {
             let absolute = join_path(&project.root_path, &project.primary_project_file);
-            seeded = service.snapshot_path_now(&absolute, &project.primary_project_file);
+            if service.has_version_for_artifact(&project.primary_project_file) {
+                service.record_unseen_changes(&absolute, &project.primary_project_file);
+            } else {
+                seeded = service.snapshot_path_now(&absolute, &project.primary_project_file);
+            }
         }
 
         let key = path_key(&project.root_path);

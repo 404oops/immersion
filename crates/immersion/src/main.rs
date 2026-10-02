@@ -20,9 +20,12 @@ use crate::platform::single_instance::{self, InstanceGuard};
 use vampir::text_input as ti;
 
 #[cfg(target_os = "linux")]
-const LINUX_APP_ID: &str = "io.github._404oops.immersion";
+pub(crate) const LINUX_APP_ID: &str = "io.github._404oops.immersion";
+// 256px, not the 2048px master: a 2048px RGBA _NET_WM_ICON is 16 MiB, past
+// the X server's maximum request size, and opening the window fails.
 #[cfg(target_os = "linux")]
-const LINUX_ICON: vampir::AppIcon = vampir::AppIcon::png(include_bytes!("../assets/icons/app.png"));
+const LINUX_ICON: vampir::AppIcon =
+    vampir::AppIcon::png(include_bytes!("../assets/icons/window-linux.png"));
 
 actions!(immersion, [Quit, Hide, HideOthers, ShowAll]);
 
@@ -30,6 +33,9 @@ thread_local! {
     static MAIN_WINDOW: RefCell<Option<WindowHandle<app::RootView>>> = const { RefCell::new(None) };
     // Whether the app is hidden in the menu bar (window closed / agent mode).
     static APP_HIDDEN: Cell<bool> = const { Cell::new(false) };
+    // Whether a Linux login launch is still waiting to withdraw the window.
+    #[cfg(target_os = "linux")]
+    static LOGIN_HIDE_PENDING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Brings the main window back: leaves background-agent mode, activates the
@@ -41,8 +47,11 @@ thread_local! {
 fn present_main_window(cx: &mut App) {
     platform::set_background_agent_mode(false);
     APP_HIDDEN.with(|hidden| hidden.set(false));
+    #[cfg(target_os = "linux")]
+    LOGIN_HIDE_PENDING.with(|pending| pending.set(false));
     cx.activate(true);
-    if !platform::show_main_window() {
+    // Linux only maps the window here; GPUI's activation raises it.
+    if !platform::show_main_window() || cfg!(target_os = "linux") {
         MAIN_WINDOW.with(|window| {
             if let Some(handle) = window.borrow().as_ref() {
                 handle
@@ -69,12 +78,10 @@ fn main() {
         InstanceGuard::Secondary => return,
     };
 
-    // Start hidden in background-agent mode when a projects folder is
-    // already configured. Only on macOS: other platforms have no status item
-    // yet, so a hidden window would be unreachable.
+    // A launch at login stays out of the way once every projects folder is
+    // set up; any other launch opens the window.
     let saved_folders = musit_core::project_registry::ProjectRegistry.load_projects_folders();
-    let start_hidden = cfg!(target_os = "macos")
-        && !saved_folders.is_empty()
+    let configured = !saved_folders.is_empty()
         && saved_folders
             .iter()
             .all(|folder| musit_core::folder_settings::has_layout_setting(folder));
@@ -85,6 +92,13 @@ fn main() {
     gpui_app.on_reopen(present_main_window);
 
     gpui_app.run(move |cx: &mut App| {
+        // macOS can only tell a login launch while the launch is handled,
+        // which is now. It starts hidden in the menu bar; Linux withdraws to
+        // the tray once one shows (below); Windows, with no tray yet,
+        // minimizes.
+        let login_launch = configured && platform::launched_at_login();
+        let start_hidden = cfg!(target_os = "macos") && login_launch;
+
         #[cfg(target_os = "linux")]
         cx.set_app_identity(LINUX_APP_ID, "Immersion");
 
@@ -168,9 +182,14 @@ fn main() {
         MAIN_WINDOW.with(|slot| *slot.borrow_mut() = Some(window));
         // Take ownership of the NSWindow for animated hide/show.
         platform::adopt_main_window("Immersion");
+        #[cfg(target_os = "linux")]
+        window
+            .update(cx, |_view, win, _cx| platform::adopt_x11_window(win))
+            .ok();
 
         // Closing the window leaves monitoring active where a tray control is
-        // available. GPUI cannot hide on Linux, so minimize its X11 window.
+        // available. On Linux the window is withdrawn from X11, or minimized
+        // if that fails.
         window
             .update(cx, |_view, win, cx| {
                 win.on_window_should_close(cx, |_win, cx| {
@@ -185,7 +204,9 @@ fn main() {
                         APP_HIDDEN.with(|hidden| hidden.set(true));
                         false
                     } else if cfg!(target_os = "linux") && platform::status_item_available() {
-                        _win.minimize_window();
+                        if !platform::hide_main_window() {
+                            _win.minimize_window();
+                        }
                         APP_HIDDEN.with(|hidden| hidden.set(true));
                         false
                     } else {
@@ -240,10 +261,43 @@ fn main() {
         })
         .detach();
 
+        // GPUI maps every Linux window when it opens, and autostart can run
+        // before the window manager and the panel hosting the tray. Withdraw
+        // the window once both are up; without a tray within 30 seconds it
+        // stays, since it would be unreachable. Opening it first cancels.
+        #[cfg(target_os = "linux")]
+        if login_launch {
+            LOGIN_HIDE_PENDING.with(|pending| pending.set(true));
+            cx.spawn(async move |cx| {
+                for _ in 0..1500 {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(20))
+                        .await;
+                    if !LOGIN_HIDE_PENDING.with(|pending| pending.get()) {
+                        break;
+                    }
+                    if platform::status_item_available() && platform::hide_main_window_if_mapped() {
+                        APP_HIDDEN.with(|hidden| hidden.set(true));
+                        break;
+                    }
+                }
+                LOGIN_HIDE_PENDING.with(|pending| pending.set(false));
+            })
+            .detach();
+        }
+        #[cfg(target_os = "windows")]
+        if login_launch {
+            window
+                .update(cx, |_view, win, _cx| win.minimize_window())
+                .ok();
+        }
+
         if start_hidden {
             platform::set_background_agent_mode(true);
+            #[cfg(target_os = "macos")]
+            platform::suppress_launch_activation_reveal();
             APP_HIDDEN.with(|hidden| hidden.set(true));
-        } else {
+        } else if !login_launch {
             cx.activate(true);
         }
     });

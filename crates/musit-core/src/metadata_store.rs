@@ -5,7 +5,7 @@ use crate::path_cleanup::{artifact_equals, join_path};
 use crate::version_id;
 use chrono::Utc;
 use serde_json::{Map, Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -293,6 +293,27 @@ impl MetadataStore {
             }
         });
         paths
+    }
+
+    /// Every object hash recorded for each path, or None when the log could
+    /// not be read in full: a partial read would make captured content look
+    /// new and record it twice.
+    pub fn object_hashes_by_path(&self) -> Option<HashMap<String, HashSet<String>>> {
+        let mut hashes: HashMap<String, HashSet<String>> = HashMap::new();
+        if self.musit_root.is_empty() {
+            return Some(hashes);
+        }
+        let complete = self.for_each_log_line(|obj| {
+            let path = obj.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let object = obj.get("object").and_then(|v| v.as_str()).unwrap_or("");
+            if !path.is_empty() && !object.is_empty() {
+                hashes
+                    .entry(path.to_string())
+                    .or_default()
+                    .insert(object.to_ascii_lowercase());
+            }
+        });
+        complete.then_some(hashes)
     }
 
     /// The newest version id of an artifact, or None when the log could not

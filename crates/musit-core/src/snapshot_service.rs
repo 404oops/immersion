@@ -1,6 +1,7 @@
 //! Creates content-addressed snapshots for file events, groups bundle saves
 //! into single versions, compacts old staged copies and tracks branch state.
 
+use crate::backend::sha256_file_hex;
 use crate::backup_template::{
     self, MAX_UNCOMPRESSED_RECENT_VERSIONS, MIN_UNCOMPRESSED_RECENT_VERSIONS,
     UNCOMPRESSED_RECENT_VERSIONS,
@@ -468,6 +469,56 @@ impl SnapshotService {
         any_succeeded
     }
 
+    /// Records a save the watcher could not have seen: Immersion was closed,
+    /// or the save landed before the watcher's baseline scan, which takes
+    /// whatever is on disk as unchanged. A file of the artifact (every
+    /// tracked file of a bundle) whose content matches no object recorded
+    /// for its path becomes one new version. Content matching an older
+    /// version, such as one restored, is left alone.
+    pub fn record_unseen_changes(&mut self, absolute_path: &str, relative_path: &str) -> bool {
+        let Some(known) = self.metadata_store.object_hashes_by_path() else {
+            return false;
+        };
+        let files: Vec<(String, String)> = if Path::new(absolute_path).is_dir() {
+            walk_files(absolute_path)
+                .into_iter()
+                .map(|file| {
+                    let inner = relative_file_path(absolute_path, &file);
+                    (file, join_path(relative_path, &inner))
+                })
+                .filter(|(_, relative)| self.project_config.should_track(relative))
+                .collect()
+        } else if Path::new(absolute_path).is_file() {
+            vec![(absolute_path.to_string(), relative_path.to_string())]
+        } else {
+            return false;
+        };
+
+        // One synthetic sequence, so the changed files share one version.
+        self.synthetic_scan_sequence -= 1;
+        let scan_sequence = self.synthetic_scan_sequence;
+        let mut recorded = false;
+        for (absolute, relative) in files {
+            let on_disk = sha256_file_hex(&absolute);
+            let captured = on_disk.is_empty()
+                || known
+                    .get(&relative)
+                    .is_some_and(|hashes| hashes.contains(&on_disk));
+            if captured {
+                continue;
+            }
+            let event = FileEvent {
+                event_type: FileEventType::Modified,
+                absolute_path: absolute,
+                relative_path: relative,
+                scan_sequence,
+                modified_ms: 0,
+            };
+            recorded = self.create_snapshot(&event, false) || recorded;
+        }
+        recorded
+    }
+
     pub fn has_version_for_artifact(&self, artifact: &str) -> bool {
         if artifact.is_empty() {
             return false;
@@ -628,6 +679,68 @@ mod tests {
             crate::backend::strings::MUSIT_VERSION_LOG_RELATIVE_PATH,
         );
         let versions = crate::backend::parse_versions_from_log(&log, "Song.logicx");
+        assert_eq!(versions.len(), 2);
+        assert!(versions.iter().all(|version| version.files.len() == 2));
+    }
+
+    fn versions_of(root: &str, artifact: &str) -> Vec<crate::backend::VersionEntry> {
+        let log = join_path(
+            root,
+            crate::backend::strings::MUSIT_VERSION_LOG_RELATIVE_PATH,
+        );
+        crate::backend::parse_versions_from_log(&log, artifact)
+    }
+
+    #[test]
+    fn save_made_while_closed_is_recorded_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_string_lossy().to_string();
+        let song = temp.path().join("Song.als");
+        let song_path = song.to_string_lossy().to_string();
+
+        fs::write(&song, "first").unwrap();
+        let mut service = SnapshotService::new();
+        assert!(service.set_project_root(&root));
+        assert!(service.snapshot_path_now(&song_path, "Song.als"));
+
+        // Saved while Immersion was not running; a new session starts.
+        fs::write(&song, "second").unwrap();
+        let mut service = SnapshotService::new();
+        assert!(service.set_project_root(&root));
+        assert!(service.record_unseen_changes(&song_path, "Song.als"));
+        assert!(!service.record_unseen_changes(&song_path, "Song.als"));
+        assert_eq!(versions_of(&root, "Song.als").len(), 2);
+
+        // Content of an earlier version (a restore) is already captured.
+        fs::write(&song, "first").unwrap();
+        assert!(!service.record_unseen_changes(&song_path, "Song.als"));
+        assert_eq!(versions_of(&root, "Song.als").len(), 2);
+    }
+
+    #[test]
+    fn unseen_bundle_changes_share_one_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().to_string_lossy().to_string();
+        let bundle = temp.path().join("Song.logicx");
+        let bundle_path = bundle.to_string_lossy().to_string();
+        let files = ["Metadata.plist", "Alternatives/000/ProjectData"];
+        let write_all = |save: &str| {
+            for file in files {
+                let path = bundle.join(file);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, format!("{save} {file}")).unwrap();
+            }
+        };
+
+        write_all("first");
+        let mut service = SnapshotService::new();
+        assert!(service.set_project_root(&root));
+        assert!(service.snapshot_path_now(&bundle_path, "Song.logicx"));
+        assert!(!service.record_unseen_changes(&bundle_path, "Song.logicx"));
+
+        write_all("second");
+        assert!(service.record_unseen_changes(&bundle_path, "Song.logicx"));
+        let versions = versions_of(&root, "Song.logicx");
         assert_eq!(versions.len(), 2);
         assert!(versions.iter().all(|version| version.files.len() == 2));
     }

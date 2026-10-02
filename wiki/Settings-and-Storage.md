@@ -6,7 +6,7 @@ Open **Settings** from the main window. Changes to a folder layout trigger a res
 | --- | --- |
 | **Projects folder** | Shows the active folder and lets you choose or add another. Multiple folders can be watched at once. |
 | **Folder layout** | Choose **Bundles** or **Files** for the active folder. The choice is stored in that folder's `.immersion/settings.json`. |
-| **Launch at login** | Starts Immersion when you sign in where the platform supports it. The packaged macOS app is required for this integration. |
+| **Launch at login** | Starts Immersion when you sign in where the platform supports it. The packaged macOS app is required for this integration. On Linux it writes an XDG autostart entry; it is not available in the Flatpak. |
 | **Default sort mode** | Start the project list sorted by **Name** or **Last Opened**. |
 | **Activity log level** | **Info** shows normal events; **Debug** adds scan, watcher, and storage details. |
 | **Snapshot retention** | Number of recent versions with fast uncompressed copies, from 1 to 50; default 5. Older versions remain in compressed storage. |
@@ -26,4 +26,4 @@ The `.musit` format remains compatible with Immersion's earlier 0.1.x Qt builds.
 
 ## Closing the window
 
-On macOS, closing the window hides Immersion in the menu bar while monitoring continues. Use the menu bar item to reopen it or quit. If you already configured folders, the app can start hidden on later launches. On Linux, closing the window minimizes it while monitoring continues when a StatusNotifierItem tray host is available; without one, closing quits. On Windows, closing the window quits. Use the app's quit action when you intend to stop monitoring on macOS or Linux.
+On macOS, closing the window hides Immersion in the menu bar while monitoring continues. Use the menu bar item to reopen it or quit. On Linux, closing the window hides it to the tray while monitoring continues when a StatusNotifierItem tray host is available; without one, closing quits. On Windows, closing the window quits. Once folders are configured, a launch at login starts hidden in the menu bar on macOS, in the tray on Linux (as soon as the tray appears), and minimized on Windows; opening Immersion yourself always shows the window. Use the app's quit action when you intend to stop monitoring on macOS or Linux.

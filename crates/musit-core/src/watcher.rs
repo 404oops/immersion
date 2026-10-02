@@ -526,6 +526,7 @@ impl HybridFileWatcher {
                                 move |result: Result<notify::Event, notify::Error>| {
                                     if let Ok(event) = result
                                         && !event.paths.is_empty()
+                                        && signals_change(&event.kind)
                                     {
                                         let _ = event_tx.send(Msg::Fs(event.paths));
                                     }
@@ -576,6 +577,19 @@ impl HybridFileWatcher {
     }
 }
 
+/// Whether an OS event can mean content changed. inotify also reports
+/// opens and read-only closes, and the watcher's own directory listings and
+/// file reads produce those, so forwarding them rescans forever. A close
+/// after writing is kept: it is how inotify reports a finished save.
+fn signals_change(kind: &notify::EventKind) -> bool {
+    use notify::event::{AccessKind, AccessMode, EventKind};
+    match kind {
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        _ => true,
+    }
+}
+
 impl Drop for HybridFileWatcher {
     fn drop(&mut self) {
         let _ = self.tx.send(Msg::Shutdown);
@@ -588,6 +602,21 @@ impl Drop for HybridFileWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_are_not_changes() {
+        use notify::event::{AccessKind, AccessMode, CreateKind, EventKind};
+        assert!(!signals_change(&EventKind::Access(AccessKind::Open(
+            AccessMode::Any
+        ))));
+        assert!(!signals_change(&EventKind::Access(AccessKind::Close(
+            AccessMode::Read
+        ))));
+        assert!(signals_change(&EventKind::Access(AccessKind::Close(
+            AccessMode::Write
+        ))));
+        assert!(signals_change(&EventKind::Create(CreateKind::File)));
+    }
 
     #[test]
     fn baseline_scan_holds_only_tracked_files() {
