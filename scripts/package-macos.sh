@@ -20,8 +20,9 @@ done
 scripts/bundle-macos.sh "$@"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+ARCH=$(uname -m)
 APP_DIR="target/${PROFILE}/Immersion.app"
-DMG="dist/Immersion-${VERSION}.dmg"
+DMG="dist/Immersion-${VERSION}-macos-${ARCH}.dmg"
 
 mkdir -p dist
 STAGING_WORKDIR=$(mktemp -d)

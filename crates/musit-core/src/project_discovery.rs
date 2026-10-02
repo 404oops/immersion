@@ -441,77 +441,79 @@ pub fn kind_to_string(kind: ProjectKind) -> &'static str {
     kind.to_display_string()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn scan_loose_project_files(
-    current_folder: &str,
-    projects: &mut Vec<DiscoveredProject>,
-    on_directory_scanned: &mut dyn FnMut(&str),
-    cancelled: Option<&AtomicBool>,
-    on_progress: &mut dyn FnMut(&[DiscoveredProject], i32),
+struct LooseFileScan<'a> {
+    projects: Vec<DiscoveredProject>,
+    on_directory_scanned: &'a mut dyn FnMut(&str),
+    cancelled: Option<&'a AtomicBool>,
+    on_progress: &'a mut dyn FnMut(&[DiscoveredProject], i32),
     progress_interval: i32,
-    directories_scanned: &mut i32,
-) {
-    if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-        return;
-    }
+    directories_scanned: i32,
+}
 
-    on_directory_scanned(current_folder);
-
-    *directories_scanned += 1;
-
-    for entry in read_entries(current_folder) {
-        if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+impl LooseFileScan<'_> {
+    fn scan(&mut self, current_folder: &str) {
+        if self
+            .cancelled
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
             return;
         }
 
-        let kind = classify_path(&entry);
-        if entry.is_dir {
-            // Bundle project formats (for example .logicx and .band) are
-            // intentionally excluded from Files mode, including their
-            // internal files.
-            if kind != ProjectKind::Unknown && backup_template::kind_is_bundle(kind) {
+        (self.on_directory_scanned)(current_folder);
+        self.directories_scanned += 1;
+
+        for entry in read_entries(current_folder) {
+            if self
+                .cancelled
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                return;
+            }
+
+            let kind = classify_path(&entry);
+            if entry.is_dir {
+                // Bundle project formats (for example .logicx and .band) are
+                // intentionally excluded from Files mode, including their
+                // internal files.
+                if kind != ProjectKind::Unknown && backup_template::kind_is_bundle(kind) {
+                    continue;
+                }
+                if project_config::is_ignored_directory_name(&entry.file_name) {
+                    continue;
+                }
+                self.scan(&entry.absolute_path);
                 continue;
             }
-            if project_config::is_ignored_directory_name(&entry.file_name) {
+
+            // Files mode is extension-driven: only supported regular project
+            // files are accepted, and formats declared as bundles are ignored.
+            if !entry.is_file
+                || kind == ProjectKind::Unknown
+                || backup_template::kind_is_bundle(kind)
+            {
                 continue;
             }
-            scan_loose_project_files(
-                &entry.absolute_path,
-                projects,
-                on_directory_scanned,
-                cancelled,
-                on_progress,
-                progress_interval,
-                directories_scanned,
-            );
-            continue;
+
+            let mut project = DiscoveredProject {
+                root_path: crate::path_cleanup::parent_path(&entry.absolute_path),
+                name: complete_base_name(&entry.file_name).to_string(),
+                kind,
+                primary_file_modified: entry.modified,
+                ..Default::default()
+            };
+            if project.name.is_empty() {
+                project.name = entry.file_name.clone();
+            }
+            project.type_counts.insert(kind, 1);
+            project.project_files = vec![entry.file_name.clone()];
+            project.primary_project_file = entry.file_name.clone();
+            project.total_project_files = 1;
+            self.projects.push(project);
         }
 
-        // Files mode is extension-driven: only supported regular project
-        // files are accepted, and formats declared as bundles are ignored.
-        if !entry.is_file || kind == ProjectKind::Unknown || backup_template::kind_is_bundle(kind) {
-            continue;
+        if self.directories_scanned % self.progress_interval == 0 {
+            (self.on_progress)(&self.projects, self.directories_scanned);
         }
-
-        let mut project = DiscoveredProject {
-            root_path: crate::path_cleanup::parent_path(&entry.absolute_path),
-            name: complete_base_name(&entry.file_name).to_string(),
-            kind,
-            primary_file_modified: entry.modified,
-            ..Default::default()
-        };
-        if project.name.is_empty() {
-            project.name = entry.file_name.clone();
-        }
-        project.type_counts.insert(kind, 1);
-        project.project_files = vec![entry.file_name.clone()];
-        project.primary_project_file = entry.file_name.clone();
-        project.total_project_files = 1;
-        projects.push(project);
-    }
-
-    if *directories_scanned % progress_interval == 0 {
-        on_progress(projects, *directories_scanned);
     }
 }
 
@@ -531,21 +533,20 @@ pub fn discover_all(
     let progress_interval = progress_every_directories.max(1);
 
     if layout == ProjectsFolderLayout::Files {
-        let mut projects: Vec<DiscoveredProject> = Vec::new();
-        let mut directories_scanned = 0i32;
         let mut noop_scan = |_: &str| {};
         let mut noop_progress = |_: &[DiscoveredProject], _: i32| {};
-        scan_loose_project_files(
-            &root_folder,
-            &mut projects,
-            on_directory_scanned
+        let mut scan = LooseFileScan {
+            projects: Vec::new(),
+            on_directory_scanned: on_directory_scanned
                 .as_deref_mut()
                 .unwrap_or(&mut noop_scan),
             cancelled,
-            on_progress.as_deref_mut().unwrap_or(&mut noop_progress),
+            on_progress: on_progress.as_deref_mut().unwrap_or(&mut noop_progress),
             progress_interval,
-            &mut directories_scanned,
-        );
+            directories_scanned: 0,
+        };
+        scan.scan(&root_folder);
+        let mut projects = scan.projects;
         projects.sort_by(|left, right| {
             let by_name = left.name.to_lowercase().cmp(&right.name.to_lowercase());
             if by_name != std::cmp::Ordering::Equal {

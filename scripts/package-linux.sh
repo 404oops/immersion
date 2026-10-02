@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Run on x86_64 Linux after cargo build --release --locked -p immersion.
+# Run on x86_64 or aarch64 Linux after cargo build --release --locked -p immersion.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
-[[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || {
-    echo "Linux x86_64 is required" >&2
+[[ "$(uname -s)" == Linux ]] || {
+    echo "Linux is required" >&2
     exit 1
 }
+case "$(uname -m)" in
+    x86_64) arch=x86_64; nfpm_arch=amd64 ;;
+    aarch64) arch=aarch64; nfpm_arch=arm64 ;;
+    *) echo "Linux x86_64 or aarch64 is required" >&2; exit 1 ;;
+esac
 [[ -x target/release/immersion ]] || {
     echo "Build target/release/immersion first" >&2
     exit 1
@@ -16,6 +21,7 @@ cd "$repo_root"
 
 version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
 export IMMERSION_VERSION="$version"
+export IMMERSION_ARCH="$nfpm_arch"
 app_id=io.github._404oops.immersion
 mkdir -p dist
 
@@ -27,14 +33,14 @@ if command -v nfpm >/dev/null 2>&1; then
             archlinux) suffix=pkg.tar.zst ;;
         esac
         nfpm pkg --config packaging/linux/nfpm.yml --packager "$format" \
-            --target "dist/Immersion-${version}-linux-x86_64.${suffix}"
+            --target "dist/Immersion-${version}-linux-${arch}.${suffix}"
     done
 else
     echo "nfpm is required for deb, rpm, and Arch packages" >&2
     exit 1
 fi
 
-bundle="dist/Immersion-${version}-linux-x86_64"
+bundle="dist/Immersion-${version}-linux-${arch}"
 mkdir -p "$bundle/bin" "$bundle/share/applications" "$bundle/share/metainfo"
 mkdir -p "$bundle/share/icons/hicolor/256x256/apps" "$bundle/share/icons/hicolor/512x512/apps"
 install -m755 target/release/immersion "$bundle/bin/immersion"
@@ -52,14 +58,14 @@ if command -v linuxdeploy >/dev/null 2>&1; then
     rm -rf "$appdir"
     install -m644 packaging/linux/icon-512.png "dist/$app_id.png"
     touch dist/appimage-start
-    ARCH=x86_64 linuxdeploy --appdir "$appdir" \
+    ARCH="$arch" linuxdeploy --appdir "$appdir" \
         --executable target/release/immersion \
         --desktop-file "packaging/linux/$app_id.desktop" \
         --icon-file "dist/$app_id.png" \
         --output appimage
     appimage="$(find . -maxdepth 1 -name '*.AppImage' -newer dist/appimage-start -print -quit)"
     [[ -n "$appimage" ]] || { echo "linuxdeploy produced no AppImage" >&2; exit 1; }
-    mv "$appimage" "dist/Immersion-${version}-linux-x86_64.AppImage"
+    mv "$appimage" "dist/Immersion-${version}-linux-${arch}.AppImage"
     rm "dist/$app_id.png" dist/appimage-start
 else
     echo "linuxdeploy is required for the AppImage" >&2

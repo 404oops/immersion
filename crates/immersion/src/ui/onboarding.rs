@@ -15,12 +15,12 @@ pub const LAYOUTS: [(&str, &str, &str); 2] = [
     (
         "Bundles",
         "One folder per project",
-        "Each project has its own subfolder or bundle, like .logicx.",
+        "Each project has its own subfolder or bundle, like .logicx or .scriv.",
     ),
     (
         "Files",
         "Loose project files",
-        "Project files like .als or .flp sit directly in the folder.",
+        "Project files like .als, .blend, or .sketch sit directly in the folder.",
     ),
 ];
 
@@ -82,8 +82,8 @@ impl RootView {
             .child(wizard_title(theme, "Welcome to Immersion"))
             .child(wizard_text(
                 theme,
-                "Immersion automatically versions your DAW project files (Ableton, \
-                 Bitwig, FL Studio, Logic, Reaper, ...) every time you save.\n\n\
+                "Immersion automatically versions supported creative project files \
+                 (Ableton Live, Blender, Affinity, Sketch, and more) as you save.\n\n\
                  Start by choosing a folder that contains your projects.",
             ))
             .child(div().h(px(30.0)).w(px(240.0)).child(panel_button(

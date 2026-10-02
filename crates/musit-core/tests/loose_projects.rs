@@ -4,7 +4,9 @@
 //! on whatever is selected, and a selection that silently slid to a sibling
 //! would rewrite the wrong project's history.
 
+use musit_core::ProjectsFolderLayout;
 use musit_core::backend::AppBackend;
+use musit_core::project_discovery;
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -72,5 +74,38 @@ fn loose_projects_in_one_folder_keep_their_own_selection_and_note() {
     assert!(
         backend.selected_project_note().is_empty(),
         "the neighbouring project did not inherit the note"
+    );
+}
+
+#[test]
+fn creative_documents_appear_as_loose_projects() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    for name in [
+        "Portrait.afphoto",
+        "Logo.afdesign",
+        "Book.afpub",
+        "Interface.sketch",
+        "Sprite.aseprite",
+    ] {
+        fs::write(dir.path().join(name), b"project").expect("write project");
+    }
+
+    let root = dir.path().to_string_lossy();
+    let projects =
+        project_discovery::discover_all(&root, None, None, None, 20, ProjectsFolderLayout::Files);
+    let mut files: Vec<_> = projects
+        .iter()
+        .map(|project| project.primary_project_file.as_str())
+        .collect();
+    files.sort_unstable();
+    assert_eq!(
+        files,
+        [
+            "Book.afpub",
+            "Interface.sketch",
+            "Logo.afdesign",
+            "Portrait.afphoto",
+            "Sprite.aseprite"
+        ]
     );
 }

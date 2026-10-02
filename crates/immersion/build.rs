@@ -6,7 +6,7 @@ fn main() {
         let mut resource = winresource::WindowsResource::new();
         resource.set_icon("assets/icons/Immersion.ico");
         resource.set("ProductName", "Immersion");
-        resource.set("FileDescription", "Immersion - Music Project Versioning");
+        resource.set("FileDescription", "Immersion - Creative Project Versioning");
         resource.set("LegalCopyright", "Copyright 404oops");
         resource
             .compile()

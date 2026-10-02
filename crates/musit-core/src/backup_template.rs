@@ -65,12 +65,16 @@ pub enum ProjectKind {
     Gimp,
     Krita,
     AffinityPhoto,
+    PixelmatorPro,
+    Procreate,
+    Aseprite,
     ClipStudioPaint,
     CaptureOne,
 
     // VectorIllustration — vector & layout art
     Illustrator,
     AffinityDesigner,
+    Sketch,
     Inkscape,
     CorelDraw,
 
@@ -130,10 +134,14 @@ impl ProjectKind {
             ProjectKind::Gimp => "GIMP",
             ProjectKind::Krita => "Krita",
             ProjectKind::AffinityPhoto => "Affinity Photo",
+            ProjectKind::PixelmatorPro => "Pixelmator Pro",
+            ProjectKind::Procreate => "Procreate",
+            ProjectKind::Aseprite => "Aseprite",
             ProjectKind::ClipStudioPaint => "Clip Studio Paint",
             ProjectKind::CaptureOne => "Capture One",
             ProjectKind::Illustrator => "Illustrator",
             ProjectKind::AffinityDesigner => "Affinity Designer",
+            ProjectKind::Sketch => "Sketch",
             ProjectKind::Inkscape => "Inkscape",
             ProjectKind::CorelDraw => "CorelDRAW",
             ProjectKind::InDesign => "InDesign",
@@ -604,9 +612,28 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             C::Photo,
             ["afphoto", "afphoto~"],
             NONE,
-            true,
-            ["**.afphoto/**", "**.afphoto~/**"],
-            ["**/Cache/**", "**/Previews/**"]
+            false,
+            NONE,
+            NONE
+        ),
+        tpl!(K::PixelmatorPro, C::Photo, ["pxd"], NONE, false, NONE, NONE),
+        tpl!(
+            K::Procreate,
+            C::Photo,
+            ["procreate"],
+            NONE,
+            false,
+            NONE,
+            NONE
+        ),
+        tpl!(
+            K::Aseprite,
+            C::Photo,
+            ["ase", "aseprite"],
+            NONE,
+            false,
+            NONE,
+            NONE
         ),
         tpl!(
             K::ClipStudioPaint,
@@ -646,9 +673,18 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             C::VectorIllustration,
             ["afdesign", "afdesign~"],
             NONE,
-            true,
-            ["**.afdesign/**", "**.afdesign~/**"],
-            ["**/Cache/**", "**/Previews/**"]
+            false,
+            NONE,
+            NONE
+        ),
+        tpl!(
+            K::Sketch,
+            C::VectorIllustration,
+            ["sketch"],
+            NONE,
+            false,
+            NONE,
+            NONE
         ),
         tpl!(
             K::Inkscape,
@@ -697,9 +733,9 @@ static TEMPLATES: Lazy<Vec<BackupTemplate>> = Lazy::new(|| {
             C::Publishing,
             ["afpub", "afpub~"],
             NONE,
-            true,
-            ["**.afpub/**", "**.afpub~/**"],
-            ["**/Cache/**", "**/Previews/**"]
+            false,
+            NONE,
+            NONE
         ),
         tpl!(
             K::LaTeX,
@@ -1028,6 +1064,26 @@ mod tests {
         assert_eq!(kind_for_file_name("Track.logicx"), ProjectKind::Logic);
         assert_eq!(kind_for_file_name("project.godot"), ProjectKind::Godot);
         assert_eq!(kind_for_file_name("readme.txt"), ProjectKind::Unknown);
+    }
+
+    #[test]
+    fn creative_documents_are_regular_project_files() {
+        for (name, kind) in [
+            ("Portrait.afphoto", ProjectKind::AffinityPhoto),
+            ("Logo.afdesign", ProjectKind::AffinityDesigner),
+            ("Book.afpub", ProjectKind::AffinityPublisher),
+            ("Book.afpub~", ProjectKind::AffinityPublisher),
+            ("UI.sketch", ProjectKind::Sketch),
+            ("Layers.pxd", ProjectKind::PixelmatorPro),
+            ("Drawing.procreate", ProjectKind::Procreate),
+            ("Sprite.aseprite", ProjectKind::Aseprite),
+            ("Sprite.ase", ProjectKind::Aseprite),
+        ] {
+            assert_eq!(kind_for_file_name(name), kind, "{name}");
+            assert!(!kind_is_bundle(kind), "{name} must work in Files layout");
+            assert!(should_track_path(name), "{name} must be versioned");
+            assert_eq!(artifact_for_path(name), name);
+        }
     }
 
     #[test]

@@ -9,8 +9,9 @@ Immersion watches folders containing creative projects, records versions of supp
 ## Start here
 
 1. [Install and set up a folder](https://github.com/404oops/immersion/wiki/Getting-Started)
-2. [Find your way around the window](https://github.com/404oops/immersion/wiki/Interface)
-3. [Understand snapshots and restore a version](https://github.com/404oops/immersion/wiki/Versions-and-Restoring)
+2. [Install or build on Linux](https://github.com/404oops/immersion/wiki/Linux)
+3. [Find your way around the window](https://github.com/404oops/immersion/wiki/Interface)
+4. [Understand snapshots and restore a version](https://github.com/404oops/immersion/wiki/Versions-and-Restoring)
 
 ## Reference
 

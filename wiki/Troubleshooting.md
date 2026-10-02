@@ -30,4 +30,4 @@ Removing a watched folder stops monitoring and removes its tab, but leaves `.mus
 
 ## Where can I report a problem?
 
-In **Settings**, choose **Export Activity Log** and review the file before sharing it, since Debug mode can include local paths. Open a [GitHub issue](https://github.com/404oops/immersion/issues) with your operating system, Immersion version, project format, steps to reproduce, and relevant log lines. Avoid attaching private project files unless you intend to share them.
+On macOS or Windows, choose **Export Activity Log** in **Settings** and review the file before sharing it, since Debug mode can include local paths. Open a [GitHub issue](https://github.com/404oops/immersion/issues) with your operating system, Immersion version, project format, steps to reproduce, and relevant log lines. Avoid attaching private project files unless you intend to share them. [Linux builds are experimental and unsupported](https://github.com/404oops/immersion/wiki/Linux); Linux-specific issues cannot be reliably reproduced or fixed across the many distribution and desktop setups.

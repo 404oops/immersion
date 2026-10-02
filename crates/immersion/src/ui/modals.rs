@@ -10,8 +10,8 @@ use crate::app::{ConfirmAction, ConfirmState, RootView};
 use crate::theme::MODAL_EDGE_PADDING;
 use crate::theme::MODAL_PANEL_RADIUS;
 use crate::ui::controls::{
-    ButtonVariant, CONFIRM_DIALOG, LAYOUT_DIALOG, ScrollAxis, modal_opacity, panel_button,
-    scrollbar, themed_spinbox, themed_switch,
+    ButtonVariant, CONFIRM_DIALOG, LAYOUT_DIALOG, ScrollAxis, SpinboxSettings, modal_opacity,
+    panel_button, scrollbar, themed_spinbox, themed_switch,
 };
 use crate::ui::onboarding::{LAYOUTS, layout_choices};
 use vampir::{DialogButton, dialog, radio_group};
@@ -432,10 +432,12 @@ impl RootView {
                                                     .gap(px(12.0))
                                                     .child(themed_spinbox(
                                                         "retention",
-                                                        retention,
-                                                        1,
-                                                        50,
-                                                        true,
+                                                        SpinboxSettings {
+                                                            value: retention,
+                                                            min: 1,
+                                                            max: 50,
+                                                            enabled: true,
+                                                        },
                                                         &retention_edit,
                                                         &theme,
                                                         cx,

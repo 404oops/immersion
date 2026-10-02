@@ -511,7 +511,7 @@ fn uuid_string() -> String {
 /// The document icon macOS shows for files with `extension`, rendered to a
 /// square PNG of `size_px` pixels. The lookup goes by content type, so it
 /// never touches a file (which may sit on a slow share) and costs one call
-/// per extension. DAW formats are mostly undeclared, dynamic types that
+/// per extension. Many creative project formats are undeclared, dynamic types that
 /// still carry their app's document icon, so "unknown" is detected by
 /// comparing against the generic document icon; None then, so the UI keeps
 /// its own tile.

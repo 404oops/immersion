@@ -1,12 +1,12 @@
 name: immersion
-arch: amd64
+arch: ${IMMERSION_ARCH}
 platform: linux
 version: ${IMMERSION_VERSION}
 release: 1
-section: sound
+section: utils
 priority: optional
 maintainer: Immersion contributors <404oops@users.noreply.github.com>
-description: Automatic version history for music projects
+description: Automatic version history for creative projects
 homepage: https://github.com/404oops/immersion
 license: GPL-3.0-only
 contents:

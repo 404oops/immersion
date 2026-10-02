@@ -614,7 +614,7 @@ impl RootView {
                                             project.name.clone()
                                         };
                                         let kind = if project.kind.is_empty() {
-                                            "DAW".to_string()
+                                            "Project".to_string()
                                         } else {
                                             project.kind.clone()
                                         };
@@ -675,7 +675,7 @@ impl RootView {
                                                             },
                                                         ),
                                                     )
-                                                    // The DAW's own document icon when the OS
+                                                    // The creative app's document icon when the OS
                                                     // has one; otherwise a monogram tile.
                                                     .child(match icon {
                                                         Some(icon) => div()

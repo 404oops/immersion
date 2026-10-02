@@ -58,13 +58,16 @@ pub fn themed_switch(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+pub struct SpinboxSettings {
+    pub value: i32,
+    pub min: i32,
+    pub max: i32,
+    pub enabled: bool,
+}
+
 pub fn themed_spinbox(
     id_prefix: &'static str,
-    value: i32,
-    min: i32,
-    max: i32,
-    enabled: bool,
+    settings: SpinboxSettings,
     edit_input: &Entity<TextInput>,
     theme: &Theme,
     cx: &mut Context<RootView>,
@@ -72,10 +75,10 @@ pub fn themed_spinbox(
 ) -> impl IntoElement {
     vampir::controls::spinbox(
         id_prefix,
-        value,
-        min,
-        max,
-        enabled,
+        settings.value,
+        settings.min,
+        settings.max,
+        settings.enabled,
         edit_input,
         theme.palette(),
         cx,

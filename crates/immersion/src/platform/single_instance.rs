@@ -15,9 +15,8 @@ const SERVER_NAME: &str = "musit-immersion-v1";
 const RAISE_COMMAND: &[u8] = b"raise";
 const PEER_READ_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// Unix-socket endpoint path. Compiled on all platforms so every build
-/// type-checks it; only Unix targets call it.
-#[cfg_attr(not(unix), allow(dead_code))]
+/// Unix-socket endpoint path.
+#[cfg(unix)]
 fn socket_path() -> PathBuf {
     #[cfg(target_os = "linux")]
     if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
@@ -29,10 +28,12 @@ fn socket_path() -> PathBuf {
     std::env::temp_dir().join(SERVER_NAME)
 }
 
+#[cfg(not(unix))]
 fn lock_path() -> PathBuf {
     std::env::temp_dir().join(format!("{SERVER_NAME}.lock"))
 }
 
+#[cfg(not(unix))]
 fn port_path() -> PathBuf {
     std::env::temp_dir().join(format!("{SERVER_NAME}.port"))
 }
@@ -127,9 +128,8 @@ fn acquire_unix() -> InstanceGuard {
     }
 }
 
-/// TCP-loopback variant for platforms without Unix sockets. Compiled on all
-/// platforms so every build type-checks it; only non-Unix targets call it.
-#[cfg_attr(unix, allow(dead_code))]
+/// TCP-loopback variant for platforms without Unix sockets.
+#[cfg(not(unix))]
 fn acquire_tcp() -> InstanceGuard {
     use std::net::{TcpListener, TcpStream};
 

@@ -18,8 +18,10 @@ The discovery templates cover these applications and file types:
 | --- | --- |
 | Music production | Ableton Live (`.als`), Bitwig (`.bwproject`), FL Studio (`.flp`), REAPER (`.rpp`), Logic Pro (`.logicx` bundle), GarageBand (`.band` bundle), Cubase, Nuendo, Pro Tools, Studio One, Reason, Renoise, LMMS, SunVox, MuLab, Cakewalk, Ardour, Samplitude, Tracktion |
 | Video and motion | DaVinci Resolve, Final Cut Pro, Premiere Pro, Media Composer, VEGAS Pro, HitFilm, After Effects, Nuke, Fusion |
-| 3D and visual art | Blender, Cinema 4D, Houdini, Maya, LightWave 3D, Photoshop, GIMP, Krita, Affinity Photo, Clip Studio Paint, Capture One, Illustrator, Affinity Designer, Inkscape, CorelDRAW |
-| Publishing and game projects | InDesign, Scrivener, Affinity Publisher, LaTeX, Unreal Engine, Godot, Unity |
+| 3D and visual art | Blender, Cinema 4D, Houdini, Maya, LightWave 3D, Photoshop, GIMP, Krita, Affinity Photo (`.afphoto`), Pixelmator Pro (`.pxd`), Procreate (`.procreate`), Aseprite (`.ase`/`.aseprite`), Clip Studio Paint, Capture One, Illustrator, Affinity Designer (`.afdesign`), Sketch (`.sketch`), Inkscape, CorelDRAW |
+| Publishing and game projects | InDesign, Scrivener, Affinity Publisher (`.afpub`), LaTeX, Unreal Engine, Godot, Unity |
+
+Affinity `.afphoto`, `.afdesign`, and `.afpub` documents are regular files, so use the **Files** layout when they are stored as loose documents. Sketch, Pixelmator Pro, Procreate, and Aseprite documents also use **Files**. The Affinity `~` backup variants are recognized as separate files.
 
 For the exact extensions, marker files, and include/exclude patterns, see [`backup_template.rs`](https://github.com/404oops/immersion/blob/main/crates/musit-core/src/backup_template.rs). Some application project databases and cloud-managed libraries do not behave like normal local files; verify that your project appears and that a test restore works before relying on its history.
 

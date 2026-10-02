@@ -200,7 +200,7 @@ pub struct RootView {
     pub row_fade: Option<SelectionFade<i32>>,
     pub node_fade: Option<SelectionFade<String>>,
     /// OS document icons by lowercase file extension; None once a lookup
-    /// found nothing, so it is not retried. One small PNG per DAW type.
+    /// found nothing, so it is not retried. One small PNG per document type.
     pub file_icons: HashMap<String, Option<Arc<gpui::Image>>>,
 
     /// Everything the vampir controls keep between frames: which pop-up is

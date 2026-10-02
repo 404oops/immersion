@@ -157,8 +157,7 @@ fn main() {
         .detach();
 
         let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-        let mut options = WindowOptions {
+        let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(880.0), px(560.0))),
             titlebar: Some(TitlebarOptions {
@@ -169,10 +168,11 @@ fn main() {
             ..Default::default()
         };
         #[cfg(target_os = "linux")]
-        {
-            options.app_id = Some(LINUX_APP_ID.to_string());
-            options.icon = LINUX_ICON.window_icon();
-        }
+        let options = WindowOptions {
+            app_id: Some(LINUX_APP_ID.to_string()),
+            icon: LINUX_ICON.window_icon(),
+            ..options
+        };
         let window = cx
             .open_window(options, |window, cx| {
                 cx.new(|cx| app::RootView::new(window, cx))
