@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=IMMERSION_UPDATE_PUBLIC_KEY");
     println!("cargo:rerun-if-changed=assets/icons/Immersion.ico");
     // Windows exe resources (icon + version block), like the old
     // packaging/windows/Immersion.rc.in.

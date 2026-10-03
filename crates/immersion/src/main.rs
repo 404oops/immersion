@@ -5,6 +5,7 @@ mod i18n;
 mod platform;
 mod theme;
 mod ui;
+mod updater;
 
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
@@ -92,6 +93,10 @@ fn present_main_window(cx: &mut App) {
 }
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    if updater::windows::run_helper_if_requested() {
+        return;
+    }
     // gpui-ce enables its Wayland feature transitively. Force X11 at process
     // startup so Wayland sessions use XWayland instead of the broken backend.
     #[cfg(target_os = "linux")]
@@ -104,6 +109,12 @@ fn main() {
         InstanceGuard::Primary(rx) => rx,
         InstanceGuard::Secondary => return,
     };
+
+    #[cfg(target_os = "windows")]
+    if updater::windows::install_pending() {
+        single_instance::cleanup();
+        return;
+    }
 
     // A launch at login stays out of the way once every projects folder is
     // set up; any other launch opens the window.
@@ -128,6 +139,8 @@ fn main() {
 
         #[cfg(target_os = "linux")]
         cx.set_app_identity(LINUX_APP_ID, "Immersion");
+
+        updater::start();
 
         // Dev builds run outside a .app bundle; give the Dock the real icon.
         platform::set_dock_icon_if_unbundled();

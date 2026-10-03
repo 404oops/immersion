@@ -38,4 +38,9 @@ hdiutil create -volname "Immersion ${VERSION}" -srcfolder "${STAGING}" \
     -ov -format UDZO "${DMG}" >/dev/null
 python3 scripts/add-dmg-license.py "${DMG}"
 
+# Sparkle replaces the complete signed bundle, including icons and helpers.
+if [ -n "${IMMERSION_UPDATE_PUBLIC_KEY:-}" ]; then
+    ditto -c -k --sequesterRsrc --keepParent "${APP_DIR}" "dist/Immersion-${VERSION}-macos-${ARCH}.zip"
+fi
+
 echo "Packaged ${DMG}"

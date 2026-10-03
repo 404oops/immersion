@@ -17,7 +17,9 @@
   !define LICENSE_SOURCE "..\..\LICENSE"
 !endif
 
-!define APP_NAME "Immersion"
+!ifndef APP_NAME
+  !define APP_NAME "Immersion"
+!endif
 !define REG_UNINSTALL "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
 !define REG_RUN "Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -92,7 +94,30 @@ FunctionEnd
 
 Section "Immersion" SecMain
   SetOutPath "$INSTDIR"
-  File "/oname=Immersion.exe" "${EXE_SOURCE}"
+  ; Stage first. ReplaceFileW preserves the old exe if replacement fails and
+  ; saves a backup; a locked/running app must never become a partial binary.
+  ClearErrors
+  File "/oname=Immersion.new.exe" "${EXE_SOURCE}"
+  IfErrors install_failed
+  IfFileExists "$INSTDIR\Immersion.exe" 0 fresh_install
+  Delete "$INSTDIR\Immersion.previous.exe"
+  System::Call 'kernel32::ReplaceFileW(w "$INSTDIR\Immersion.exe", w "$INSTDIR\Immersion.new.exe", w "$INSTDIR\Immersion.previous.exe", i 0, p 0, p 0)i.r0'
+  StrCmp $0 0 install_failed installed
+fresh_install:
+  ClearErrors
+  Rename "$INSTDIR\Immersion.new.exe" "$INSTDIR\Immersion.exe"
+  IfErrors install_failed installed
+install_failed:
+  ; ReplaceFileW can move the original to its backup before reporting an
+  ; error (ERROR_UNABLE_TO_MOVE_REPLACEMENT_2). Restore that case explicitly.
+  IfFileExists "$INSTDIR\Immersion.exe" failed_cleanup
+  IfFileExists "$INSTDIR\Immersion.previous.exe" 0 failed_cleanup
+  Rename "$INSTDIR\Immersion.previous.exe" "$INSTDIR\Immersion.exe"
+failed_cleanup:
+  Delete "$INSTDIR\Immersion.new.exe"
+  SetErrorLevel 1
+  Abort
+installed:
   File "/oname=LICENSE.txt" "${LICENSE_SOURCE}"
 
   WriteRegStr HKCU "Software\${APP_NAME}" "InstallDir" "$INSTDIR"
@@ -118,6 +143,8 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\Immersion.exe"
+  Delete "$INSTDIR\Immersion.new.exe"
+  Delete "$INSTDIR\Immersion.previous.exe"
   Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir "$INSTDIR"

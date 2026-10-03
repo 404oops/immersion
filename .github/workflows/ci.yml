@@ -19,6 +19,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo test --workspace --locked
+      - name: Verify release metadata signing
+        run: |
+          python3 -m venv target/update-signing
+          target/update-signing/bin/pip install 'cryptography>=46,<47'
+          target/update-signing/bin/python -m unittest discover -s scripts/tests -v
 
   windows:
     name: Windows ${{ matrix.arch }}
@@ -36,6 +41,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --locked
+      - run: cargo test -p immersion --locked
+      - name: Ensure NSIS is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) {
+            choco install nsis -y --no-progress
+          }
+      - name: Verify silent installer upgrades and failure recovery
+        shell: pwsh
+        run: scripts/test-windows-updater.ps1
 
   linux:
     name: Linux ${{ matrix.arch }}

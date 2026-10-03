@@ -49,6 +49,36 @@ for size in 16 32 64 128 256 512; do
 done
 iconutil -c icns "${ICONSET}" -o "${APP_DIR}/Contents/Resources/app.icns"
 
+# Only release builds configured with a signing public key carry the updater.
+# Cargo/developer bundles without that key keep their existing behavior.
+if [ -n "${IMMERSION_UPDATE_PUBLIC_KEY:-}" ]; then
+    SPARKLE_DIR="${IMMERSION_SPARKLE_DIR:-target/sparkle-2.10.0}"
+    if [ ! -d "$SPARKLE_DIR/Sparkle.framework" ]; then
+        scripts/fetch-sparkle.sh "$SPARKLE_DIR"
+    fi
+    mkdir -p "$APP_DIR/Contents/Frameworks"
+    ditto "$SPARKLE_DIR/Sparkle.framework" "$APP_DIR/Contents/Frameworks/Sparkle.framework"
+    cp "$SPARKLE_DIR/LICENSE" "$APP_DIR/Contents/Resources/Sparkle-LICENSE.txt"
+    python3 - "$APP_DIR/Contents/Info.plist" <<'PY'
+import os, plistlib, sys
+path = sys.argv[1]
+with open(path, "rb") as f:
+    info = plistlib.load(f)
+info.update({
+    "SUFeedURL": "https://github.com/404oops/immersion/releases/latest/download/appcast-macos-arm64.xml",
+    "SUPublicEDKey": os.environ["IMMERSION_UPDATE_PUBLIC_KEY"],
+    "SUEnableAutomaticChecks": True,
+    "SUAutomaticallyUpdate": True,
+    "SUVerifyUpdateBeforeExtraction": True,
+    "SURequireSignedFeed": True,
+    "SUSignedFeedFailureExpirationInterval": 0,
+    "SUEnableSystemProfiling": False,
+})
+with open(path, "wb") as f:
+    plistlib.dump(info, f)
+PY
+fi
+
 # Ad-hoc signature so the bundle launches on Apple Silicon. Set
 # IMMERSION_SIGN_IDENTITY to use a real Developer ID certificate instead.
 codesign --force --deep -s "${IMMERSION_SIGN_IDENTITY:--}" "${APP_DIR}"
