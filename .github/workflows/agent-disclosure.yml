@@ -1,0 +1,63 @@
+name: Agent disclosure
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+# Only inspect metadata. Never check out or execute the pull request's code.
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  disclosure:
+    name: Check agent disclosure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = pr.body || '';
+            const footer = '(This PR was made with an agent in partial or full capacity)';
+            const marker = /\bbiblioklept\b/i.test(body);
+            const issue = { ...context.repo, issue_number: pr.number };
+
+            // Keep the review label even if the body is subsequently edited.
+            if (marker) {
+              try {
+                await github.rest.issues.getLabel({ ...context.repo, name: 'disclosure-violation' });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                try {
+                  await github.rest.issues.createLabel({
+                    ...context.repo, name: 'disclosure-violation', color: 'b60205',
+                    description: 'Public record of an attempted agent-disclosure violation; maintainer review required'
+                  });
+                } catch (creationError) {
+                  if (creationError.status !== 422) throw creationError;
+                  await github.rest.issues.getLabel({ ...context.repo, name: 'disclosure-violation' });
+                }
+              }
+              await github.rest.issues.addLabels({ ...issue, labels: ['disclosure-violation'] });
+            }
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              ...context.repo, pull_number: pr.number, per_page: 100
+            });
+            const agentName = /\b(?:ai|agent|codex|copilot|claude|cursor|chatgpt|gemini|devin|aider|swe-agent|openhands)\b/i;
+            const assisted = commits.some(({ commit }) => {
+              const message = commit.message || '';
+              return /^Agent-Assisted:\s*yes\s*$/im.test(message) ||
+                message.split(/\r?\n/).some(line => /^Co-Authored-By:\s*/i.test(line) && agentName.test(line));
+            });
+            const branchTrace = /(?:^|[\/_.-])(?:agent|agents|ai|codex|copilot|claude|cursor|chatgpt|gemini|devin|aider|swe-agent|openhands)(?:$|[\/_.-])/i.test(pr.head.ref);
+            const declared = /^\s*-\s*\[[xX]\]\s*I used an AI agent:\s*yes\s*$/m.test(body);
+            const finalLine = body.trimEnd().split(/\r?\n/).at(-1);
+            if ((assisted || branchTrace || declared || marker) && finalLine !== footer) {
+              core.setFailed('Agent assistance is indicated. End the PR body with the exact disclosure footer required by AGENTS.md.');
+            }
+            if (commits.length >= 250) {
+              core.setFailed('GitHub limits PR commit listing to 250 commits. Split this PR so all commit metadata can be checked.');
+            }
