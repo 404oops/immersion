@@ -382,7 +382,7 @@ pub fn install_status_item(on_open: Box<dyn Fn()>, on_quit: Box<dyn Fn()>) {
 
         let menu = NSMenu::new(mtm);
         let open_item = NSMenuItem::new(mtm);
-        open_item.setTitle(&NSString::from_str("Open Immersion"));
+        open_item.setTitle(&NSString::from_str(crate::i18n::tr("menu.open_immersion")));
         open_item.setKeyEquivalent(&NSString::from_str("o"));
         open_item.setAction(Some(sel!(openFromMenu:)));
         let target_obj: &AnyObject = &target;
@@ -392,7 +392,7 @@ pub fn install_status_item(on_open: Box<dyn Fn()>, on_quit: Box<dyn Fn()>) {
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
         let quit_item = NSMenuItem::new(mtm);
-        quit_item.setTitle(&NSString::from_str("Quit"));
+        quit_item.setTitle(&NSString::from_str(crate::i18n::tr("menu.quit")));
         quit_item.setKeyEquivalent(&NSString::from_str("q"));
         quit_item.setAction(Some(sel!(quitFromMenu:)));
         let _: () = msg_send![&*quit_item, setTarget: target_obj];
@@ -402,6 +402,19 @@ pub fn install_status_item(on_open: Box<dyn Fn()>, on_quit: Box<dyn Fn()>) {
         STATUS_ITEM.with(|slot| *slot.borrow_mut() = Some(item));
         STATUS_TARGET.with(|slot| *slot.borrow_mut() = Some(target));
     }
+}
+
+pub fn update_status_menu_language() {
+    STATUS_MENU.with(|slot| {
+        if let Some(menu) = slot.borrow().as_ref() {
+            if let Some(item) = menu.itemAtIndex(0) {
+                item.setTitle(&NSString::from_str(crate::i18n::tr("menu.open_immersion")));
+            }
+            if let Some(item) = menu.itemAtIndex(2) {
+                item.setTitle(&NSString::from_str(crate::i18n::tr("menu.quit")));
+            }
+        }
+    });
 }
 
 // ---- Launch at login (SMAppService) ---------------------------------------

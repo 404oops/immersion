@@ -4,6 +4,7 @@
 use gpui::{Context, FontWeight, PathPromptOptions, SharedString, Window, div, prelude::*, px};
 
 use crate::app::{OnboardingStep, RootView};
+use crate::i18n::{tr, tr_args};
 use crate::theme::{MODAL_PANEL_RADIUS, Theme};
 use crate::ui::controls::{ButtonVariant, panel_button};
 use vampir::{Choice, radio_group};
@@ -11,24 +12,21 @@ use vampir::{Choice, radio_group};
 /// The two ways a projects folder can be laid out: the backend's name for
 /// each, the label the user picks, and what it means. The wizard and the
 /// layout dialog offer the same list.
-pub const LAYOUTS: [(&str, &str, &str); 2] = [
-    (
-        "Bundles",
-        "One folder per project",
-        "Each project has its own subfolder or bundle, like .logicx or .scriv.",
-    ),
-    (
-        "Files",
-        "Loose project files",
-        "Project files like .als, .blend, or .sketch sit directly in the folder.",
-    ),
-];
+pub const LAYOUTS: [&str; 2] = ["Bundles", "Files"];
 
 /// [`LAYOUTS`] as the choices of a radio group.
 pub fn layout_choices() -> Vec<Choice> {
     LAYOUTS
         .iter()
-        .map(|(_, title, detail)| Choice::new(*title).detail(*detail))
+        .enumerate()
+        .map(|(index, _)| {
+            let (title, detail) = if index == 0 {
+                ("layout.bundles.title", "layout.bundles.detail")
+            } else {
+                ("layout.files.title", "layout.files.detail")
+            };
+            Choice::new(tr(title)).detail(tr(detail))
+        })
         .collect()
 }
 
@@ -79,16 +77,29 @@ impl RootView {
             .flex()
             .flex_col()
             .gap(px(14.0))
-            .child(wizard_title(theme, "Welcome to Immersion"))
-            .child(wizard_text(
-                theme,
-                "Immersion automatically versions supported creative project files \
-                 (Ableton Live, Blender, Affinity, Sketch, and more) as you save.\n\n\
-                 Start by choosing a folder that contains your projects.",
-            ))
+            .child(wizard_title(theme, tr("onboarding.welcome.title")))
+            .child(wizard_text(theme, tr("onboarding.welcome.intro")))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(wizard_text(theme, tr("language.label")))
+                    .child(self.render_combo(
+                        "onboarding-language",
+                        crate::i18n::language_index(self.backend.language()),
+                        &crate::i18n::LANGUAGE_NAMES.map(str::to_string),
+                        Some(180.0),
+                        cx,
+                        |this, index, _window, cx| {
+                            this.set_language(crate::i18n::LANGUAGES[index], cx)
+                        },
+                    )),
+            )
+            .child(wizard_text(theme, tr("onboarding.welcome.prompt")))
             .child(div().h(px(30.0)).w(px(240.0)).child(panel_button(
                 "onboarding-choose-folder",
-                "Choose Projects Folder…",
+                tr("onboarding.choose_folder"),
                 ButtonVariant::Primary,
                 true,
                 theme,
@@ -112,7 +123,7 @@ impl RootView {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(wizard_title(theme, "How is this folder organized?"))
+            .child(wizard_title(theme, tr("onboarding.layout.title")))
             .child(
                 div()
                     .text_size(px(12.0))
@@ -137,7 +148,7 @@ impl RootView {
                     .gap(px(10.0))
                     .child(div().h(px(30.0)).w(px(120.0)).child(panel_button(
                         "onboarding-layout-back",
-                        "Back",
+                        tr("onboarding.back"),
                         ButtonVariant::Soft,
                         true,
                         theme,
@@ -150,13 +161,13 @@ impl RootView {
                     .child(div().flex_1())
                     .child(div().h(px(30.0)).w(px(140.0)).child(panel_button(
                         "onboarding-layout-continue",
-                        "Continue",
+                        tr("onboarding.continue"),
                         ButtonVariant::Primary,
                         true,
                         theme,
                         cx,
                         move |this, _w, cx| {
-                            let layout = LAYOUTS[this.onboarding_layout.min(LAYOUTS.len() - 1)].0;
+                            let layout = LAYOUTS[this.onboarding_layout.min(LAYOUTS.len() - 1)];
                             this.backend.add_projects_folder(&folder, layout);
                             this.onboarding = Some(OnboardingStep::Scanning {
                                 folder: folder.clone(),
@@ -173,7 +184,7 @@ impl RootView {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(wizard_title(theme, "Scanning for projects…"))
+            .child(wizard_title(theme, tr("onboarding.scanning.title")))
             .child(
                 div()
                     .text_size(px(12.0))
@@ -196,14 +207,14 @@ impl RootView {
     ) -> gpui::AnyElement {
         let project_count = self.backend.projects().len();
         let summary = if found_projects {
-            format!(
-                "Found {project_count} project{} — they are now being versioned automatically.",
-                if project_count == 1 { "" } else { "s" }
-            )
+            let key = if project_count == 1 {
+                "onboarding.found_one"
+            } else {
+                "onboarding.found_many"
+            };
+            tr_args(key, &[("count", &project_count.to_string())])
         } else {
-            "No supported project files were found in that folder. You can try the \
-             other layout, or pick a different folder."
-                .to_string()
+            tr("onboarding.none.description").to_string()
         };
 
         div()
@@ -213,17 +224,13 @@ impl RootView {
             .child(wizard_title(
                 theme,
                 if found_projects {
-                    "Folder added"
+                    tr("onboarding.added.title")
                 } else {
-                    "Nothing found"
+                    tr("onboarding.none.title")
                 },
             ))
             .child(wizard_text(theme, summary))
-            .child(wizard_text(
-                theme,
-                "Do you want to add another projects folder? You can always add or \
-                 remove folders later from the tab bar.",
-            ))
+            .child(wizard_text(theme, tr("onboarding.more.description")))
             .child(
                 div()
                     .flex()
@@ -231,7 +238,7 @@ impl RootView {
                     .when(!found_projects, |el| {
                         el.child(div().h(px(30.0)).flex_1().child(panel_button(
                             "onboarding-retry-layout",
-                            "Try Other Layout",
+                            tr("onboarding.try_other_layout"),
                             ButtonVariant::Soft,
                             true,
                             theme,
@@ -247,7 +254,7 @@ impl RootView {
                     })
                     .child(div().h(px(30.0)).flex_1().child(panel_button(
                         "onboarding-add-more",
-                        "Add Another Folder…",
+                        tr("onboarding.add_another"),
                         ButtonVariant::Soft,
                         true,
                         theme,
@@ -258,7 +265,7 @@ impl RootView {
                     )))
                     .child(div().h(px(30.0)).flex_1().child(panel_button(
                         "onboarding-finish",
-                        "Done",
+                        tr("onboarding.done"),
                         ButtonVariant::Primary,
                         true,
                         theme,
@@ -282,7 +289,7 @@ impl RootView {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Select Projects Folder".into()),
+            prompt: Some(tr("onboarding.folder_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = receiver.await

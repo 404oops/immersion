@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use crate::app::RootView;
+use crate::i18n::{tr, tr_args};
 use crate::theme::{MONO_FONT, Theme};
 use crate::ui::controls::{
     ButtonVariant, CONTROL_HEIGHT, ScrollAxis, caption, lerp_rgba, panel_button, scrollbar,
@@ -78,7 +79,7 @@ impl RootView {
                         .justify_center()
                         .text_size(px(15.0))
                         .text_color(theme.vm_text_meta)
-                        .child("No versions yet"),
+                        .child(tr("versions.none")),
                 )
             })
             .when(!graph_empty, |el| {
@@ -683,8 +684,11 @@ impl RootView {
             .filter(|timestamp| !timestamp.is_empty());
         let current_note = match (&current_node, selected_is_current) {
             (_, true) => None,
-            (Some(node), false) => Some(format!("Current: {}", node.version.full_label)),
-            (None, false) => Some("No saved version matches the file on disk".to_string()),
+            (Some(node), false) => Some(tr_args(
+                "versions.current_label",
+                &[("version", &node.version.full_label)],
+            )),
+            (None, false) => Some(tr("versions.no_current").to_string()),
         };
 
         let panel = div()
@@ -707,7 +711,7 @@ impl RootView {
                     .justify_center()
                     .text_size(px(13.0))
                     .text_color(theme.vm_text_meta)
-                    .child("Select a project to see its details and versions."),
+                    .child(tr("versions.select_project")),
             );
         };
 
@@ -719,7 +723,7 @@ impl RootView {
             _ => project_item.path.clone(),
         };
         let last_opened = if project_item.last_opened.is_empty() {
-            "never".to_string()
+            tr("versions.never").to_string()
         } else {
             project_item.last_opened.clone()
         };
@@ -747,7 +751,7 @@ impl RootView {
                             .gap(px(8.0))
                             // Fixed-height blocks: the column can run short of
                             // room, and a shrinking text block clips to nothing.
-                            .child(caption(&theme, "Project"))
+                            .child(caption(&theme, tr("versions.project")))
                             .child(
                                 div()
                                     .flex_none()
@@ -790,7 +794,7 @@ impl RootView {
                                                     .flex()
                                                     .items_center()
                                                     .gap(px(8.0))
-                                                    .child(detail_key(&theme, "File"))
+                                                    .child(detail_key(&theme, tr("versions.file")))
                                                     .child(div().flex_1().min_w_0().child(
                                                         self.render_combo(
                                                             "primary-file",
@@ -818,13 +822,13 @@ impl RootView {
                                         } else {
                                             el.child(detail_row(
                                                 &theme,
-                                                "File",
+                                                tr("versions.file"),
                                                 project_item.file.clone(),
                                             ))
                                         }
                                     })
-                                    .child(detail_row(&theme, "Path", path_display))
-                                    .child(detail_row(&theme, "Opened", last_opened)),
+                                    .child(detail_row(&theme, tr("versions.path"), path_display))
+                                    .child(detail_row(&theme, tr("versions.opened"), last_opened)),
                             ),
                     )
                     .child(divider())
@@ -843,7 +847,7 @@ impl RootView {
                                     .flex_none()
                                     .flex()
                                     .items_center()
-                                    .child(caption(&theme, "Project note")),
+                                    .child(caption(&theme, tr("versions.project_note"))),
                             )
                             .child(text_area(
                                 &self.project_note_input,
@@ -856,7 +860,7 @@ impl RootView {
                             .child(div().flex_none().flex().justify_end().child(
                                 div().w(px(96.0)).child(panel_button(
                                     "save-project-note",
-                                    "Save note",
+                                    tr("versions.save_note"),
                                     ButtonVariant::Soft,
                                     true,
                                     &theme,
@@ -889,7 +893,7 @@ impl RootView {
                                     .flex()
                                     .items_center()
                                     .gap(px(7.0))
-                                    .child(caption(&theme, "Version"))
+                                    .child(caption(&theme, tr("versions.version")))
                                     .child(
                                         div()
                                             .text_size(px(13.0))
@@ -914,7 +918,7 @@ impl RootView {
                                                         .gap(px(4.0))
                                                         .text_size(px(11.0))
                                                         .text_color(theme.vm_text_meta)
-                                                        .child("Saved")
+                                                        .child(tr("versions.saved"))
                                                         .child(SharedString::from(saved_at)),
                                                 )
                                             })
@@ -925,7 +929,7 @@ impl RootView {
                                                             .text_size(px(11.0))
                                                             .font_weight(FontWeight::MEDIUM)
                                                             .text_color(theme.success_strong)
-                                                            .child("Current"),
+                                                            .child(tr("versions.current")),
                                                     ),
                                                 )
                                             })
@@ -958,7 +962,7 @@ impl RootView {
                                     .gap(px(8.0))
                                     .child(div().w(px(76.0)).child(panel_button(
                                         "delete-version",
-                                        "Delete",
+                                        tr("versions.delete"),
                                         ButtonVariant::Danger,
                                         has_selection,
                                         &theme,
@@ -974,7 +978,7 @@ impl RootView {
                                     .child(div().flex_1())
                                     .child(div().w(px(100.0)).child(panel_button(
                                         "save-version-note",
-                                        "Save note",
+                                        tr("versions.save_note"),
                                         ButtonVariant::Soft,
                                         has_selection,
                                         &theme,
@@ -990,7 +994,7 @@ impl RootView {
                                     )))
                                     .child(div().w(px(118.0)).child(panel_button(
                                         "open-version",
-                                        "Open version",
+                                        tr("versions.open"),
                                         ButtonVariant::Primary,
                                         has_selection,
                                         &theme,

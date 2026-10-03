@@ -916,6 +916,7 @@ pub struct AppBackend {
     snapshot_retention: i32,
     notifications_enabled: bool,
     color_scheme_mode: ColorSchemeMode,
+    language: String,
 
     // Indexes into the ACTIVE workspace's discovered_projects.
     visible_project_indexes: Vec<usize>,
@@ -1032,6 +1033,7 @@ impl AppBackend {
             snapshot_retention: UNCOMPRESSED_RECENT_VERSIONS,
             notifications_enabled: true,
             color_scheme_mode: ColorSchemeMode::System,
+            language: "en".to_string(),
             visible_project_indexes: Vec::new(),
             selected_project_key: String::new(),
             last_opened_at_by_project: HashMap::new(),
@@ -1087,6 +1089,7 @@ impl AppBackend {
             } else {
                 &saved_settings.color_scheme_mode
             });
+        backend.language = saved_settings.language;
         backend.launch_at_startup = backend
             .platform
             .launch_at_startup_enabled
@@ -1875,6 +1878,23 @@ impl AppBackend {
 
     pub fn color_scheme_mode(&self) -> ColorSchemeMode {
         self.color_scheme_mode
+    }
+
+    pub fn language(&self) -> &str {
+        &self.language
+    }
+
+    pub fn set_language(&mut self, value: &str) {
+        let next = if matches!(value, "sr" | "fr" | "es" | "el" | "de") {
+            value
+        } else {
+            "en"
+        };
+        if self.language == next {
+            return;
+        }
+        self.language = next.to_string();
+        self.persist_app_settings();
     }
 
     pub fn color_scheme_mode_string(&self) -> &'static str {
@@ -3273,6 +3293,7 @@ impl AppBackend {
         self.snapshot_retention = UNCOMPRESSED_RECENT_VERSIONS;
         self.notifications_enabled = true;
         self.color_scheme_mode = ColorSchemeMode::System;
+        self.language = "en".to_string();
         self.launch_at_startup = false;
 
         self.status_message = strings::STATUS_SELECT_PROJECTS_FOLDER.to_string();
@@ -3355,6 +3376,7 @@ impl AppBackend {
             snapshot_retention: self.snapshot_retention,
             notifications_enabled: self.notifications_enabled,
             color_scheme_mode: self.color_scheme_mode_string().to_string(),
+            language: self.language.clone(),
         };
         self.project_registry.save_app_settings(&settings);
     }

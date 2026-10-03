@@ -7,6 +7,7 @@ use gpui::{
 };
 
 use crate::app::{ConfirmAction, ConfirmState, RootView};
+use crate::i18n::tr;
 use crate::theme::MODAL_EDGE_PADDING;
 use crate::theme::MODAL_PANEL_RADIUS;
 use crate::ui::controls::{
@@ -144,31 +145,41 @@ impl RootView {
 
         let has_folder = self.backend.has_projects_folder();
         let folder_path = self.backend.projects_folder_path().to_string();
-        let layout_name = self.backend.projects_folder_layout().to_string();
+        let layout_name = match self.backend.projects_folder_layout() {
+            "Bundles" => tr("layout.bundles.title"),
+            "Files" => tr("layout.files.title"),
+            other => other,
+        }
+        .to_string();
         let launch_supported = self.backend.launch_at_startup_supported();
         let launch_at_startup = self.backend.launch_at_startup();
-        let sort_options = vec!["Name".to_string(), "Last Opened".to_string()];
+        let sort_options = vec![
+            tr("sort.name").to_string(),
+            tr("sort.last_opened").to_string(),
+        ];
         let sort_index = if self.backend.sort_mode() == "Last Opened" {
             1
         } else {
             0
         };
-        let log_options = vec!["Info".to_string(), "Debug".to_string()];
+        let log_options = vec![tr("log.info").to_string(), tr("log.debug").to_string()];
         let log_index = if self.backend.log_level() == "Debug" {
             1
         } else {
             0
         };
         let scheme_options = vec![
-            "System".to_string(),
-            "Light".to_string(),
-            "Dark".to_string(),
+            tr("appearance.system").to_string(),
+            tr("appearance.light").to_string(),
+            tr("appearance.dark").to_string(),
         ];
         let scheme_index = match self.backend.color_scheme_mode_string() {
             "Light" => 1,
             "Dark" => 2,
             _ => 0,
         };
+        let language_options = crate::i18n::LANGUAGE_NAMES.map(str::to_string);
+        let language_index = crate::i18n::language_index(self.backend.language());
         let dev_details = self.show_dev_details();
         let retention = self.backend.snapshot_retention();
         let retention_edit = self.retention_input.clone();
@@ -208,12 +219,12 @@ impl RootView {
                             .text_size(px(19.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.vm_text_primary)
-                            .child("Settings"),
+                            .child(tr("settings.title")),
                     )
                     .child(div().flex_1())
                     .child(div().w(px(88.0)).child(panel_button(
                         "settings-close",
-                        "Close",
+                        tr("common.close"),
                         ButtonVariant::Soft,
                         true,
                         &theme,
@@ -247,24 +258,37 @@ impl RootView {
                                     .gap(px(14.0))
                                     .px(px(14.0))
                                     .py(px(12.0))
+                                    .child(
+                                        div().flex().flex_col().gap(px(8.0))
+                                            .child(section_label(tr("language.label")))
+                                            .child(self.render_combo(
+                                                "language-settings",
+                                                language_index,
+                                                &language_options,
+                                                None,
+                                                cx,
+                                                |this, index, _window, cx| this.set_language(crate::i18n::LANGUAGES[index], cx),
+                                            )),
+                                    )
+                                    .child(divider(&theme))
                                     // Projects folder.
                                     .child(
                                         div()
                                             .flex()
                                             .flex_col()
                                             .gap(px(8.0))
-                                            .child(section_label("Projects folder"))
+                                            .child(section_label(tr("settings.projects_folder")))
                                             .child(meta_label(if folder_path.is_empty() {
-                                                "No folder selected yet"
+                                                tr("settings.no_folder")
                                             } else {
                                                 &folder_path
                                             }))
                                             .child(panel_button(
                                                 "choose-folder",
                                                 if has_folder {
-                                                    "Add Projects Folder\u{2026}"
+                                                    tr("settings.add_folder")
                                                 } else {
-                                                    "Choose Projects Folder\u{2026}"
+                                                    tr("settings.choose_folder")
                                                 },
                                                 ButtonVariant::Primary,
                                                 true,
@@ -282,23 +306,19 @@ impl RootView {
                                                 .flex()
                                                 .flex_col()
                                                 .gap(px(8.0))
-                                                .child(section_label("Folder layout"))
+                                                .child(section_label(tr("settings.folder_layout")))
                                                 .when(dev_details, |el| {
-                                                    el.child(meta_label(
-                                                        "Stored in this folder as .immersion/settings.json",
-                                                    ))
+                                                    el.child(meta_label(tr("settings.stored_layout")))
                                                 })
                                                 .child(
                                                     div()
                                                         .text_size(px(12.0))
                                                         .text_color(theme.vm_text_primary)
-                                                        .child(SharedString::from(format!(
-                                                            "Current: {layout_name}"
-                                                        ))),
+                                                        .child(SharedString::from(crate::i18n::tr_args("settings.current_layout", &[("layout", &layout_name)]))),
                                                 )
                                                 .child(panel_button(
                                                     "change-layout",
-                                                    "Change Folder Layout",
+                                                    tr("settings.change_layout"),
                                                     ButtonVariant::Soft,
                                                     !folder_path.is_empty(),
                                                     &theme,
@@ -324,16 +344,16 @@ impl RootView {
                                                         .flex()
                                                         .flex_col()
                                                         .gap(px(4.0))
-                                                        .child(section_label("Launch at login"))
+                                                        .child(section_label(tr("settings.launch")))
                                                         .child(meta_label(
-                                                            "Start Immersion automatically when you sign in.",
+                                                            tr("settings.launch_detail"),
                                                         ))
                                                         .when(
                                                             launch_at_startup
                                                                 && crate::platform::launch_at_startup_needs_approval(),
                                                             |el| {
                                                                 el.child(meta_label(
-                                                                    "Allow Immersion in System Settings > General > Login Items & Extensions.",
+                                                                    tr("settings.launch_approval"),
                                                                 ))
                                                             },
                                                         ),
@@ -359,7 +379,7 @@ impl RootView {
                                             .flex()
                                             .flex_col()
                                             .gap(px(8.0))
-                                            .child(section_label("Default sort mode"))
+                                            .child(section_label(tr("settings.sort")))
                                             .child(self.render_combo(
                                                 "sort-settings",
                                                 sort_index,
@@ -383,9 +403,9 @@ impl RootView {
                                             .flex()
                                             .flex_col()
                                             .gap(px(8.0))
-                                            .child(section_label("Activity log level"))
+                                            .child(section_label(tr("settings.log_level")))
                                             .child(meta_label(
-                                                "Debug adds scan and watcher detail to the log, and shows where things are stored on disk.",
+                                                tr("settings.log_detail"),
                                             ))
                                             .child(self.render_combo(
                                                 "log-level",
@@ -421,9 +441,9 @@ impl RootView {
                                             .flex()
                                             .flex_col()
                                             .gap(px(8.0))
-                                            .child(section_label("Snapshot retention"))
+                                            .child(section_label(tr("settings.retention")))
                                             .child(meta_label(
-                                                "Number of recent versions that keep fast uncompressed copies per file.",
+                                                tr("settings.retention_detail"),
                                             ))
                                             .child(
                                                 div()
@@ -447,7 +467,7 @@ impl RootView {
                                                             cx.notify();
                                                         },
                                                     ))
-                                                    .child(meta_label("recent versions")),
+                                                    .child(meta_label(tr("settings.recent_versions"))),
                                             ),
                                     )
                                     .child(divider(&theme))
@@ -463,9 +483,9 @@ impl RootView {
                                                     .flex()
                                                     .flex_col()
                                                     .gap(px(4.0))
-                                                    .child(section_label("Save notifications"))
+                                                    .child(section_label(tr("settings.notifications")))
                                                     .child(meta_label(
-                                                        "Show a notification when a new version is saved.",
+                                                        tr("settings.notifications_detail"),
                                                     )),
                                             )
                                             .child(themed_switch(
@@ -489,7 +509,7 @@ impl RootView {
                                             .flex()
                                             .flex_col()
                                             .gap(px(8.0))
-                                            .child(section_label("Appearance"))
+                                            .child(section_label(tr("settings.appearance")))
                                             .child(self.render_combo(
                                                 "color-scheme",
                                                 scheme_index,
@@ -516,7 +536,7 @@ impl RootView {
                                             .flex()
                                             .flex_col()
                                             .gap(px(8.0))
-                                            .child(section_label("Theme hue"))
+                                            .child(section_label(tr("settings.hue")))
                                             .child(
                                                 div()
                                                     .flex()
@@ -536,7 +556,7 @@ impl RootView {
                                                             ))),
                                                     ),
                                             )
-                                            .child(section_label("Theme saturation"))
+                                            .child(section_label(tr("settings.saturation")))
                                             .child(
                                                 div()
                                                     .flex()
@@ -582,9 +602,9 @@ impl RootView {
                                             .flex()
                                             .flex_col()
                                             .gap(px(8.0))
-                                            .child(section_label("Support zone"))
+                                            .child(section_label(tr("settings.support")))
                                             .child(meta_label(
-                                                "Reset app configuration or export the full activity log for troubleshooting.",
+                                                tr("settings.support_detail"),
                                             ))
                                             .child(
                                                 div()
@@ -592,7 +612,7 @@ impl RootView {
                                                     .gap(px(10.0))
                                                     .child(div().flex_1().child(panel_button(
                                                         "export-log",
-                                                        "Export Activity Log",
+                                                        tr("settings.export_log"),
                                                         ButtonVariant::Soft,
                                                         true,
                                                         &theme,
@@ -603,21 +623,21 @@ impl RootView {
                                                     )))
                                                     .child(div().flex_1().child(panel_button(
                                                         "reset-config",
-                                                        "Reset Configuration",
+                                                        tr("settings.reset"),
                                                         ButtonVariant::Danger,
                                                         true,
                                                         &theme,
                                                         cx,
                                                         |this, _w, cx| {
                                                             let message = if this.show_dev_details() {
-                                                                "This removes saved settings, the projects folder choice, and project notes.\n\nProject version history (.musit folders) is not deleted."
+                                                                tr("settings.reset_dev_message")
                                                             } else {
-                                                                "This clears your settings, folder choices, and project notes.\n\nYour saved versions are kept."
+                                                                tr("settings.reset_message")
                                                             };
                                                             this.open_confirm(ConfirmState {
-                                                                title: "Reset Configuration".to_string(),
+                                                                title: tr("settings.reset").to_string(),
                                                                 message: message.to_string(),
-                                                                confirm_text: "Reset".to_string(),
+                                                                confirm_text: tr("common.reset").to_string(),
                                                                 danger: true,
                                                                 action: ConfirmAction::ResetConfig,
                                                             });
@@ -657,17 +677,17 @@ impl RootView {
         let folder_path = self.layout_dialog.folder_path.clone();
         let selected = LAYOUTS
             .iter()
-            .position(|(layout, _, _)| *layout == self.layout_dialog.selected_layout)
+            .position(|layout| *layout == self.layout_dialog.selected_layout)
             .unwrap_or(0);
         let choices = layout_choices();
 
         // Nothing happens until OK, so the footer just says what OK will do.
         let footer_text: SharedString = if self.show_dev_details() {
-            "Saved to .immersion/settings.json in this folder.".into()
+            tr("layout_dialog.saved_detail").into()
         } else if self.layout_dialog.is_new_folder {
-            "The folder is scanned once you press OK.".into()
+            tr("layout_dialog.new_detail").into()
         } else {
-            "Changing this rescans the folder.".into()
+            tr("layout_dialog.change_detail").into()
         };
 
         let body = div()
@@ -684,7 +704,7 @@ impl RootView {
                             .text_size(px(12.0))
                             .line_height(px(16.0))
                             .text_color(palette.text_secondary)
-                            .child("Pick the option that matches this folder."),
+                            .child(tr("layout_dialog.description")),
                     )
                     .when(!folder_path.is_empty(), |el| {
                         el.child(
@@ -705,7 +725,7 @@ impl RootView {
                 true,
                 self.widget_context(cx),
                 |this, index, _window, cx| {
-                    this.layout_dialog_select(LAYOUTS[index].0);
+                    this.layout_dialog_select(LAYOUTS[index]);
                     cx.notify();
                 },
             ))
@@ -720,20 +740,20 @@ impl RootView {
 
         dialog(
             LAYOUT_DIALOG,
-            "How are your projects organized?",
+            tr("layout_dialog.title"),
             520.0,
             self.widget_context(cx),
             body,
             vec![
                 DialogButton::new(
                     "layout-dialog-cancel",
-                    "Cancel",
+                    tr("common.cancel"),
                     ButtonVariant::Soft,
                     |_this, _window, _cx| {},
                 ),
                 DialogButton::new(
                     "layout-dialog-ok",
-                    "OK",
+                    tr("common.ok"),
                     ButtonVariant::Primary,
                     |this: &mut RootView, _window, cx| {
                         this.layout_dialog_confirm();
@@ -776,7 +796,7 @@ impl RootView {
             vec![
                 DialogButton::new(
                     "confirm-cancel",
-                    "Cancel",
+                    tr("common.cancel"),
                     ButtonVariant::Soft,
                     |_this, _window, _cx| {},
                 ),
@@ -801,7 +821,7 @@ impl RootView {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Select Projects Folder".into()),
+            prompt: Some(tr("onboarding.folder_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = receiver.await
@@ -852,15 +872,13 @@ impl RootView {
 /// Delete-version confirm content (VersionManagerWindow deleteConfirmDialog).
 pub fn delete_version_confirm(version_id: &str, dev_details: bool) -> ConfirmState {
     ConfirmState {
-        title: "Delete Version".to_string(),
+        title: tr("dialog.delete_title").to_string(),
         message: if dev_details {
-            format!(
-                "Delete version v{version_id}?\n\nThis removes its snapshot from .musit and cannot be undone."
-            )
+            crate::i18n::tr_args("dialog.delete_dev_message", &[("version", version_id)])
         } else {
-            format!("Delete version v{version_id}?\n\nThis cannot be undone.")
+            crate::i18n::tr_args("dialog.delete_message", &[("version", version_id)])
         },
-        confirm_text: "Delete".to_string(),
+        confirm_text: tr("common.delete").to_string(),
         danger: true,
         action: ConfirmAction::DeleteVersion(version_id.to_string()),
     }

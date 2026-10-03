@@ -290,6 +290,33 @@ impl ControlHost for RootView {
 }
 
 impl RootView {
+    pub fn set_language(&mut self, value: &str, cx: &mut Context<Self>) {
+        self.backend.set_language(value);
+        self.refresh_language(cx);
+    }
+
+    fn refresh_language(&mut self, cx: &mut Context<Self>) {
+        crate::i18n::set_language(self.backend.language());
+        #[cfg(target_os = "macos")]
+        {
+            crate::set_localized_menus(cx);
+            crate::platform::update_status_menu_language();
+        }
+        self.search_input.update(cx, |input, _| {
+            input.placeholder = crate::i18n::tr("input.search").into()
+        });
+        self.project_note_input.update(cx, |input, _| {
+            input.placeholder = crate::i18n::tr("input.project_note").into()
+        });
+        self.version_note_input.update(cx, |input, _| {
+            input.placeholder = crate::i18n::tr("input.version_note").into()
+        });
+        self.tab_name_input.update(cx, |input, _| {
+            input.placeholder = crate::i18n::tr("input.tab_name").into()
+        });
+        cx.notify();
+    }
+
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let platform_hooks = PlatformHooks {
             launch_at_startup_supported: crate::platform::is_launch_at_startup_supported(),
@@ -298,6 +325,9 @@ impl RootView {
             ..PlatformHooks::default()
         };
         let backend = AppBackend::with_platform(platform_hooks);
+        crate::i18n::set_language(backend.language());
+        #[cfg(target_os = "macos")]
+        crate::set_localized_menus(cx);
 
         let system_dark = vampir::theme::system_dark(window);
         let color_scheme = backend.color_scheme_mode();
@@ -308,12 +338,18 @@ impl RootView {
         };
         let theme = Theme::compute(backend.theme_hue(), backend.theme_saturation(), dark);
 
-        let search_input =
-            cx.new(|cx| TextInput::new(cx, "Search projects...", false, field_style(&theme)));
+        let search_input = cx.new(|cx| {
+            TextInput::new(
+                cx,
+                crate::i18n::tr("input.search"),
+                false,
+                field_style(&theme),
+            )
+        });
         let project_note_input = cx.new(|cx| {
             TextInput::new(
                 cx,
-                "Write a note for this project...",
+                crate::i18n::tr("input.project_note"),
                 true,
                 area_style(&theme),
             )
@@ -321,7 +357,7 @@ impl RootView {
         let version_note_input = cx.new(|cx| {
             TextInput::new(
                 cx,
-                "Write a note for selected version...",
+                crate::i18n::tr("input.version_note"),
                 true,
                 area_style(&theme),
             )
@@ -331,8 +367,14 @@ impl RootView {
             input.set_text(&backend.snapshot_retention().to_string(), cx);
             input
         });
-        let tab_name_input =
-            cx.new(|cx| TextInput::new(cx, "Tab name", false, field_style(&theme)));
+        let tab_name_input = cx.new(|cx| {
+            TextInput::new(
+                cx,
+                crate::i18n::tr("input.tab_name"),
+                false,
+                field_style(&theme),
+            )
+        });
 
         // Enter commits the inline tab rename.
         {
@@ -540,6 +582,7 @@ impl RootView {
                     }
                 }
                 BackendEvent::ConfigReset => {
+                    self.refresh_language(cx);
                     self.settings_open = false;
                     self.settings_enter_at = None;
                     self.settings_exit_at = None;
@@ -560,11 +603,11 @@ impl RootView {
                             musit_core::backup_template::artifact_for_path(&relative_path);
                         let artifact_name = musit_core::path_cleanup::file_name(&artifact_path);
                         let body = if artifact_name.is_empty() {
-                            format!("{project_name} saved {version_label}")
+                            crate::i18n::tr_args("notification.project_saved", &[("project", &project_name), ("version", &version_label)])
                         } else {
-                            format!("{project_name} \u{2014} {artifact_name} saved {version_label}")
+                            crate::i18n::tr_args("notification.artifact_saved", &[("project", &project_name), ("artifact", &artifact_name), ("version", &version_label)])
                         };
-                        crate::platform::show_notification("Snapshot saved", &body);
+                        crate::platform::show_notification(crate::i18n::tr("notification.saved"), &body);
                     }
                 _ => {}
             }

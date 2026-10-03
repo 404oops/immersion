@@ -1,6 +1,7 @@
 //! Immersion — GPUI desktop shell for the musit core.
 
 mod app;
+mod i18n;
 mod platform;
 mod theme;
 mod ui;
@@ -13,7 +14,7 @@ use gpui::{
     actions, prelude::*, px, size,
 };
 #[cfg(target_os = "macos")]
-use gpui::{Menu, MenuItem as OsMenuItem, SystemMenuType};
+use gpui::{Menu, MenuItem as OsMenuItem, OsAction, SystemMenuType};
 use gpui_platform::application;
 
 use crate::platform::single_instance::{self, InstanceGuard};
@@ -28,6 +29,32 @@ const LINUX_ICON: vampir::AppIcon =
     vampir::AppIcon::png(include_bytes!("../assets/icons/window-linux.png"));
 
 actions!(immersion, [Quit, Hide, HideOthers, ShowAll]);
+
+#[cfg(target_os = "macos")]
+fn set_localized_menus(cx: &App) {
+    use crate::i18n::tr;
+    cx.set_menus(vec![
+        Menu::new("Immersion").items([
+            OsMenuItem::os_submenu(tr("menu.services"), SystemMenuType::Services),
+            OsMenuItem::separator(),
+            OsMenuItem::action(tr("menu.hide_immersion"), Hide),
+            OsMenuItem::action(tr("menu.hide_others"), HideOthers),
+            OsMenuItem::action(tr("menu.show_all"), ShowAll),
+            OsMenuItem::separator(),
+            OsMenuItem::action(tr("menu.quit_immersion"), Quit),
+        ]),
+        Menu::new(tr("menu.edit")).items([
+            OsMenuItem::os_action(tr("menu.undo"), ti::Undo, OsAction::Undo),
+            OsMenuItem::os_action(tr("menu.redo"), ti::Redo, OsAction::Redo),
+            OsMenuItem::separator(),
+            OsMenuItem::os_action(tr("menu.cut"), ti::Cut, OsAction::Cut),
+            OsMenuItem::os_action(tr("menu.copy"), ti::Copy, OsAction::Copy),
+            OsMenuItem::os_action(tr("menu.paste"), ti::Paste, OsAction::Paste),
+            OsMenuItem::os_action(tr("menu.select_all"), ti::SelectAll, OsAction::SelectAll),
+        ]),
+        Menu::new(tr("menu.window")).items(Vec::<OsMenuItem>::new()),
+    ]);
+}
 
 thread_local! {
     static MAIN_WINDOW: RefCell<Option<WindowHandle<app::RootView>>> = const { RefCell::new(None) };
@@ -127,19 +154,7 @@ fn main() {
             cx.on_action(|_: &Hide, cx: &mut App| cx.hide());
             cx.on_action(|_: &HideOthers, cx: &mut App| cx.hide_other_apps());
             cx.on_action(|_: &ShowAll, cx: &mut App| cx.unhide_other_apps());
-            cx.set_menus(vec![
-                Menu::new("Immersion").items([
-                    OsMenuItem::os_submenu("Services", SystemMenuType::Services),
-                    OsMenuItem::separator(),
-                    OsMenuItem::action("Hide Immersion", Hide),
-                    OsMenuItem::action("Hide Others", HideOthers),
-                    OsMenuItem::action("Show All", ShowAll),
-                    OsMenuItem::separator(),
-                    OsMenuItem::action("Quit Immersion", Quit),
-                ]),
-                vampir::edit_menu(),
-                Menu::new("Window").items(Vec::<OsMenuItem>::new()),
-            ]);
+            set_localized_menus(cx);
         }
 
         // gpui's quit path never returns from run(), so shutdown work has to

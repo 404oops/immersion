@@ -53,6 +53,7 @@ pub struct AppSettings {
     pub snapshot_retention: i32,
     pub notifications_enabled: bool,
     pub color_scheme_mode: String,
+    pub language: String,
 }
 
 impl Default for AppSettings {
@@ -66,6 +67,7 @@ impl Default for AppSettings {
             snapshot_retention: UNCOMPRESSED_RECENT_VERSIONS,
             notifications_enabled: true,
             color_scheme_mode: String::new(),
+            language: "en".to_string(),
         }
     }
 }
@@ -641,6 +643,7 @@ impl ProjectRegistry {
         if let Some(value) = root.get("color_scheme_mode").and_then(|v| v.as_str()) {
             settings.color_scheme_mode = value.to_string();
         }
+        settings.language = app_language_from_root(&root).to_string();
         settings
     }
 
@@ -680,8 +683,35 @@ impl ProjectRegistry {
                 json!(settings.color_scheme_mode),
             );
         }
+        root.insert("language".to_string(), json!(settings.language));
         root.insert("updated_utc".to_string(), json!(now_utc_iso_ms()));
 
         write_json_atomically(&self.config_file_path(), &Value::Object(root))
+    }
+}
+
+fn app_language_from_root(root: &Map<String, Value>) -> &str {
+    root.get("language")
+        .and_then(|value| value.as_str())
+        .filter(|value| matches!(*value, "en" | "sr" | "fr" | "es" | "el" | "de"))
+        .unwrap_or("en")
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::*;
+
+    #[test]
+    fn language_preference_defaults_safely() {
+        let mut root = Map::new();
+        root.insert("sort_mode".to_string(), json!("Last Opened"));
+        assert_eq!(app_language_from_root(&root), "en");
+        for language in ["sr", "fr", "es", "el", "de"] {
+            root.insert("language".to_string(), json!(language));
+            assert_eq!(app_language_from_root(&root), language);
+        }
+        assert_eq!(root.get("sort_mode"), Some(&json!("Last Opened")));
+        root.insert("language".to_string(), json!("unsupported"));
+        assert_eq!(app_language_from_root(&root), "en");
     }
 }

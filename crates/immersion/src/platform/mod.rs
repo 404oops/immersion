@@ -13,6 +13,8 @@ mod linux_window;
 pub mod single_instance;
 #[cfg(target_os = "linux")]
 pub use linux::{install_status_item, poll_status_item, show_notification, status_item_available};
+#[cfg(target_os = "macos")]
+pub use mac::update_status_menu_language;
 /// Passed by the Linux autostart entry and the Windows Run key so a login
 /// launch can start out of the way.
 #[cfg(any(target_os = "linux", target_os = "windows"))]

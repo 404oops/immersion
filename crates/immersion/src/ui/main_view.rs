@@ -9,6 +9,7 @@ use gpui::{
 };
 
 use crate::app::{ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView};
+use crate::i18n::{tr, tr_args};
 use crate::ui::controls::{
     ButtonVariant, CONTROL_HEIGHT, CONTROL_RADIUS, DETAILS_SPLIT, FOLDER_TABS, LIST_SPLIT,
     ScrollAxis, caption, lerp_rgba, panel_button, scrollbar, text_field,
@@ -55,6 +56,24 @@ fn short_date(stamp: &str) -> String {
     let Ok(when) = NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S") else {
         return stamp.to_string();
     };
+    let language = crate::i18n::language();
+    if language != "en" {
+        const MONTH_KEYS: [&str; 12] = [
+            "date.jan", "date.feb", "date.mar", "date.apr", "date.may", "date.jun", "date.jul",
+            "date.aug", "date.sep", "date.oct", "date.nov", "date.dec",
+        ];
+        let month = tr(MONTH_KEYS[when.month0() as usize]);
+        let day = if matches!(language, "sr" | "de") {
+            format!("{}.", when.day())
+        } else {
+            when.day().to_string()
+        };
+        return if when.year() == Local::now().year() {
+            format!("{day} {month}")
+        } else {
+            format!("{day} {month} {}", when.year())
+        };
+    }
     if when.year() == Local::now().year() {
         when.format("%b %-d").to_string()
     } else {
@@ -127,7 +146,7 @@ impl RootView {
                             .flex_none()
                             .child(panel_button(
                                 "settings-button",
-                                "Settings",
+                                tr("settings.title"),
                                 ButtonVariant::Soft,
                                 true,
                                 &theme,
@@ -360,20 +379,14 @@ impl RootView {
                         return;
                     };
                     let message = if this.show_dev_details() {
-                        format!(
-                            "Stop watching and versioning {}?\n\nExisting version history (.musit folders) is not deleted.",
-                            folder.path
-                        )
+                        tr_args("main.remove_dev_message", &[("folder", &folder.path)])
                     } else {
-                        format!(
-                            "Stop watching {} for changes?\n\nNothing is deleted — its saved versions stay, and you can add the folder back later.",
-                            folder.name
-                        )
+                        tr_args("main.remove_message", &[("folder", &folder.name)])
                     };
                     this.open_confirm(ConfirmState {
-                        title: "Remove Projects Folder".to_string(),
+                        title: tr("main.remove_title").to_string(),
                         message,
-                        confirm_text: "Remove".to_string(),
+                        confirm_text: tr("common.remove").to_string(),
                         danger: true,
                         action: ConfirmAction::RemoveFolder(index as i32),
                     });
@@ -467,7 +480,10 @@ impl RootView {
         let project_count = self.backend.projects().len();
         let has_projects = project_count > 0;
         let is_scanning = self.backend.is_scanning_projects();
-        let sort_options = vec!["Name".to_string(), "Last Opened".to_string()];
+        let sort_options = vec![
+            tr("sort.name").to_string(),
+            tr("sort.last_opened").to_string(),
+        ];
         let sort_index = if self.backend.sort_mode() == "Last Opened" {
             1
         } else {
@@ -502,7 +518,7 @@ impl RootView {
                                     .text_size(px(13.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
-                                    .child("Projects"),
+                                    .child(tr("main.projects")),
                             )
                             .when(has_projects, |el| {
                                 el.child(
@@ -520,7 +536,7 @@ impl RootView {
                             .flex_none()
                             .items_center()
                             .gap(px(8.0))
-                            .child(caption(&theme, "Sort by"))
+                            .child(caption(&theme, tr("main.sort_by")))
                             .child(self.render_combo(
                                 "sort-main",
                                 sort_index,
@@ -609,12 +625,12 @@ impl RootView {
                                             weight,
                                         );
                                         let name = if project.name.is_empty() {
-                                            format!("Project {}", index + 1)
+                                            tr_args("main.project_number", &[("number", &(index + 1).to_string())])
                                         } else {
                                             project.name.clone()
                                         };
                                         let kind = if project.kind.is_empty() {
-                                            "Project".to_string()
+                                            tr("main.project").to_string()
                                         } else {
                                             project.kind.clone()
                                         };
@@ -778,9 +794,9 @@ impl RootView {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_muted)
                                 .child(if is_scanning {
-                                    "Scanning for projects\u{2026}"
+                                    tr("main.scanning")
                                 } else {
-                                    "No projects loaded"
+                                    tr("main.no_projects")
                                 }),
                         )
                     }),
