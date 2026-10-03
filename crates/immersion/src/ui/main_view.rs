@@ -4,8 +4,8 @@
 
 use chrono::{Datelike, Local, NaiveDateTime};
 use gpui::{
-    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, ObjectFit, SharedString, Window,
-    canvas, div, img, prelude::*, px, relative, uniform_list,
+    Context, ElementId, FontWeight, MouseButton, MouseDownEvent, ObjectFit, SharedString, TextRun,
+    Window, canvas, div, font, img, prelude::*, px, relative, uniform_list,
 };
 
 use crate::app::{ConfirmAction, ConfirmState, GRAPH_PANE_MIN, LIST_PANE_MIN, RootView};
@@ -26,6 +26,22 @@ const TAB_HEIGHT: f32 = CONTROL_HEIGHT;
 /// Space between the header and the panels, and between the panels
 /// themselves (both drag handles are exactly this thick).
 const PANE_GAP: f32 = 12.0;
+
+fn ui_text_width(window: &Window, text: &str, size: f32, weight: FontWeight) -> f32 {
+    let mut face = font(vampir::ui_font());
+    face.weight = weight;
+    let run = TextRun {
+        len: text.len(),
+        font: face,
+        ..Default::default()
+    };
+    f32::from(
+        window
+            .text_system()
+            .shape_line(text.into(), px(size), &[run], None)
+            .width(),
+    )
+}
 
 /// Two-letter monogram for a project kind: an all-caps short first word
 /// ("FL Studio" -> "FL") is used as is, otherwise the first two letters.
@@ -489,6 +505,31 @@ impl RootView {
         } else {
             0
         };
+        // The pop-up list uses the button's width, so size it for the longest
+        // translated option rather than only the currently selected one.
+        let natural_combo_width = sort_options
+            .iter()
+            .map(|option| ui_text_width(window, option, 12.5, FontWeight::NORMAL))
+            .fold(0.0_f32, f32::max)
+            + 44.0; // text padding, chevron, and a little breathing room
+        let title_width = ui_text_width(window, tr("main.projects"), 13.0, FontWeight::SEMIBOLD)
+            + if has_projects {
+                6.0 + ui_text_width(window, &project_count.to_string(), 12.0, FontWeight::NORMAL)
+            } else {
+                0.0
+            };
+        let pane_width = self.split_bounds.map(|bounds| {
+            let total = f32::from(bounds.size.width);
+            (total * self.list_fraction)
+                .clamp(LIST_PANE_MIN, (total - GRAPH_PANE_MIN).max(LIST_PANE_MIN))
+        });
+        let header_width = pane_width.unwrap_or(500.0) - 22.0; // panel padding and border
+        let combo_width = natural_combo_width
+            .max(80.0)
+            .min((header_width - title_width - 8.0).max(80.0));
+        let sort_label_width = ui_text_width(window, tr("main.sort_by"), 12.0, FontWeight::MEDIUM);
+        let show_sort_label =
+            title_width + 8.0 + sort_label_width + 8.0 + combo_width <= header_width;
 
         div()
             .size_full()
@@ -501,7 +542,8 @@ impl RootView {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            // Header row: title with the count, sort control on the right.
+            // Keep the title and sort control on one row. At the pane's
+            // minimum width, the options themselves identify the control.
             .child(
                 div()
                     .h(px(CONTROL_HEIGHT))
@@ -536,12 +578,14 @@ impl RootView {
                             .flex_none()
                             .items_center()
                             .gap(px(8.0))
-                            .child(caption(&theme, tr("main.sort_by")))
+                            .when(show_sort_label, |el| {
+                                el.child(caption(&theme, tr("main.sort_by")))
+                            })
                             .child(self.render_combo(
                                 "sort-main",
                                 sort_index,
                                 &sort_options,
-                                Some(124.0),
+                                Some(combo_width),
                                 cx,
                                 |this, index, _window, _cx| {
                                     let mode = if index == 1 { "Last Opened" } else { "Name" };
