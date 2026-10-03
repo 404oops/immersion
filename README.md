@@ -10,11 +10,11 @@
 | Detail | Information |
 | --- | --- |
 | **Made for** | Music, video, design, and other supported creative project formats |
-| **Works on** | macOS and Windows releases; [experimental Linux builds](wiki/Linux.md) (unsupported) |
-| **What it saves** | Project files and selected companion data; large media and caches are generally excluded |
+| **Release packages** | macOS 12+ on Apple silicon; Windows x64 and ARM64; [experimental Linux builds](wiki/Linux.md) (unsupported) |
+| **What it saves** | Project files and some related files; large media and temporary files are usually skipped |
 | **Price and source** | Free and open source under [GPLv3](LICENSE) |
 
-Choose where your projects live and whether they are kept in their own folders or as loose files. Immersion finds supported projects, takes an initial snapshot, then records new versions when their files change. Search and sort projects, add notes to projects and versions, and restore a version when you need it. Your history stays in a `.musit` folder beside the project.
+Point Immersion at a folder of projects and tell it how they are organized. It finds the project files it recognizes and tries to save a first version of each one. While Immersion is running, it saves new versions when those files change. You can find a project, add notes, and go back to an earlier version. Immersion keeps the saved versions in a `.musit` folder alongside the project files. Files in the same folder share that `.musit` folder.
 
 ## A look inside
 
@@ -28,14 +28,16 @@ These screenshots show Immersion with illustrative sample projects and version n
 
 1. Download an available package from the latest [release](https://github.com/404oops/immersion/releases/latest). For Linux build and package options, see the guide below.
 2. Open Immersion and choose a projects folder.
-3. Select **Bundles** for one folder or bundle per project, or **Files** for loose project files. You can add more folders later with **+**.
+3. Choose **Bundles** if each project has its own folder, or **Files** if each project is a separate file. You can add more folders later with **+**.
 4. Select a project to explore its version graph. Double-click a project to open it in its usual app.
 
-Linux support is experimental and provided without support. Distributions, desktop environments, graphics stacks, portals, and package setups vary too much to reliably reproduce or fix Linux-specific problems. For install and build details, including Flatpak, follow the [Linux build guide](wiki/Linux.md).
+Linux builds are provided so Immersion can run on Linux. If you use one, you are responsible for diagnosing and fixing any issues yourself; the project does not provide Linux troubleshooting or fixes. For installation and build options, including Flatpak, see the [Linux build guide](wiki/Linux.md).
+
+If Apple or Microsoft has ended support for your version of macOS or Windows, Immersion does not support it either. macOS 12 is the oldest version the app can install on; that does not mean every version from macOS 12 onward is supported.
 
 The [user manual](wiki/Home.md) covers every control, supported formats, storage, restore behavior, settings, and troubleshooting.
 
-> Immersion versions project data, not an entire media library. Keep your normal backups for audio, video, assets, and the device that holds your projects.
+> Immersion does not back up your whole project or media library. Keep separate backups of your audio, video, other assets, and computer or drive.
 
 ## Contribute
 

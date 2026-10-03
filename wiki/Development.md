@@ -25,7 +25,7 @@ On Windows, install NSIS and run:
 powershell -ExecutionPolicy Bypass -File scripts\package-windows.ps1 -Production
 ```
 
-Packages are written to `dist/`. The release workflow tests the workspace, builds both packages, and publishes them for a `v<version>` tag matching `Cargo.toml`.
+Packages are written to `dist/`. For a `v<version>` tag matching `Cargo.toml`, the release workflow tests the workspace, builds the macOS DMG and Windows x64 and ARM64 installers, builds the Linux packages described in the [Linux build instructions](https://github.com/404oops/immersion/blob/main/packaging/linux/README.md), and publishes the artifacts.
 
 ## Contributing
 

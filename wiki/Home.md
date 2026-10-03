@@ -1,6 +1,6 @@
 # Immersion user manual
 
-Immersion watches folders containing creative projects, records versions of supported project files, and shows their history as a graph. This manual describes version 0.2.4.
+Immersion watches your project folders and saves earlier copies of supported project files as you work. You can see those saved versions in a graph and return to one if needed. This manual covers Immersion 0.2.5.
 
 ![Immersion with illustrative music projects and a branched version history](images/immersion-music.png)
 
@@ -11,7 +11,7 @@ Immersion watches folders containing creative projects, records versions of supp
 1. [Install and set up a folder](Getting-Started.md)
 2. [Install or build on Linux](Linux.md)
 3. [Find your way around the window](Interface.md)
-4. [Understand snapshots and restore a version](Versions-and-Restoring.md)
+4. [Understand saved versions and restore one](Versions-and-Restoring.md)
 
 ## Reference
 
@@ -20,4 +20,4 @@ Immersion watches folders containing creative projects, records versions of supp
 - [Troubleshooting and frequently asked questions](Troubleshooting.md)
 - [Building and contributing](Development.md)
 
-**A snapshot is not a full backup.** Immersion normally saves project files and selected companion files, while large media and cache folders are excluded. Keep separate backups of your projects and media.
+**Saved versions are not full backups.** Immersion saves project files and some related files, but usually skips large media and temporary files. Keep separate backups of your projects and media.

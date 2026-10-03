@@ -2,13 +2,17 @@
 
 ## How a version is made
 
-After a folder is scanned, Immersion seeds an initial version for each supported project it can initialize. While it runs, its file watcher records later project saves after changes settle. The graph displays versions of the selected primary file; each version has an ID and save time. Immersion deduplicates stored content using SHA-256 hashes and compresses older copies. Saving project notes does not create a project-file version.
+When Immersion first finds a project, it tries to save a starting version of its main file or bundle. As long as Immersion is running, it saves new versions after changes to supported files settle. The graph shows the history of the selected file or bundle. If several files appear together as one project in Bundles mode, the other files may have separate histories.
 
-Versions are local to your project storage. There is no cloud sync or account. A save notification can be enabled in Settings on macOS.
+Each version has a number and a save time. Immersion avoids storing identical content twice and keeps compressed copies of older versions. Editing a project note does not make a new file version.
+
+Versions are local to your project storage. There is no cloud sync or account. Save notifications can be enabled in Settings on macOS and Linux.
 
 ## Current version and branches
 
-**Current** means the files on disk match a saved version. If no saved version matches, you may have unsaved, recently changed, or otherwise modified data on disk. When you restore an earlier version and then save new changes, history branches from the restored version. The graph keeps the older history visible.
+**Current** means the files saved in that version match the selected file or bundle on disk now. It does not check every asset in the project folder. If no version says Current, Immersion cannot confirm a match. It may still be waiting to record a recent change, or it may be unable to read a file.
+
+If you restore an older version and then save again, the new versions start a new path in the graph. The earlier history stays visible.
 
 ![An earlier version selected beside a newer branch, with its change note and current-version label](images/immersion-version-notes.png)
 
@@ -21,16 +25,18 @@ Versions are local to your project storage. There is no cloud sync or account. A
 3. Select **Open version**, or double-click the version node.
 4. Wait for the restore to finish, then reopen the project in its creative app. Check the activity log in Settings if it fails.
 
-Immersion attempts to capture the current on-disk project file first if it does not match a known snapshot. It prepares all files in the chosen version before replacing any of them and attempts to roll back if a swap fails. Even with these safeguards, keep independent backups before major recovery work. A restore replaces the versioned files on disk; it does not launch a separate copy of the project.
+If Immersion cannot tell whether your current file or bundle is already saved, it tries to save it just before the restore. That extra save can fail, and the restore may still continue. Before restoring, make sure your current work appears as a saved version or copy it somewhere else.
+
+Immersion gets all the files from the chosen version ready before replacing anything. If a replacement fails, it tries to put the original files back. Restoring replaces only the files saved in that version, in their original locations. It does not make a separate project copy or remove files added later. Keep a separate backup before major recovery work.
 
 ## Delete a version
 
-Select the version, choose **Delete**, and confirm. This permanently removes that snapshot from `.musit` and cannot be undone in the app. The remaining graph is reconnected around it. Deleting a version is different from removing a watched folder: removing a folder does not erase history.
+Select a version, choose **Delete**, and confirm. This permanently removes that saved version. You cannot undo it in Immersion. The other versions remain in the graph. Removing a watched folder is different: it leaves its version history on disk.
 
 ## Snapshot retention
 
-**Settings → Snapshot retention** sets how many recent versions keep quick, uncompressed copies per file. The default is five; the allowed range is 1–50. Older versions are compacted into the compressed object store, not intentionally discarded. A dashed graph border identifies a compacted version. Reducing the setting can compact existing staged copies.
+**Settings → Snapshot retention** sets how many recent versions keep an extra copy for faster restoring. The default is five per file; you can choose 1–50. When Immersion removes an older quick copy, it keeps the compressed copy. A dashed border in the graph marks a version without a quick copy. You can still restore it if the compressed copy is available. Lowering the setting can remove quick copies that already exist.
 
 ## What is covered
 
-Templates include primary project data and, for some formats, selected companion manifests. Large audio, video, rendered media, samples, and caches are usually excluded. The exact file set depends on format; see [Supported projects](Supported-Projects.md). Immersion is a version history tool, not a replacement for a complete filesystem backup.
+Immersion saves the main project file or bundle and, for some formats, a few related files. It usually skips large audio and video files, renders, samples, and temporary files. The exact list depends on the project format; see [Supported projects](Supported-Projects.md). Keep a separate backup of the whole project.

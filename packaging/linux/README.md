@@ -1,10 +1,9 @@
 # Linux builds
 
-Linux support is experimental. No support is provided for Linux builds or
-Linux-specific issues: distributions, desktop environments, graphics drivers,
-portals, and packaging differ enough that problems are often difficult to
-reproduce and cannot be fixed reliably across setups. These instructions are
-provided for people who want to try the builds on their own.
+Linux builds are provided so Immersion can run on Linux. If you use one, you
+are responsible for diagnosing and fixing any issues yourself; the project
+does not provide Linux troubleshooting or fixes. These instructions are for
+people who want to try the builds on their own.
 
 ## Start with a release package
 
@@ -18,7 +17,7 @@ files; keep their relative paths when installing them manually.
 
 Open Immersion, choose a writable projects folder, and select **Files** for
 loose project documents or **Bundles** for projects kept in their own folders.
-Save a project and check that a new version appears. For a shorter overview,
+Change and save a supported project file, then check that a new version appears. For a shorter overview,
 see the [Linux guide](https://github.com/404oops/immersion/blob/main/wiki/Linux.md).
 
 ## Desktop requirements and behavior

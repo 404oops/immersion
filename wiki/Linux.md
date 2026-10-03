@@ -1,29 +1,27 @@
 # Linux builds
 
-Immersion can run on Linux, but Linux builds are experimental and unsupported.
-Distributions, desktop environments, graphics drivers, portals, and package
-setups vary enough that Linux-specific problems are often hard to reproduce or
-fix reliably across systems. Use these builds if you are comfortable checking
-your own desktop setup and troubleshooting installation issues.
+Linux builds are provided so Immersion can run on Linux. If you use one, you
+are responsible for diagnosing and fixing any issues yourself; the project
+does not provide Linux troubleshooting or fixes. These builds are for people
+comfortable troubleshooting their own setup.
 
 ## Get started
 
-1. Download the package for your CPU and distribution from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). Releases provide x86_64 and aarch64 `.deb`, `.rpm`, `.pkg.tar.zst`, `.AppImage`, and `.tar.gz` packages. Use the package manager format for your distribution when possible.
-2. Install the package with your package manager, or make the AppImage executable and run it. The tarball contains a binary and matching desktop files for a manual install. See the [Linux install and build instructions](https://github.com/404oops/immersion/blob/main/packaging/linux/README.md) for details.
+1. Download the package for your computer and Linux distribution from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). Packages are available for x86_64 and aarch64. Choose your distribution's `.deb`, `.rpm`, or `.pkg.tar.zst` package if available; AppImage and `.tar.gz` are also offered.
+2. Install the package with your package manager. For AppImage, make the file executable and run it. For `.tar.gz`, follow the [manual install instructions](https://github.com/404oops/immersion/blob/main/packaging/linux/README.md) so the app and desktop files stay together.
 3. Open Immersion and choose a folder containing your creative projects. Select **Files** for loose documents such as `.blend`, `.afphoto`, or `.sketch`; select **Bundles** when each project has its own folder or is an application bundle.
-4. Save a project and check that a new version appears. Immersion writes its history to a `.musit` folder beside your projects, so it needs read and write access to the selected folder.
+4. Change and save a supported project file, then check that a new version appears. Immersion saves history in a `.musit` folder beside that file or bundle. Files in the same folder share that `.musit` folder, so Immersion needs permission to read and write there.
 
-Immersion needs an X11 session or XWayland on a Wayland desktop. Your desktop
-also needs an `xdg-desktop-portal` file chooser backend to select folders.
-Opening a project uses the system's default file association through
-`xdg-open`.
+Immersion needs X11, or XWayland if you use a Wayland desktop. It also needs a
+working `xdg-desktop-portal` file chooser so you can select folders. It uses
+`xdg-open` to open projects in their usual apps.
 
 ## Window and tray behavior
 
-If your desktop has a StatusNotifierItem tray host, closing the window hides
-Immersion in the tray while it continues watching projects. Use the tray icon
-to reopen or quit it. Without a tray host, closing the window quits. Starting
-Immersion again reopens a running instance.
+If your desktop supports the system tray icon Immersion uses, closing the window
+hides the app in the tray and it keeps watching projects. Use the icon to reopen
+or quit Immersion. If there is no compatible tray, closing the window quits.
+Starting Immersion again reopens it if it is already running.
 
 **Launch at login** is available for native installs. Once you have configured
 folders, a login launch starts in the tray when a tray host appears. If no

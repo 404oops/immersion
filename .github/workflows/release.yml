@@ -177,6 +177,10 @@ jobs:
           3. [Windows ARM64](${asset_url}/ImmersionSetup-${version}-windows-arm64.exe)
           4. Linux x64: [Debian/Ubuntu](${asset_url}/Immersion-${version}-linux-x86_64.deb), [Fedora/RHEL](${asset_url}/Immersion-${version}-linux-x86_64.rpm), [Arch](${asset_url}/Immersion-${version}-linux-x86_64.pkg.tar.zst), [AppImage](${asset_url}/Immersion-${version}-linux-x86_64.AppImage), [portable](${asset_url}/Immersion-${version}-linux-x86_64.tar.gz)
           5. Linux ARM64: [Debian/Ubuntu](${asset_url}/Immersion-${version}-linux-aarch64.deb), [Fedora/RHEL](${asset_url}/Immersion-${version}-linux-aarch64.rpm), [Arch](${asset_url}/Immersion-${version}-linux-aarch64.pkg.tar.zst), [AppImage](${asset_url}/Immersion-${version}-linux-aarch64.AppImage), [portable](${asset_url}/Immersion-${version}-linux-aarch64.tar.gz)
+
+          ## Linux support
+
+          Linux builds are provided so Immersion can run on Linux. If you use one, you are responsible for diagnosing and fixing any issues yourself. The project does not provide Linux troubleshooting or fixes.
           EOF
           )
           gh release create "$GITHUB_REF_NAME" \

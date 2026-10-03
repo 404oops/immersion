@@ -2,21 +2,27 @@
 
 ## Install
 
-Download an available package from [GitHub Releases](https://github.com/404oops/immersion/releases/latest). On macOS, open the DMG and install the app. On Windows, run the per-user installer; administrator access is not required. The Windows installer can enable launch at login. On Linux, follow the [Linux build guide](Linux.md) for native packages, AppImage, tarball, and Flatpak options and desktop requirements.
+Download Immersion from [GitHub Releases](https://github.com/404oops/immersion/releases/latest).
+
+- **Mac:** The DMG is for Apple silicon and needs macOS 12 or later. Open the DMG and install the app.
+- **Windows:** Choose the x64 or ARM64 installer that matches your computer. It installs for your account without administrator access and can start Immersion when you sign in.
+- **Linux:** See the [Linux build guide](Linux.md) for packages, other install options, and desktop requirements.
+
+If Apple or Microsoft has ended support for your version of macOS or Windows, Immersion does not support it either. macOS 12 is only the oldest version the app can install on.
 
 ## First launch
 
-1. Select **Choose Projects Folder…** and choose the parent folder that contains your projects. Immersion needs read and write access to that folder to store versions.
+1. Select **Choose Projects Folder…** and pick the folder that holds your projects. Immersion needs permission to read and write there so it can save versions.
 2. Choose a layout:
-   - **Bundles — One folder per project:** each project lives in a subfolder or an application bundle such as `.logicx`.
-   - **Files — Loose project files:** supported files such as `.als`, `.blend`, `.afphoto`, or `.sketch` sit directly in the selected folder or its subfolders. Each file becomes its own project. Bundle formats are skipped in this mode.
-3. Select **Continue**. Immersion scans the folder, lists the projects it finds, and creates an initial version for each project it can initialize.
+   - **Bundles — One folder per project:** Choose this when each project has its own folder or is a folder-like file such as `.logicx`. Files in the same folder appear as one project.
+   - **Files — Loose project files:** Choose this when each `.als`, `.blend`, `.afphoto`, or `.sketch` file should appear as its own project. Immersion also finds supported files in subfolders, but skips folder-like projects such as `.logicx`.
+3. Select **Continue**. Immersion looks for projects and tries to save a first version of each project's main file or folder-like file.
 4. If nothing is found, try **Try Other Layout**. If you have another collection, select **Add Another Folder…**. Select **Done** when finished.
 
-Each watched folder has its own layout, stored in `<projects folder>/.immersion/settings.json`. A folder you add again normally remembers its layout and tab name.
+Immersion saves your Bundles or Files choice and tab name in `<projects folder>/.immersion/settings.json`. If you add the folder again later and that file is still there, Immersion remembers those choices.
 
 ## Everyday use
 
-Leave Immersion running while you save in your creative app. File changes trigger new versions after they settle. Select a project in the list to view its history; double-click a project to open its primary file with the system's file association. When several files belong to a project, use the **File** picker in the details panel to choose the primary file you want to open and version.
+Leave Immersion running while you work. After you save a supported file and the changes settle, Immersion saves a new version. Select a project to see its history, or double-click it to open its main file in the usual app. If a project in Bundles mode contains several project files, use **File** in the details panel to choose which one opens and whose history the graph shows. Immersion may save separate histories for the other files in that folder.
 
 See [the interface guide](Interface.md) for the controls and [versions and restoring](Versions-and-Restoring.md) before you replace a current file with an older one.
