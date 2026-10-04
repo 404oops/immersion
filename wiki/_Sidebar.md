@@ -10,3 +10,4 @@
 - [Supported projects](Supported-Projects.md)
 - [Troubleshooting](Troubleshooting.md)
 - [Building and contributing](Development.md)
+- [Discord community](https://discord.gg/sMnnqcbWr5)

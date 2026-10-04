@@ -41,6 +41,6 @@ The [user manual](wiki/Home.md) covers every control, supported formats, storage
 
 ## Contribute
 
-Bug reports and feature requests for supported platforms are welcome in [Issues](https://github.com/404oops/immersion/issues). To build locally, install Rust and run `cargo run -p immersion`; run the engine tests with `cargo test -p musit-core`. The manual's [development page](wiki/Development.md) has the repository layout and packaging details.
+For questions and conversation, join the [Immersion Discord](https://discord.gg/sMnnqcbWr5). Bug reports and feature requests for supported platforms are welcome in [Issues](https://github.com/404oops/immersion/issues). To build locally, install Rust and run `cargo run -p immersion`; run the engine tests with `cargo test -p musit-core`. The manual's [development page](wiki/Development.md) has the repository layout and packaging details.
 
 Immersion is licensed under the [GNU General Public License, version 3](LICENSE).

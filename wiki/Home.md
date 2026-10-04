@@ -19,5 +19,6 @@ Immersion watches your project folders and saves earlier copies of supported pro
 - [Supported projects and folder layouts](Supported-Projects.md)
 - [Troubleshooting and frequently asked questions](Troubleshooting.md)
 - [Building and contributing](Development.md)
+- [Discord community](https://discord.gg/sMnnqcbWr5) for questions and conversation
 
 **Saved versions are not full backups.** Immersion saves project files and some related files, but usually skips large media and temporary files. Keep separate backups of your projects and media.
