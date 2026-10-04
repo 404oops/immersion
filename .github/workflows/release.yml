@@ -167,6 +167,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -177,10 +180,10 @@ jobs:
           IMMERSION_UPDATE_PRIVATE_KEY: ${{ secrets.IMMERSION_UPDATE_PRIVATE_KEY }}
         run: |
           scripts/fetch-sparkle.sh target/sparkle-2.10.0
-          python3 -m venv target/update-signing
-          target/update-signing/bin/pip install 'cryptography>=46,<47'
-          target/update-signing/bin/python -m unittest discover -s scripts/tests -v
-          target/update-signing/bin/python scripts/publish-updates.py --version "${GITHUB_REF_NAME#v}" --sparkle target/sparkle-2.10.0
+          python -m venv "$RUNNER_TEMP/immersion-update-signing"
+          "$RUNNER_TEMP/immersion-update-signing/bin/python" -m pip install 'cryptography>=46,<47'
+          "$RUNNER_TEMP/immersion-update-signing/bin/python" -m unittest discover -s scripts/tests -v
+          "$RUNNER_TEMP/immersion-update-signing/bin/python" scripts/publish-updates.py --version "${GITHUB_REF_NAME#v}" --sparkle target/sparkle-2.10.0
 
       - name: Create the GitHub release
         env:

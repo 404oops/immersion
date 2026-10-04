@@ -91,8 +91,8 @@ private seed matches the embedded public key; mismatches stop publication.
 Additional updater checks:
 
 ```bash
-python3 -m venv target/update-signing
-target/update-signing/bin/pip install 'cryptography>=46,<47'
+python3 -m venv --clear target/update-signing
+target/update-signing/bin/python -m pip install 'cryptography>=46,<47'
 target/update-signing/bin/python -m unittest discover -s scripts/tests -v
 ```
 

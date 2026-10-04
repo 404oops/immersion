@@ -19,11 +19,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo test --workspace --locked
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Verify release metadata signing
         run: |
-          python3 -m venv target/update-signing
-          target/update-signing/bin/pip install 'cryptography>=46,<47'
-          target/update-signing/bin/python -m unittest discover -s scripts/tests -v
+          python -m venv "$RUNNER_TEMP/immersion-update-signing"
+          "$RUNNER_TEMP/immersion-update-signing/bin/python" -m pip install 'cryptography>=46,<47'
+          "$RUNNER_TEMP/immersion-update-signing/bin/python" -m unittest discover -s scripts/tests -v
 
   windows:
     name: Windows ${{ matrix.arch }}
