@@ -26,7 +26,12 @@ try {
     }
     if ((RunInstaller "0.0.1") -ne 0) { throw "Initial install failed" }
     $exe = Join-Path $install "Immersion.exe"
-    New-ItemProperty -Path $runKey -Name $name -Value "preserved startup preference" -Force | Out-Null
+    # Fresh runner profiles may not have a Run key until an app enables startup.
+    # Do not recreate an existing key, which could disturb other startup entries.
+    if (-not (Test-Path $runKey)) {
+        New-Item -Path $runKey -Force | Out-Null
+    }
+    New-ItemProperty -Path $runKey -Name $name -PropertyType String -Value "preserved startup preference" -Force | Out-Null
     $locked = [IO.File]::Open($exe, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
     if ((RunInstaller "0.0.2") -eq 0) { throw "Locked executable replacement unexpectedly succeeded" }
     $locked.Dispose()
