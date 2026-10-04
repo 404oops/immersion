@@ -220,7 +220,7 @@ jobs:
             "dist/Immersion-${version}-linux-aarch64.pkg.tar.zst#Linux ARM64 — Arch" \
             "dist/Immersion-${version}-linux-aarch64.AppImage#Linux ARM64 — AppImage" \
             "dist/Immersion-${version}-linux-aarch64.tar.gz#Linux ARM64 — portable" \
-            "dist/Immersion-${version}-macos-arm64.zip" \
+            "dist/Immersion-${version}-macos-arm64.zip#macOS ARM64 — automatic update archive" \
             "dist/appcast-macos-arm64.xml" \
             "dist/update-windows-x64.json" "dist/update-windows-x64.json.sig" \
             "dist/update-windows-arm64.json" "dist/update-windows-arm64.json.sig" \
