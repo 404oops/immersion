@@ -350,7 +350,7 @@ impl RootView {
                                                         ))
                                                         .when(
                                                             launch_at_startup
-                                                                && crate::platform::launch_at_startup_needs_approval(),
+                                                                && self.settings_launch_needs_approval,
                                                             |el| {
                                                                 el.child(meta_label(
                                                                     tr("settings.launch_approval"),
@@ -367,6 +367,7 @@ impl RootView {
                                                     cx,
                                                     |this, checked, _w, cx| {
                                                         this.backend.set_launch_at_startup(checked);
+                                                        this.refresh_settings_preferences();
                                                         cx.notify();
                                                     },
                                                 )),
@@ -395,20 +396,21 @@ impl RootView {
                                                         )
                                                         .child(themed_switch(
                                                             "auto-updates-switch",
-                                                            !crate::updater::disabled(),
-                                                            !crate::updater::externally_disabled(),
+                                                            self.settings_updates_enabled,
+                                                            !self.settings_updates_externally_disabled,
                                                             &theme,
                                                             self,
                                                             cx,
                                                             |this, checked, _w, cx| {
                                                                 this.update_settings_error =
                                                                     crate::updater::set_enabled(checked).is_err();
+                                                                this.refresh_settings_preferences();
                                                                 cx.notify();
                                                             },
                                                         )),
                                                 )
                                                 .child(meta_label(tr("settings.auto_updates_detail")).w_full().whitespace_normal())
-                                                .when(crate::updater::externally_disabled(), |el| {
+                                                .when(self.settings_updates_externally_disabled, |el| {
                                                     el.child(meta_label(tr("settings.auto_updates_disabled")).w_full().whitespace_normal())
                                                 })
                                                 .when(self.update_settings_error, |el| {

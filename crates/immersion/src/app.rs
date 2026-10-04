@@ -171,6 +171,10 @@ pub struct RootView {
     // and these only carry what it shows.
     pub settings_open: bool,
     pub update_settings_error: bool,
+    // Refresh platform/config state on opening Settings and on explicit changes.
+    pub settings_launch_needs_approval: bool,
+    pub settings_updates_enabled: bool,
+    pub settings_updates_externally_disabled: bool,
     pub layout_dialog: LayoutDialogState,
     /// What the confirm dialog is asking. Kept while the dialog fades out,
     /// so it has something to show, and cleared once it has gone.
@@ -469,6 +473,9 @@ impl RootView {
             retention_input,
             settings_open: false,
             update_settings_error: false,
+            settings_launch_needs_approval: false,
+            settings_updates_enabled: true,
+            settings_updates_externally_disabled: false,
             layout_dialog: LayoutDialogState::default(),
             confirm: None,
             vm_graph: Vec::new(),
@@ -804,6 +811,14 @@ impl RootView {
         });
     }
 
+    /// Rendering must not do filesystem reads or synchronous macOS service queries.
+    pub fn refresh_settings_preferences(&mut self) {
+        self.settings_launch_needs_approval =
+            self.backend.launch_at_startup() && crate::platform::launch_at_startup_needs_approval();
+        self.settings_updates_externally_disabled = crate::updater::externally_disabled();
+        self.settings_updates_enabled = !crate::updater::disabled();
+    }
+
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Off any text input, so keys typed while the panel is up don't edit
         // fields behind the scrim.
@@ -812,6 +827,7 @@ impl RootView {
         let retention = self.backend.snapshot_retention().to_string();
         self.retention_input
             .update(cx, |input, cx| input.set_text(&retention, cx));
+        self.refresh_settings_preferences();
         self.settings_open = true;
         self.settings_enter_at = Some(Instant::now());
         self.settings_exit_at = None;
