@@ -8,10 +8,16 @@ use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::time::Duration;
+
 use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+
+static STARTED: AtomicBool = AtomicBool::new(false);
+static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
 const KEY: Option<&str> = option_env!("IMMERSION_UPDATE_PUBLIC_KEY");
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
@@ -114,6 +120,10 @@ fn download() -> Result<()> {
     m.verify_installer(File::open(temp.path().join("installer.exe"))?)?;
     fs::write(temp.path().join("manifest.json"), bytes)?;
     fs::write(temp.path().join("manifest.sig"), sig)?;
+    // Disabling during a download discards it rather than staging an update.
+    if super::disabled() {
+        return Ok(());
+    }
     // An incomplete download never becomes an installable pending update.
     fs::rename(temp.path(), root.join("pending"))?;
     Ok(())
@@ -121,6 +131,9 @@ fn download() -> Result<()> {
 
 pub fn start() {
     if super::disabled() || KEY.is_none_or(|key| key.trim().is_empty()) || !is_installed() {
+        return;
+    }
+    if STARTED.swap(true, Ordering::AcqRel) {
         return;
     }
     // Old copied helpers are no longer locked after their process exits.
@@ -133,19 +146,33 @@ pub fn start() {
             }
         }
     }
-    let _ = std::thread::Builder::new()
+    if std::thread::Builder::new()
         .name("update-download".into())
         .spawn(|| {
             loop {
-                if super::disabled() {
-                    break;
+                if !super::disabled() {
+                    if let Err(error) = download() {
+                        eprintln!("Immersion update download: {error}");
+                    }
                 }
-                if let Err(error) = download() {
-                    eprintln!("Immersion update download: {error}");
-                }
-                std::thread::sleep(Duration::from_secs(6 * 60 * 60));
+                let wake = WAKE.0.lock().unwrap();
+                let (mut wake, _) = WAKE
+                    .1
+                    .wait_timeout_while(wake, Duration::from_secs(6 * 60 * 60), |wake| !*wake)
+                    .unwrap();
+                *wake = false;
             }
-        });
+        })
+        .is_err()
+    {
+        STARTED.store(false, Ordering::Release);
+    }
+}
+
+pub fn settings_changed() {
+    start();
+    *WAKE.0.lock().unwrap() = true;
+    WAKE.1.notify_one();
 }
 
 /// Called before the backend exists, so no watchers or pending writes are stopped.

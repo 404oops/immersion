@@ -31,7 +31,10 @@ define_class!(
 );
 
 pub fn start() {
-    if super::disabled() || !cfg!(target_arch = "aarch64") {
+    if super::disabled()
+        || !cfg!(target_arch = "aarch64")
+        || CONTROLLER.with(|slot| slot.borrow().is_some())
+    {
         return;
     }
     let Some(mtm) = MainThreadMarker::new() else {
@@ -81,6 +84,10 @@ pub fn start() {
     // Use the underlying updater's error-returning API instead of an alert on
     // configuration failure. Such failure must not prevent the app launching.
     let updater: Retained<AnyObject> = unsafe { msg_send![&controller, updater] };
+    unsafe {
+        let _: () = msg_send![&updater, setAutomaticallyChecksForUpdates: true];
+        let _: () = msg_send![&updater, setAutomaticallyDownloadsUpdates: true];
+    }
     let started: bool =
         unsafe { msg_send![&updater, startUpdater: std::ptr::null_mut::<*mut AnyObject>()] };
     if !started {
@@ -89,4 +96,21 @@ pub fn start() {
     }
     DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
     CONTROLLER.with(|slot| *slot.borrow_mut() = Some(controller));
+}
+
+/// Called by Settings on the main thread. Sparkle owns any already prepared update.
+pub fn settings_changed() {
+    if !super::disabled() {
+        start();
+    }
+    CONTROLLER.with(|slot| {
+        if let Some(controller) = slot.borrow().as_ref() {
+            let updater: Retained<AnyObject> = unsafe { msg_send![controller, updater] };
+            let enabled = !super::disabled();
+            unsafe {
+                let _: () = msg_send![&updater, setAutomaticallyChecksForUpdates: enabled];
+                let _: () = msg_send![&updater, setAutomaticallyDownloadsUpdates: enabled];
+            }
+        }
+    });
 }

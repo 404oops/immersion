@@ -373,6 +373,33 @@ impl RootView {
                                         )
                                         .child(divider(&theme))
                                     })
+                                    .when(crate::updater::supported(), |el| {
+                                        el.child(
+                                            div().flex().items_center().gap(px(12.0))
+                                                .child(
+                                                    div().flex_1().flex().flex_col().gap(px(4.0))
+                                                        .child(section_label(tr("settings.auto_updates")))
+                                                        .child(meta_label(tr("settings.auto_updates_detail")))
+                                                        .when(crate::updater::externally_disabled(), |el| {
+                                                            el.child(meta_label(tr("settings.auto_updates_disabled")))
+                                                        })
+                                                        .when(self.update_settings_error, |el| {
+                                                            el.child(meta_label(tr("settings.auto_updates_error")))
+                                                        }),
+                                                )
+                                                .child(themed_switch(
+                                                    "auto-updates-switch",
+                                                    !crate::updater::disabled(),
+                                                    !crate::updater::externally_disabled(),
+                                                    &theme, self, cx,
+                                                    |this, checked, _w, cx| {
+                                                        this.update_settings_error =
+                                                            crate::updater::set_enabled(checked).is_err();
+                                                        cx.notify();
+                                                    },
+                                                )),
+                                        ).child(divider(&theme))
+                                    })
                                     // Default sort mode.
                                     .child(
                                         div()

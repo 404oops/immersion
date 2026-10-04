@@ -170,6 +170,7 @@ pub struct RootView {
     // dialogs are vampir dialogs, so whether one is up lives in `controls`
     // and these only carry what it shows.
     pub settings_open: bool,
+    pub update_settings_error: bool,
     pub layout_dialog: LayoutDialogState,
     /// What the confirm dialog is asking. Kept while the dialog fades out,
     /// so it has something to show, and cleared once it has gone.
@@ -467,6 +468,7 @@ impl RootView {
             version_note_input,
             retention_input,
             settings_open: false,
+            update_settings_error: false,
             layout_dialog: LayoutDialogState::default(),
             confirm: None,
             vm_graph: Vec::new(),

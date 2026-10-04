@@ -63,8 +63,11 @@ their sources and transitive dependencies are recorded in `Cargo.lock`.
 To disable updates before launch, set `IMMERSION_DISABLE_UPDATES` or create an
 empty `Immersion/disable-updates` file in the platform configuration directory:
 `~/Library/Application Support/Immersion/disable-updates` on macOS, or
-`%APPDATA%\Immersion\disable-updates` on Windows. Remove the file and relaunch to
-resume updates. Installation and download failures are logged to stderr. No
+`%APPDATA%\Immersion\disable-updates` on Windows. The Automatic updates switch
+in Settings manages this file and changes future checks
+and downloads immediately. An update already prepared by Sparkle may still install
+on quit. The environment variable overrides the switch. Remove the file and
+relaunch to resume updates. Installation and download failures are logged to stderr. No
 project files or `.musit` formats are changed by the updater.
 
 ### Release signing
