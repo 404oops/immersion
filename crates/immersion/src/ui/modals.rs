@@ -375,30 +375,47 @@ impl RootView {
                                     })
                                     .when(crate::updater::supported(), |el| {
                                         el.child(
-                                            div().flex().items_center().gap(px(12.0))
+                                            div()
+                                                .w_full()
+                                                .min_w_0()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(px(4.0))
                                                 .child(
-                                                    div().flex_1().flex().flex_col().gap(px(4.0))
-                                                        .child(section_label(tr("settings.auto_updates")))
-                                                        .child(meta_label(tr("settings.auto_updates_detail")))
-                                                        .when(crate::updater::externally_disabled(), |el| {
-                                                            el.child(meta_label(tr("settings.auto_updates_disabled")))
-                                                        })
-                                                        .when(self.update_settings_error, |el| {
-                                                            el.child(meta_label(tr("settings.auto_updates_error")))
-                                                        }),
+                                                    div()
+                                                        .w_full()
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(px(12.0))
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w_0()
+                                                                .child(section_label(tr("settings.auto_updates")).whitespace_normal()),
+                                                        )
+                                                        .child(themed_switch(
+                                                            "auto-updates-switch",
+                                                            !crate::updater::disabled(),
+                                                            !crate::updater::externally_disabled(),
+                                                            &theme,
+                                                            self,
+                                                            cx,
+                                                            |this, checked, _w, cx| {
+                                                                this.update_settings_error =
+                                                                    crate::updater::set_enabled(checked).is_err();
+                                                                cx.notify();
+                                                            },
+                                                        )),
                                                 )
-                                                .child(themed_switch(
-                                                    "auto-updates-switch",
-                                                    !crate::updater::disabled(),
-                                                    !crate::updater::externally_disabled(),
-                                                    &theme, self, cx,
-                                                    |this, checked, _w, cx| {
-                                                        this.update_settings_error =
-                                                            crate::updater::set_enabled(checked).is_err();
-                                                        cx.notify();
-                                                    },
-                                                )),
-                                        ).child(divider(&theme))
+                                                .child(meta_label(tr("settings.auto_updates_detail")).w_full().whitespace_normal())
+                                                .when(crate::updater::externally_disabled(), |el| {
+                                                    el.child(meta_label(tr("settings.auto_updates_disabled")).w_full().whitespace_normal())
+                                                })
+                                                .when(self.update_settings_error, |el| {
+                                                    el.child(meta_label(tr("settings.auto_updates_error")).w_full().whitespace_normal())
+                                                }),
+                                        )
+                                        .child(divider(&theme))
                                     })
                                     // Default sort mode.
                                     .child(

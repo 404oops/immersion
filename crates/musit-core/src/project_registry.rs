@@ -52,6 +52,7 @@ pub struct AppSettings {
     pub log_level: String,
     pub snapshot_retention: i32,
     pub notifications_enabled: bool,
+    pub auto_updates_enabled: bool,
     pub color_scheme_mode: String,
     pub language: String,
 }
@@ -66,6 +67,7 @@ impl Default for AppSettings {
             log_level: String::new(),
             snapshot_retention: UNCOMPRESSED_RECENT_VERSIONS,
             notifications_enabled: true,
+            auto_updates_enabled: true,
             color_scheme_mode: String::new(),
             language: "en".to_string(),
         }
@@ -640,11 +642,33 @@ impl ProjectRegistry {
         if let Some(value) = root.get("notifications_enabled").and_then(|v| v.as_bool()) {
             settings.notifications_enabled = value;
         }
+        if let Some(value) = root.get("auto_updates_enabled").and_then(|v| v.as_bool()) {
+            settings.auto_updates_enabled = value;
+        }
         if let Some(value) = root.get("color_scheme_mode").and_then(|v| v.as_str()) {
             settings.color_scheme_mode = value.to_string();
         }
         settings.language = app_language_from_root(&root).to_string();
         settings
+    }
+
+    /// Change only the updater preference, retaining unrelated app and folder settings.
+    pub fn set_auto_updates_enabled(&self, enabled: bool) -> bool {
+        let dir = app_config_directory();
+        if dir.is_empty() || fs::create_dir_all(&dir).is_err() {
+            return false;
+        }
+        let path = self.config_file_path();
+        let mut root = match fs::read(&path) {
+            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(Value::Object(root)) => root,
+                _ => return false,
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Map::new(),
+            Err(_) => return false,
+        };
+        root.insert("auto_updates_enabled".to_string(), json!(enabled));
+        write_json_atomically(&path, &Value::Object(root))
     }
 
     pub fn save_app_settings(&self, settings: &AppSettings) -> bool {
@@ -676,6 +700,10 @@ impl ProjectRegistry {
         root.insert(
             "notifications_enabled".to_string(),
             json!(settings.notifications_enabled),
+        );
+        root.insert(
+            "auto_updates_enabled".to_string(),
+            json!(settings.auto_updates_enabled),
         );
         if !settings.color_scheme_mode.is_empty() {
             root.insert(

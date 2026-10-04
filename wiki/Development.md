@@ -60,15 +60,18 @@ The bundle includes Sparkle's license and its third-party notices at
 `ed25519-dalek` (BSD-3-Clause), `reqwest` (MIT or Apache-2.0), and `winreg` (MIT);
 their sources and transitive dependencies are recorded in `Cargo.lock`.
 
-To disable updates before launch, set `IMMERSION_DISABLE_UPDATES` or create an
-empty `Immersion/disable-updates` file in the platform configuration directory:
-`~/Library/Application Support/Immersion/disable-updates` on macOS, or
-`%APPDATA%\Immersion\disable-updates` on Windows. The Automatic updates switch
-in Settings manages this file and changes future checks
-and downloads immediately. An update already prepared by Sparkle may still install
-on quit. The environment variable overrides the switch. Remove the file and
-relaunch to resume updates. Installation and download failures are logged to stderr. No
-project files or `.musit` formats are changed by the updater.
+The Automatic updates switch in Settings saves `auto_updates_enabled` in the
+app's `config.json` (`~/Library/Application Support/musit/musit/config.json` on
+macOS, `%APPDATA%\musit\musit\config.json` on Windows). Missing values default to
+`true`. Changes to the switch affect future checks and downloads immediately;
+manual edits take effect at the next launch. An update already prepared by
+Sparkle may still install on quit.
+
+`IMMERSION_DISABLE_UPDATES` overrides the preference. The legacy
+`Immersion/disable-updates` marker in the platform configuration directory is
+also honored; explicitly enabling updates in Settings removes it. Installation
+and download failures are logged to stderr. No project files or `.musit`
+formats are changed by the updater.
 
 ### Release signing
 

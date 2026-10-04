@@ -3375,6 +3375,11 @@ impl AppBackend {
             log_level: self.log_level().to_string(),
             snapshot_retention: self.snapshot_retention,
             notifications_enabled: self.notifications_enabled,
+            // The updater can change this independently of backend settings.
+            auto_updates_enabled: self
+                .project_registry
+                .load_app_settings()
+                .auto_updates_enabled,
             color_scheme_mode: self.color_scheme_mode_string().to_string(),
             language: self.language.clone(),
         };

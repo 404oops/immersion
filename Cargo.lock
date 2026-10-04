@@ -2956,7 +2956,7 @@ checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
 
 [[package]]
 name = "immersion"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
@@ -3570,7 +3570,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "musit-core"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "chrono",
  "dirs 7.0.0",
